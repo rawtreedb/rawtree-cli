@@ -2,6 +2,7 @@
 name = "rtree"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/kitaisreal/rtree"
 
 [[bin]]
 name = "rtree"
@@ -25,3 +26,8 @@ tempfile = "3"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
