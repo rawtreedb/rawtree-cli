@@ -2,7 +2,7 @@
 name = "rtree"
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/kitaisreal/rtree"
+repository = "https://github.com/rawtreedb/rtree"
 
 [[bin]]
 name = "rtree"
