@@ -36,18 +36,16 @@ fn is_jsonl(path: &str) -> bool {
 }
 
 /// Build the JSON request body into a reusable buffer by string concatenation.
-fn build_body_into(body: &mut String, table: &str, lines: &[String]) {
+fn build_body_into(body: &mut String, lines: &[String]) {
     body.clear();
-    body.push_str("{\"table\":\"");
-    body.push_str(table);
-    body.push_str("\",\"data\":[");
+    body.push('[');
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             body.push(',');
         }
         body.push_str(line);
     }
-    body.push_str("]}");
+    body.push(']');
 }
 
 fn print_inserted(count: usize, json_mode: bool) {
@@ -66,11 +64,12 @@ pub fn insert(
     file: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
+    let url = format!("/v1/{}/insert/{}", project, table);
+
     // Small inline data — send in one request
     if let Some(raw) = data {
         let json_data: Value = serde_json::from_str(raw).context("invalid JSON in --data")?;
-        let body = json!({ "table": table, "data": json_data });
-        let resp: InsertResponse = client.post(&format!("/v1/{}/insert", project), &body)?;
+        let resp: InsertResponse = client.post(&url, &json_data)?;
         print_inserted(resp.inserted, json_mode);
         return Ok(());
     }
@@ -84,8 +83,7 @@ pub fn insert(
         let contents = fs::read_to_string(path)
             .with_context(|| format!("failed to read file '{}'", path))?;
         let json_data: Value = serde_json::from_str(&contents).context("invalid JSON in file")?;
-        let body = json!({ "table": table, "data": json_data });
-        let resp: InsertResponse = client.post(&format!("/v1/{}/insert", project), &body)?;
+        let resp: InsertResponse = client.post(&url, &json_data)?;
         print_inserted(resp.inserted, json_mode);
     }
 
@@ -129,7 +127,7 @@ fn insert_jsonl_streaming(
         Arc::new(std::sync::Mutex::new(None));
 
     // Spawn sender threads — each reuses a body buffer, compresses, and POSTs
-    let url = format!("/v1/{}/insert", project);
+    let url = format!("/v1/{}/insert/{}", project, table);
     let mut handles = Vec::with_capacity(senders);
     for _ in 0..senders {
         let rx = Arc::clone(&rx);
@@ -137,7 +135,6 @@ fn insert_jsonl_streaming(
         let failed = Arc::clone(&failed);
         let first_error = Arc::clone(&first_error);
         let client = ApiClient::new(client.base_url.clone(), client.token.clone());
-        let table = table.to_string();
         let url = url.clone();
 
         handles.push(thread::spawn(move || {
@@ -152,7 +149,7 @@ fn insert_jsonl_streaming(
                     Err(_) => break,
                 };
                 let batch_len = batch.len();
-                build_body_into(&mut body, &table, &batch);
+                build_body_into(&mut body, &batch);
                 match client.post_compressed::<InsertResponse>(&url, &body) {
                     Ok(resp) => {
                         inserted.fetch_add(resp.inserted, Ordering::Relaxed);
