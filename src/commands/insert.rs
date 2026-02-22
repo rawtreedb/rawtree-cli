@@ -64,7 +64,7 @@ pub fn insert(
     file: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let url = format!("/v1/{}/insert/{}", project, table);
+    let url = format!("/v1/{}/tables/{}", project, table);
 
     // Small inline data — send in one request
     if let Some(raw) = data {
@@ -127,7 +127,7 @@ fn insert_jsonl_streaming(
         Arc::new(std::sync::Mutex::new(None));
 
     // Spawn sender threads — each reuses a body buffer, compresses, and POSTs
-    let url = format!("/v1/{}/insert/{}", project, table);
+    let url = format!("/v1/{}/tables/{}", project, table);
     let mut handles = Vec::with_capacity(senders);
     for _ in 0..senders {
         let rx = Arc::clone(&rx);
