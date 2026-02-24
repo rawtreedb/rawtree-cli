@@ -10,7 +10,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
-use cli::{Cli, Command, EndpointCommand, KeysCommand, ProjectCommand, ShellType};
+use cli::{Cli, Command, KeysCommand, ProjectCommand, ShellType};
 use client::ApiClient;
 
 fn resolve_url(cli_url: Option<&str>) -> String {
@@ -75,12 +75,6 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
     }
 }
 
-fn resolve_endpoint_name(positional: Option<String>, flag: Option<String>) -> Result<String> {
-    positional.or(flag).ok_or_else(|| {
-        anyhow::anyhow!("Endpoint name is required. Provide it as a positional argument or with --name")
-    })
-}
-
 fn main() {
     let cli = Cli::parse();
     let json_mode = cli.json;
@@ -126,56 +120,6 @@ fn run(cli: Cli) -> Result<()> {
                 commands::project::rename(&client, &old, &new_name, json)
             }
             ProjectCommand::Delete { name } => commands::project::delete(&client, &name, json),
-        },
-        Command::Endpoint { action } => match action {
-            EndpointCommand::List { project } => {
-                let project = resolve_project(project)?;
-                commands::endpoint::list(&client, &project, json)
-            }
-            EndpointCommand::Get {
-                project,
-                endpoint,
-                name,
-            } => {
-                let project = resolve_project(project)?;
-                let name = resolve_endpoint_name(endpoint, name)?;
-                commands::endpoint::get(&client, &project, &name, json)
-            }
-            EndpointCommand::Create {
-                project,
-                name,
-                sql,
-                description,
-            } => {
-                let project = resolve_project(project)?;
-                commands::endpoint::create(
-                    &client,
-                    &project,
-                    &name,
-                    &sql,
-                    description.as_deref(),
-                    json,
-                )
-            }
-            EndpointCommand::Delete {
-                project,
-                endpoint,
-                name,
-            } => {
-                let project = resolve_project(project)?;
-                let name = resolve_endpoint_name(endpoint, name)?;
-                commands::endpoint::delete(&client, &project, &name, json)
-            }
-            EndpointCommand::Exec {
-                project,
-                endpoint,
-                name,
-                params,
-            } => {
-                let project = resolve_project(project)?;
-                let name = resolve_endpoint_name(endpoint, name)?;
-                commands::endpoint::exec(&client, &project, &name, &params)
-            }
         },
         Command::Keys { action } => match action {
             KeysCommand::List { project } => {

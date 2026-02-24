@@ -98,7 +98,7 @@ impl ApiClient {
         Ok(text)
     }
 
-    /// GET that returns raw text (for endpoints that return ClickHouse JSON directly).
+    /// GET that returns raw text.
     pub fn get_raw(&self, path: &str) -> Result<String> {
         let url = format!("{}{}", self.base_url, path);
         let mut req = self.client.get(&url);

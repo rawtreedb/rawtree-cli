@@ -38,11 +38,6 @@ pub enum Command {
         #[command(subcommand)]
         action: ProjectCommand,
     },
-    /// Manage endpoints
-    Endpoint {
-        #[command(subcommand)]
-        action: EndpointCommand,
-    },
     /// Manage API keys
     Keys {
         #[command(subcommand)]
@@ -164,62 +159,6 @@ pub enum ProjectCommand {
     Delete {
         /// Project name
         name: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum EndpointCommand {
-    /// List endpoints for a project
-    List {
-        #[arg(long)]
-        project: Option<String>,
-    },
-    /// Show details of an endpoint
-    Get {
-        #[arg(long)]
-        project: Option<String>,
-        /// Endpoint name (positional or --name)
-        #[arg(conflicts_with = "name")]
-        endpoint: Option<String>,
-        /// Endpoint name
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Create a new endpoint
-    Create {
-        #[arg(long)]
-        project: Option<String>,
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        sql: String,
-        #[arg(long)]
-        description: Option<String>,
-    },
-    /// Delete an endpoint
-    Delete {
-        #[arg(long)]
-        project: Option<String>,
-        /// Endpoint name (positional or --name)
-        #[arg(conflicts_with = "name")]
-        endpoint: Option<String>,
-        /// Endpoint name
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Execute a named endpoint
-    Exec {
-        #[arg(long)]
-        project: Option<String>,
-        /// Endpoint name (positional or --name)
-        #[arg(conflicts_with = "name")]
-        endpoint: Option<String>,
-        /// Endpoint name
-        #[arg(long)]
-        name: Option<String>,
-        /// Query parameter (repeatable): key=value
-        #[arg(long = "param", value_name = "KEY=VALUE")]
-        params: Vec<String>,
     },
 }
 

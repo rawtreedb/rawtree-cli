@@ -1,6 +1,5 @@
 pub mod auth;
 pub mod docs;
-pub mod endpoint;
 pub mod export;
 pub mod insert;
 pub mod keys;
