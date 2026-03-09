@@ -10,7 +10,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
-use cli::{Cli, Command, KeysCommand, ProjectCommand, ShellType};
+use cli::{Cli, Command, KeysCommand, ProjectCommand, ShellType, TableCommand};
 use client::ApiClient;
 
 fn resolve_url(cli_url: Option<&str>) -> String {
@@ -47,7 +47,9 @@ fn resolve_project(cli_project: Option<String>) -> Result<String> {
             return Ok(p);
         }
     }
-    anyhow::bail!("No project specified. Use --project, RAWTREE_PROJECT env, or `rtree project use <name>`")
+    anyhow::bail!(
+        "No project specified. Use --project, RAWTREE_PROJECT env, or `rtree project use <name>`"
+    )
 }
 
 fn read_stdin() -> Result<String> {
@@ -139,6 +141,16 @@ fn run(cli: Cli) -> Result<()> {
                 commands::keys::delete(&client, &project, &key_id, json)
             }
         },
+        Command::Table { action } => match action {
+            TableCommand::List { project } => {
+                let project = resolve_project(project)?;
+                commands::table::list(&client, &project, json)
+            }
+            TableCommand::Describe { project, table } => {
+                let project = resolve_project(project)?;
+                commands::table::describe(&client, &project, &table, json)
+            }
+        },
         Command::Query {
             project,
             sql,
@@ -174,10 +186,6 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let project = resolve_project(project)?;
             commands::sample::sample(&client, &project, &table, limit, format.as_deref())
-        }
-        Command::Schema { project, table } => {
-            let project = resolve_project(project)?;
-            commands::schema::schema(&client, &project, table.as_deref(), json)
         }
         Command::Export {
             project,

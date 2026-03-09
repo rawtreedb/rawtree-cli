@@ -43,6 +43,11 @@ pub enum Command {
         #[command(subcommand)]
         action: KeysCommand,
     },
+    /// Inspect tables
+    Table {
+        #[command(subcommand)]
+        action: TableCommand,
+    },
     /// Execute a SQL query against a project
     Query {
         #[arg(long)]
@@ -85,14 +90,6 @@ pub enum Command {
         /// Output format: json (default) or csv
         #[arg(long)]
         format: Option<String>,
-    },
-    /// Show table schema: list tables or describe a table
-    Schema {
-        #[arg(long)]
-        project: Option<String>,
-        /// Table name to describe (omit to list all tables)
-        #[arg(long)]
-        table: Option<String>,
     },
     /// Export query results to a file
     Export {
@@ -186,5 +183,21 @@ pub enum KeysCommand {
         project: Option<String>,
         /// Key ID to delete
         key_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum TableCommand {
+    /// List tables in a project
+    List {
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Describe a table and show total row count
+    Describe {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        table: String,
     },
 }

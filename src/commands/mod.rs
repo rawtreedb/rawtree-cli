@@ -7,6 +7,6 @@ pub mod ping;
 pub mod project;
 pub mod query;
 pub mod sample;
-pub mod schema;
 pub mod status;
+pub mod table;
 pub mod whoami;
