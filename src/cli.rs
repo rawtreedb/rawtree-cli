@@ -193,11 +193,11 @@ pub enum TableCommand {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Describe a table and show total row count
+    /// Describe a table
     Describe {
         #[arg(long)]
         project: Option<String>,
-        #[arg(long)]
+        /// Table name
         table: String,
     },
 }
