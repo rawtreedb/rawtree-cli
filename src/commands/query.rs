@@ -2,10 +2,12 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::client::ApiClient;
+use crate::org;
 
 pub fn query(
     client: &ApiClient,
     project: &str,
+    organization: Option<&str>,
     sql: &str,
     format: Option<&str>,
     limit: Option<u64>,
@@ -20,7 +22,8 @@ pub fn query(
         body["format"] = json!(fmt);
     }
 
-    let raw = client.post_raw(&format!("/v1/{}/query", project), &body)?;
+    let path = org::project_scoped_path(project, "/query", organization);
+    let raw = client.post_raw(&path, &body)?;
 
     // Pretty-print if JSON, otherwise print as-is (CSV)
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {

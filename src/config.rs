@@ -14,6 +14,8 @@ pub struct Config {
     pub url: Option<String>,
     #[serde(default)]
     pub default_project: Option<String>,
+    #[serde(default)]
+    pub default_organization: Option<String>,
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -56,4 +58,31 @@ pub fn save(cfg: &Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn old_config_without_default_organization_still_deserializes() {
+        let old = r#"{
+  "token": "t",
+  "email": "e@example.com",
+  "url": "https://api.rawtree.dev",
+  "default_project": "analytics"
+}"#;
+        let cfg: Config = serde_json::from_str(old).expect("old config should parse");
+        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.default_organization, None);
+    }
+
+    #[test]
+    fn new_config_with_default_organization_deserializes() {
+        let new_cfg = r#"{
+  "default_organization": "team_alpha"
+}"#;
+        let cfg: Config = serde_json::from_str(new_cfg).expect("new config should parse");
+        assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
+    }
 }

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::client::ApiClient;
+use crate::org;
 use crate::output;
 
 #[derive(Deserialize)]
@@ -38,9 +39,15 @@ struct TableMetadata {
     total_bytes: Value,
 }
 
-pub fn list(client: &ApiClient, project: &str, json_mode: bool) -> Result<()> {
-    let resp: TablesResponse = client.get(&format!("/v1/{}/tables", project))?;
-    let metadata = fetch_all_table_metadata(client, project)?;
+pub fn list(
+    client: &ApiClient,
+    project: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    let list_path = org::project_scoped_path(project, "/tables", organization);
+    let resp: TablesResponse = client.get(&list_path)?;
+    let metadata = fetch_all_table_metadata(client, project, organization)?;
     let tables = resp
         .tables
         .iter()
@@ -81,8 +88,16 @@ pub fn list(client: &ApiClient, project: &str, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn describe(client: &ApiClient, project: &str, table: &str, json_mode: bool) -> Result<()> {
-    let resp: DescribeTableResponse = client.get(&format!("/v1/{}/tables/{}", project, table))?;
+pub fn describe(
+    client: &ApiClient,
+    project: &str,
+    organization: Option<&str>,
+    table: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let describe_path =
+        org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let resp: DescribeTableResponse = client.get(&describe_path)?;
     output::print_result(
         &json!({
             "table": resp.table,
@@ -108,10 +123,11 @@ pub fn describe(client: &ApiClient, project: &str, table: &str, json_mode: bool)
 fn fetch_all_table_metadata(
     client: &ApiClient,
     project: &str,
+    organization: Option<&str>,
 ) -> Result<HashMap<String, TableMetadata>> {
     let sql = "SELECT name, total_rows, total_bytes FROM system.tables WHERE database = currentDatabase() AND engine != 'View'";
-    let resp: QueryResponse =
-        client.post(&format!("/v1/{}/query", project), &json!({ "sql": sql }))?;
+    let query_path = org::project_scoped_path(project, "/query", organization);
+    let resp: QueryResponse = client.post(&query_path, &json!({ "sql": sql }))?;
     Ok(resp
         .data
         .into_iter()

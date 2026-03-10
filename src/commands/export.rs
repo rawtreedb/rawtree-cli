@@ -4,10 +4,12 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::client::ApiClient;
+use crate::org;
 
 pub fn export(
     client: &ApiClient,
     project: &str,
+    organization: Option<&str>,
     sql: &str,
     output_path: &str,
     format: Option<&str>,
@@ -21,7 +23,8 @@ pub fn export(
     });
 
     let body = json!({ "sql": sql, "format": fmt });
-    let raw = client.post_raw(&format!("/v1/{}/query", project), &body)?;
+    let path = org::project_scoped_path(project, "/query", organization);
+    let raw = client.post_raw(&path, &body)?;
 
     fs::write(output_path, &raw)
         .with_context(|| format!("failed to write to '{}'", output_path))?;

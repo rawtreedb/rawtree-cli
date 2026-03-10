@@ -11,6 +11,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Organization name (overrides RAWTREE_ORG env and config file)
+    #[arg(long, global = true)]
+    pub org: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -42,6 +46,11 @@ pub enum Command {
     Keys {
         #[command(subcommand)]
         action: KeysCommand,
+    },
+    /// Manage organizations and organization members
+    Organization {
+        #[command(subcommand)]
+        action: OrganizationCommand,
     },
     /// Inspect tables
     Table {
@@ -131,6 +140,21 @@ pub enum ShellType {
     Fish,
 }
 
+#[derive(Clone, ValueEnum)]
+pub enum OrganizationRole {
+    Admin,
+    Member,
+}
+
+impl OrganizationRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum ProjectCommand {
     /// List all projects
@@ -156,6 +180,64 @@ pub enum ProjectCommand {
     Delete {
         /// Project name
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OrganizationCommand {
+    /// List all organizations
+    List,
+    /// Create a new organization
+    Create {
+        /// Organization name
+        name: String,
+    },
+    /// Set the default organization
+    Use {
+        /// Organization name
+        name: String,
+    },
+    /// Rename an organization
+    Rename {
+        /// Current organization name
+        old: String,
+        /// New organization name
+        new_name: String,
+    },
+    /// Delete an organization
+    Delete {
+        /// Organization name
+        name: String,
+    },
+    /// List organization members
+    Members {
+        /// Organization name
+        organization: String,
+    },
+    /// Add a member to an organization
+    AddMember {
+        /// Organization name
+        organization: String,
+        /// User email
+        #[arg(long)]
+        email: String,
+    },
+    /// Update a member role
+    UpdateMember {
+        /// Organization name
+        organization: String,
+        /// Member user id
+        user_id: String,
+        /// Target role
+        #[arg(long, value_enum)]
+        role: OrganizationRole,
+    },
+    /// Remove a member from an organization
+    RemoveMember {
+        /// Organization name
+        organization: String,
+        /// Member user id
+        user_id: String,
     },
 }
 
