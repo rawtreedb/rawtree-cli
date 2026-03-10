@@ -51,6 +51,30 @@ struct RemoveOrganizationMemberResponse {
     removed: bool,
 }
 
+fn renamed_default_org(
+    current_default_organization: Option<&str>,
+    old_name: &str,
+    new_name: &str,
+) -> Option<String> {
+    match current_default_organization {
+        Some(current) if current == old_name => Some(new_name.to_string()),
+        Some(current) => Some(current.to_string()),
+        None => None,
+    }
+}
+
+fn default_org_after_delete(
+    current_default_organization: Option<&str>,
+    deleted_name: &str,
+    next_available_organization: Option<String>,
+) -> Option<String> {
+    match current_default_organization {
+        Some(current) if current == deleted_name => next_available_organization,
+        Some(current) => Some(current.to_string()),
+        None => None,
+    }
+}
+
 pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
     let organizations = org::list_organizations(client)?;
     output::print_result(
@@ -111,6 +135,14 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
         &format!("/v1/organizations/{old}"),
         &json!({"organization_name": new_name}),
     )?;
+    let mut cfg = config::load()?;
+    cfg.default_organization = renamed_default_org(
+        cfg.default_organization.as_deref(),
+        old,
+        &resp.organization_name,
+    );
+    config::save(&cfg)?;
+
     output::print_result(
         &json!({"old_name": old, "organization_name": resp.organization_name}),
         json_mode,
@@ -126,6 +158,19 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
 
 pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
     let resp: DeleteOrganizationResponse = client.delete(&format!("/v1/organizations/{name}"))?;
+    if resp.deleted {
+        let mut cfg = config::load()?;
+        if cfg.default_organization.as_deref() == Some(name) {
+            let next = org::list_organizations(client)?
+                .into_iter()
+                .next()
+                .map(|item| item.organization_name);
+            cfg.default_organization =
+                default_org_after_delete(cfg.default_organization.as_deref(), name, next);
+            config::save(&cfg)?;
+        }
+    }
+
     output::print_result(
         &json!({"deleted": resp.deleted, "organization": name}),
         json_mode,
@@ -240,4 +285,44 @@ pub fn remove_member(
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_org_after_delete, renamed_default_org};
+
+    #[test]
+    fn renamed_default_org_updates_matching_default() {
+        let updated = renamed_default_org(Some("team_old"), "team_old", "team_new");
+        assert_eq!(updated.as_deref(), Some("team_new"));
+    }
+
+    #[test]
+    fn renamed_default_org_preserves_non_matching_default() {
+        let updated = renamed_default_org(Some("team_other"), "team_old", "team_new");
+        assert_eq!(updated.as_deref(), Some("team_other"));
+    }
+
+    #[test]
+    fn default_org_after_delete_promotes_next_org() {
+        let updated =
+            default_org_after_delete(Some("team_old"), "team_old", Some("team_next".to_string()));
+        assert_eq!(updated.as_deref(), Some("team_next"));
+    }
+
+    #[test]
+    fn default_org_after_delete_keeps_non_matching_default() {
+        let updated = default_org_after_delete(
+            Some("team_other"),
+            "team_old",
+            Some("team_next".to_string()),
+        );
+        assert_eq!(updated.as_deref(), Some("team_other"));
+    }
+
+    #[test]
+    fn default_org_after_delete_clears_when_no_next_org() {
+        let updated = default_org_after_delete(Some("team_old"), "team_old", None);
+        assert_eq!(updated, None);
+    }
 }
