@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::client::ApiClient;
+use crate::org;
 use crate::output;
 
 #[derive(Deserialize)]
@@ -32,8 +33,14 @@ struct DeleteApiKeyResponse {
     deleted: bool,
 }
 
-pub fn list(client: &ApiClient, project: &str, json_mode: bool) -> Result<()> {
-    let resp: ListApiKeysResponse = client.get(&format!("/v1/{}/keys", project))?;
+pub fn list(
+    client: &ApiClient,
+    project: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    let path = org::project_scoped_path(project, "/keys", organization);
+    let resp: ListApiKeysResponse = client.get(&path)?;
     output::print_result(
         &json!({"keys": resp.keys.iter().map(|k| json!({
             "key_id": k.key_id,
@@ -62,12 +69,14 @@ pub fn list(client: &ApiClient, project: &str, json_mode: bool) -> Result<()> {
 pub fn create(
     client: &ApiClient,
     project: &str,
+    organization: Option<&str>,
     label: &str,
     permission: &str,
     json_mode: bool,
 ) -> Result<()> {
     let body = json!({ "label": label, "permission": permission });
-    let resp: CreateApiKeyResponse = client.post(&format!("/v1/{}/keys", project), &body)?;
+    let path = org::project_scoped_path(project, "/keys", organization);
+    let resp: CreateApiKeyResponse = client.post(&path, &body)?;
     output::print_result(
         &json!({
             "key_id": resp.key_id,
@@ -87,9 +96,15 @@ pub fn create(
     Ok(())
 }
 
-pub fn delete(client: &ApiClient, project: &str, key_id: &str, json_mode: bool) -> Result<()> {
-    let resp: DeleteApiKeyResponse =
-        client.delete(&format!("/v1/{}/keys/{}", project, key_id))?;
+pub fn delete(
+    client: &ApiClient,
+    project: &str,
+    organization: Option<&str>,
+    key_id: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let path = org::project_scoped_path(project, &format!("/keys/{key_id}"), organization);
+    let resp: DeleteApiKeyResponse = client.delete(&path)?;
     output::print_result(
         &json!({"deleted": resp.deleted, "key_id": key_id}),
         json_mode,

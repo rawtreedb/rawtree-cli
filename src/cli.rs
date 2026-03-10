@@ -11,6 +11,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Organization name (overrides RAWTREE_ORG env and config file)
+    #[arg(long, global = true)]
+    pub org: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -42,6 +46,11 @@ pub enum Command {
     Keys {
         #[command(subcommand)]
         action: KeysCommand,
+    },
+    /// Manage organizations
+    Organization {
+        #[command(subcommand)]
+        action: OrganizationCommand,
     },
     /// Inspect tables
     Table {
@@ -155,6 +164,34 @@ pub enum ProjectCommand {
     /// Delete a project and all its data
     Delete {
         /// Project name
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OrganizationCommand {
+    /// List all organizations
+    List,
+    /// Create a new organization
+    Create {
+        /// Organization name
+        name: String,
+    },
+    /// Set the default organization
+    Use {
+        /// Organization name
+        name: String,
+    },
+    /// Rename an organization
+    Rename {
+        /// Current organization name
+        old: String,
+        /// New organization name
+        new_name: String,
+    },
+    /// Delete an organization
+    Delete {
+        /// Organization name
         name: String,
     },
 }

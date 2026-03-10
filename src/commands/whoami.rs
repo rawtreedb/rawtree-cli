@@ -13,6 +13,7 @@ pub fn whoami(resolved_url: &str, json_mode: bool) -> Result<()> {
                     "email": email,
                     "url": resolved_url,
                     "default_project": cfg.default_project,
+                    "default_organization": cfg.default_organization,
                 }),
                 json_mode,
                 |_| println!("{}", email),

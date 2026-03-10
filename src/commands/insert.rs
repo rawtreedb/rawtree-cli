@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::client::ApiClient;
+use crate::org;
 use crate::output;
 
 const BATCH_SIZE: usize = 5000;
@@ -49,22 +50,21 @@ fn build_body_into(body: &mut String, lines: &[String]) {
 }
 
 fn print_inserted(count: usize, json_mode: bool) {
-    output::print_result(
-        &json!({"inserted": count}),
-        json_mode,
-        |_| println!("Inserted {} row(s).", count),
-    );
+    output::print_result(&json!({"inserted": count}), json_mode, |_| {
+        println!("Inserted {} row(s).", count)
+    });
 }
 
 pub fn insert(
     client: &ApiClient,
     project: &str,
+    organization: Option<&str>,
     table: &str,
     data: Option<&str>,
     file: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let url = format!("/v1/{}/tables/{}", project, table);
+    let url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
 
     // Small inline data — send in one request
     if let Some(raw) = data {
@@ -77,11 +77,11 @@ pub fn insert(
     let path = file.ok_or_else(|| anyhow::anyhow!("provide either --data or --file"))?;
 
     if is_jsonl(path) {
-        insert_jsonl_streaming(client, project, table, path, json_mode)?;
+        insert_jsonl_streaming(client, project, organization, table, path, json_mode)?;
     } else {
         // Non-JSONL files: parse entire file (assumed to be a JSON array or object)
-        let contents = fs::read_to_string(path)
-            .with_context(|| format!("failed to read file '{}'", path))?;
+        let contents =
+            fs::read_to_string(path).with_context(|| format!("failed to read file '{}'", path))?;
         let json_data: Value = serde_json::from_str(&contents).context("invalid JSON in file")?;
         let resp: InsertResponse = client.post(&url, &json_data)?;
         print_inserted(resp.inserted, json_mode);
@@ -95,6 +95,7 @@ pub fn insert(
 fn insert_jsonl_streaming(
     client: &ApiClient,
     project: &str,
+    organization: Option<&str>,
     table: &str,
     path: &str,
     json_mode: bool,
@@ -123,11 +124,10 @@ fn insert_jsonl_streaming(
     let rx = Arc::new(std::sync::Mutex::new(rx));
     let inserted = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicBool::new(false));
-    let first_error: Arc<std::sync::Mutex<Option<String>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let first_error: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
 
     // Spawn sender threads — each reuses a body buffer, compresses, and POSTs
-    let url = format!("/v1/{}/tables/{}", project, table);
+    let url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
     let mut handles = Vec::with_capacity(senders);
     for _ in 0..senders {
         let rx = Arc::clone(&rx);
@@ -169,8 +169,7 @@ fn insert_jsonl_streaming(
     }
 
     // Reader: read raw lines into batches using read_line for buffer reuse
-    let file = fs::File::open(path)
-        .with_context(|| format!("failed to read file '{}'", path))?;
+    let file = fs::File::open(path).with_context(|| format!("failed to read file '{}'", path))?;
     let mut reader = BufReader::with_capacity(READ_BUF_SIZE, file);
     let mut current_batch: Vec<String> = Vec::with_capacity(BATCH_SIZE);
     let mut line_buf = String::new();
@@ -182,7 +181,9 @@ fn insert_jsonl_streaming(
         }
 
         line_buf.clear();
-        let bytes_read = reader.read_line(&mut line_buf).context("failed to read line")?;
+        let bytes_read = reader
+            .read_line(&mut line_buf)
+            .context("failed to read line")?;
         if bytes_read == 0 {
             break; // EOF
         }

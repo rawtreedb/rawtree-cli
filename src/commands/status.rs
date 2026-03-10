@@ -12,6 +12,7 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             "email": cfg.email,
             "authenticated": cfg.token.is_some(),
             "default_project": cfg.default_project,
+            "default_organization": cfg.default_organization,
         }),
         json_mode,
         |_| {
@@ -22,6 +23,9 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             }
             if let Some(ref project) = cfg.default_project {
                 println!("Default project: {}", project);
+            }
+            if let Some(ref organization) = cfg.default_organization {
+                println!("Default organization: {}", organization);
             }
         },
     );
