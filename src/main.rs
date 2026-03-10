@@ -185,28 +185,6 @@ fn run(cli: Cli) -> Result<()> {
             OrganizationCommand::Delete { name } => {
                 commands::organization::delete(&client, &name, json)
             }
-            OrganizationCommand::Members { organization } => {
-                commands::organization::members(&client, &organization, json)
-            }
-            OrganizationCommand::AddMember {
-                organization,
-                email,
-            } => commands::organization::add_member(&client, &organization, &email, json),
-            OrganizationCommand::UpdateMember {
-                organization,
-                user_id,
-                role,
-            } => commands::organization::update_member(
-                &client,
-                &organization,
-                &user_id,
-                role.as_str(),
-                json,
-            ),
-            OrganizationCommand::RemoveMember {
-                organization,
-                user_id,
-            } => commands::organization::remove_member(&client, &organization, &user_id, json),
         },
         Command::Keys { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
