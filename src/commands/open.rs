@@ -22,6 +22,14 @@ fn build_open_url(base_url: &str, organization: Option<&str>, project: Option<&s
     }
 }
 
+pub fn open_url(target_url: &str, json_mode: bool) -> Result<()> {
+    webbrowser::open(target_url).with_context(|| format!("failed to open '{}'", target_url))?;
+    output::print_result(&json!({ "url": target_url }), json_mode, |_| {
+        println!("Opened {}", target_url);
+    });
+    Ok(())
+}
+
 pub fn open(
     base_url: &str,
     organization: Option<&str>,
@@ -29,11 +37,7 @@ pub fn open(
     json_mode: bool,
 ) -> Result<()> {
     let target_url = build_open_url(base_url, organization, project);
-    webbrowser::open(&target_url).with_context(|| format!("failed to open '{}'", target_url))?;
-    output::print_result(&json!({ "url": target_url }), json_mode, |_| {
-        println!("Opened {}", target_url);
-    });
-    Ok(())
+    open_url(&target_url, json_mode)
 }
 
 #[cfg(test)]

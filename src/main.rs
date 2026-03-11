@@ -111,6 +111,14 @@ fn resolve_effective_org_for_project_create(
     resolve_effective_org(client, cli_org)
 }
 
+fn resolve_saved_claim_url(cfg: &config::Config) -> Result<String> {
+    cfg.last_claim_url.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No claim URL found. Create an anonymous project first and try `rtree open --claim` again."
+        )
+    })
+}
+
 fn should_bootstrap_anonymous_project_for_insert(
     has_jwt_auth: bool,
     token_present: bool,
@@ -433,16 +441,22 @@ fn run(cli: Cli) -> Result<()> {
         Command::Docs => commands::docs::docs(&client),
         Command::Whoami => commands::whoami::whoami(&url, json),
         Command::Status => commands::status::status(&url, json),
-        Command::Open { project } => {
-            let effective_org = resolve_effective_org(&client, cli_org);
-            let project = resolve_optional_project(project);
-            let ui_base_url = commands::open::resolve_ui_base_url();
-            commands::open::open(
-                &ui_base_url,
-                effective_org.as_deref(),
-                project.as_deref(),
-                json,
-            )
+        Command::Open { claim, project } => {
+            if claim {
+                let cfg = config::load()?;
+                let claim_url = resolve_saved_claim_url(&cfg)?;
+                commands::open::open_url(&claim_url, json)
+            } else {
+                let effective_org = resolve_effective_org(&client, cli_org);
+                let project = resolve_optional_project(project);
+                let ui_base_url = commands::open::resolve_ui_base_url();
+                commands::open::open(
+                    &ui_base_url,
+                    effective_org.as_deref(),
+                    project.as_deref(),
+                    json,
+                )
+            }
         }
         Command::Completions { shell } => {
             let shell = match shell {
@@ -458,10 +472,12 @@ fn run(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::Config;
+
     use super::{
         resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
-        should_bootstrap_anonymous_project_for_insert, should_resolve_org_for_project_create,
-        token_looks_like_jwt,
+        resolve_saved_claim_url, should_bootstrap_anonymous_project_for_insert,
+        should_resolve_org_for_project_create, token_looks_like_jwt,
     };
 
     #[test]
@@ -582,5 +598,26 @@ mod tests {
         let should_bootstrap =
             should_bootstrap_anonymous_project_for_insert(false, true, None, Some("analytics"));
         assert!(!should_bootstrap);
+    }
+
+    #[test]
+    fn resolve_saved_claim_url_returns_value_when_present() {
+        let cfg = Config {
+            last_claim_url: Some("https://rawtree.com/claim/project?token=abc".to_string()),
+            ..Config::default()
+        };
+        let claim_url = resolve_saved_claim_url(&cfg).expect("claim URL should resolve");
+        assert_eq!(claim_url, "https://rawtree.com/claim/project?token=abc");
+    }
+
+    #[test]
+    fn resolve_saved_claim_url_errors_when_missing() {
+        let cfg = Config::default();
+        let err =
+            resolve_saved_claim_url(&cfg).expect_err("missing claim URL should produce error");
+        assert!(
+            format!("{:#}", err).contains("No claim URL found"),
+            "unexpected error: {err:#}"
+        );
     }
 }
