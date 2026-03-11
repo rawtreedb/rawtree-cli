@@ -23,6 +23,7 @@ struct ListProjectsResponse {
 struct CreateProjectResponse {
     project: String,
     api_key: String,
+    organization_name: Option<String>,
     #[serde(default)]
     temporary: bool,
     claim_url: Option<String>,
@@ -58,9 +59,14 @@ fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectRes
     cfg.last_project_expires_in_seconds = resp.expires_in_seconds;
 
     if resp.temporary {
+        cfg.default_organization = resp.organization_name.clone();
+    } else if let Some(ref organization_name) = resp.organization_name {
+        cfg.default_organization = Some(organization_name.clone());
+    }
+
+    if resp.temporary {
         cfg.token = Some(resp.api_key.clone());
         cfg.email = None;
-        cfg.default_organization = None;
     }
 }
 
@@ -151,6 +157,7 @@ pub fn create(
         &json!({
             "project": resp.project,
             "api_key": resp.api_key,
+            "organization_name": resp.organization_name,
             "temporary": resp.temporary,
             "claim_url": resp.claim_url,
             "claim_token": resp.claim_token,
@@ -160,6 +167,9 @@ pub fn create(
         |_| {
             println!("Project '{}' created.", resp.project);
             println!("  api_key: {}", resp.api_key);
+            if let Some(ref organization_name) = resp.organization_name {
+                println!("  organization_name: {}", organization_name);
+            }
             println!("  temporary: {}", resp.temporary);
             if let Some(ref claim_url) = resp.claim_url {
                 println!("  claim_url: {}", claim_url);
@@ -280,6 +290,7 @@ mod tests {
         let resp = CreateProjectResponse {
             project: "tmp_project".to_string(),
             api_key: "rw_temporary".to_string(),
+            organization_name: Some("temp_org".to_string()),
             temporary: true,
             claim_url: Some("https://app.rawtree.dev/claim/project?token=abc".to_string()),
             claim_token: Some("abc".to_string()),
@@ -290,7 +301,7 @@ mod tests {
 
         assert_eq!(cfg.token.as_deref(), Some("rw_temporary"));
         assert_eq!(cfg.email, None);
-        assert_eq!(cfg.default_organization, None);
+        assert_eq!(cfg.default_organization.as_deref(), Some("temp_org"));
         assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
         assert_eq!(
             cfg.last_claim_url.as_deref(),
@@ -312,6 +323,7 @@ mod tests {
         let resp = CreateProjectResponse {
             project: "analytics".to_string(),
             api_key: "rw_regular".to_string(),
+            organization_name: None,
             temporary: false,
             claim_url: None,
             claim_token: None,
@@ -328,5 +340,47 @@ mod tests {
         assert_eq!(cfg.last_claim_token, None);
         assert_eq!(cfg.last_project_temporary, Some(false));
         assert_eq!(cfg.last_project_expires_in_seconds, None);
+    }
+
+    #[test]
+    fn apply_project_create_config_clears_default_org_for_temporary_when_missing_org_name() {
+        let mut cfg = Config {
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "tmp_project".to_string(),
+            api_key: "rw_temp".to_string(),
+            organization_name: None,
+            temporary: true,
+            claim_url: None,
+            claim_token: None,
+            expires_in_seconds: Some(86400),
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.default_organization, None);
+    }
+
+    #[test]
+    fn apply_project_create_config_updates_default_org_when_standard_response_has_org_name() {
+        let mut cfg = Config {
+            default_organization: Some("old_team".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "analytics".to_string(),
+            api_key: "rw_regular".to_string(),
+            organization_name: Some("new_team".to_string()),
+            temporary: false,
+            claim_url: None,
+            claim_token: None,
+            expires_in_seconds: None,
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.default_organization.as_deref(), Some("new_team"));
     }
 }
