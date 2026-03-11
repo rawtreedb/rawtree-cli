@@ -38,21 +38,26 @@ fn resolve_token() -> Option<String> {
     config::load().ok().and_then(|c| c.token)
 }
 
+fn resolve_project_from_sources(
+    cli_project: Option<String>,
+    env_project: Option<String>,
+    cfg_project: Option<String>,
+) -> Option<String> {
+    cli_project.or(env_project).or(cfg_project)
+}
+
+fn resolve_optional_project(cli_project: Option<String>) -> Option<String> {
+    let env_project = std::env::var("RAWTREE_PROJECT").ok();
+    let cfg_project = config::load().ok().and_then(|c| c.default_project);
+    resolve_project_from_sources(cli_project, env_project, cfg_project)
+}
+
 fn resolve_project(cli_project: Option<String>) -> Result<String> {
-    if let Some(p) = cli_project {
-        return Ok(p);
-    }
-    if let Ok(p) = std::env::var("RAWTREE_PROJECT") {
-        return Ok(p);
-    }
-    if let Ok(cfg) = config::load() {
-        if let Some(p) = cfg.default_project {
-            return Ok(p);
-        }
-    }
-    anyhow::bail!(
-        "No project specified. Use --project, RAWTREE_PROJECT env, or `rtree project use <name>`"
-    )
+    resolve_optional_project(cli_project).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No project specified. Use --project, RAWTREE_PROJECT env, or `rtree project use <name>`"
+        )
+    })
 }
 
 fn resolve_org_from_sources(
@@ -82,6 +87,28 @@ where
 fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<String> {
     let explicit_org = resolve_explicit_org(cli_org);
     resolve_effective_org_with(explicit_org, || org::first_organization_name(client))
+}
+
+fn token_looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_none()
+}
+
+fn should_resolve_org_for_project_create(token: Option<&str>) -> bool {
+    token.map(token_looks_like_jwt).unwrap_or(false)
+}
+
+fn resolve_effective_org_for_project_create(
+    client: &ApiClient,
+    cli_org: Option<String>,
+) -> Option<String> {
+    if !should_resolve_org_for_project_create(client.token.as_deref()) {
+        return None;
+    }
+    resolve_effective_org(client, cli_org)
 }
 
 fn read_stdin() -> Result<String> {
@@ -158,7 +185,8 @@ fn run(cli: Cli) -> Result<()> {
                 commands::project::list(&client, effective_org.as_deref(), json)
             }
             ProjectCommand::Create { name } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                let effective_org =
+                    resolve_effective_org_for_project_create(&client, cli_org.clone());
                 commands::project::create(&client, &name, effective_org.as_deref(), json)
             }
             ProjectCommand::Use { name } => commands::project::use_project(&name, json),
@@ -316,6 +344,17 @@ fn run(cli: Cli) -> Result<()> {
         Command::Docs => commands::docs::docs(&client),
         Command::Whoami => commands::whoami::whoami(&url, json),
         Command::Status => commands::status::status(&url, json),
+        Command::Open { project } => {
+            let effective_org = resolve_effective_org(&client, cli_org);
+            let project = resolve_optional_project(project);
+            let ui_base_url = commands::open::resolve_ui_base_url();
+            commands::open::open(
+                &ui_base_url,
+                effective_org.as_deref(),
+                project.as_deref(),
+                json,
+            )
+        }
         Command::Completions { shell } => {
             let shell = match shell {
                 ShellType::Bash => clap_complete::Shell::Bash,
@@ -330,7 +369,10 @@ fn run(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_effective_org_with, resolve_org_from_sources};
+    use super::{
+        resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
+        should_resolve_org_for_project_create, token_looks_like_jwt,
+    };
 
     #[test]
     fn resolve_org_uses_cli_first() {
@@ -382,5 +424,45 @@ mod tests {
     fn auto_default_org_can_fall_back_to_none() {
         let resolved = resolve_effective_org_with(None, || None);
         assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn token_looks_like_jwt_detects_jwt_shape() {
+        assert!(token_looks_like_jwt("a.b.c"));
+        assert!(!token_looks_like_jwt("rw_key"));
+        assert!(!token_looks_like_jwt("a.b"));
+    }
+
+    #[test]
+    fn project_create_org_resolution_requires_jwt_token() {
+        assert!(should_resolve_org_for_project_create(Some("a.b.c")));
+        assert!(!should_resolve_org_for_project_create(Some("rw_key")));
+        assert!(!should_resolve_org_for_project_create(None));
+    }
+
+    #[test]
+    fn resolve_project_uses_cli_first() {
+        let resolved = resolve_project_from_sources(
+            Some("cli-project".to_string()),
+            Some("env-project".to_string()),
+            Some("cfg-project".to_string()),
+        );
+        assert_eq!(resolved.as_deref(), Some("cli-project"));
+    }
+
+    #[test]
+    fn resolve_project_uses_env_when_cli_missing() {
+        let resolved = resolve_project_from_sources(
+            None,
+            Some("env-project".to_string()),
+            Some("cfg-project".to_string()),
+        );
+        assert_eq!(resolved.as_deref(), Some("env-project"));
+    }
+
+    #[test]
+    fn resolve_project_uses_config_when_cli_and_env_missing() {
+        let resolved = resolve_project_from_sources(None, None, Some("cfg-project".to_string()));
+        assert_eq!(resolved.as_deref(), Some("cfg-project"));
     }
 }

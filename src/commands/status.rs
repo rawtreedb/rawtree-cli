@@ -13,6 +13,10 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             "authenticated": cfg.token.is_some(),
             "default_project": cfg.default_project,
             "default_organization": cfg.default_organization,
+            "last_claim_url": cfg.last_claim_url,
+            "last_claim_token": cfg.last_claim_token,
+            "last_project_temporary": cfg.last_project_temporary,
+            "last_project_expires_in_seconds": cfg.last_project_expires_in_seconds,
         }),
         json_mode,
         |_| {
@@ -26,6 +30,18 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             }
             if let Some(ref organization) = cfg.default_organization {
                 println!("Default organization: {}", organization);
+            }
+            if let Some(ref claim_url) = cfg.last_claim_url {
+                println!("Last claim URL: {}", claim_url);
+            }
+            if let Some(ref claim_token) = cfg.last_claim_token {
+                println!("Last claim token: {}", claim_token);
+            }
+            if let Some(temporary) = cfg.last_project_temporary {
+                println!("Last created project temporary: {}", temporary);
+            }
+            if let Some(expires_in_seconds) = cfg.last_project_expires_in_seconds {
+                println!("Last temporary project TTL (s): {}", expires_in_seconds);
             }
         },
     );

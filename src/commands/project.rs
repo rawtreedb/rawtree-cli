@@ -23,6 +23,39 @@ struct ListProjectsResponse {
 struct CreateProjectResponse {
     project: String,
     api_key: String,
+    #[serde(default)]
+    temporary: bool,
+    claim_url: Option<String>,
+    claim_token: Option<String>,
+    expires_in_seconds: Option<u64>,
+}
+
+fn token_looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_none()
+}
+
+fn jwt_token_for_project_create(token: Option<&str>) -> Option<String> {
+    token
+        .filter(|candidate| token_looks_like_jwt(candidate))
+        .map(ToString::to_string)
+}
+
+fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
+    cfg.default_project = Some(resp.project.clone());
+    cfg.last_claim_url = resp.claim_url.clone();
+    cfg.last_claim_token = resp.claim_token.clone();
+    cfg.last_project_temporary = Some(resp.temporary);
+    cfg.last_project_expires_in_seconds = resp.expires_in_seconds;
+
+    if resp.temporary {
+        cfg.token = Some(resp.api_key.clone());
+        cfg.email = None;
+        cfg.default_organization = None;
+    }
 }
 
 fn projects_collection_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
@@ -73,13 +106,39 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let path = projects_collection_path(client, organization)?;
-    let resp: CreateProjectResponse = client.post(&path, &json!({"project": name}))?;
+    let create_client = ApiClient::new(
+        client.base_url.clone(),
+        jwt_token_for_project_create(client.token.as_deref()),
+    );
+    let resp: CreateProjectResponse = create_client.post(&path, &json!({"project": name}))?;
+
+    let mut cfg = config::load()?;
+    apply_project_create_config(&mut cfg, &resp);
+    config::save(&cfg)?;
+
     output::print_result(
-        &json!({"project": resp.project, "api_key": resp.api_key}),
+        &json!({
+            "project": resp.project,
+            "api_key": resp.api_key,
+            "temporary": resp.temporary,
+            "claim_url": resp.claim_url,
+            "claim_token": resp.claim_token,
+            "expires_in_seconds": resp.expires_in_seconds,
+        }),
         json_mode,
         |_| {
             println!("Project '{}' created.", resp.project);
             println!("  api_key: {}", resp.api_key);
+            println!("  temporary: {}", resp.temporary);
+            if let Some(ref claim_url) = resp.claim_url {
+                println!("  claim_url: {}", claim_url);
+            }
+            if let Some(ref claim_token) = resp.claim_token {
+                println!("  claim_token: {}", claim_token);
+            }
+            if let Some(expires_in_seconds) = resp.expires_in_seconds {
+                println!("  expires_in_seconds: {}", expires_in_seconds);
+            }
         },
     );
     Ok(())
@@ -147,4 +206,87 @@ pub fn delete(
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        apply_project_create_config, jwt_token_for_project_create, token_looks_like_jwt,
+        CreateProjectResponse,
+    };
+    use crate::config::Config;
+
+    #[test]
+    fn token_looks_like_jwt_detects_three_part_tokens() {
+        assert!(token_looks_like_jwt("a.b.c"));
+        assert!(!token_looks_like_jwt("rw_example"));
+        assert!(!token_looks_like_jwt("a.b"));
+    }
+
+    #[test]
+    fn jwt_token_for_project_create_drops_api_key_tokens() {
+        let token = jwt_token_for_project_create(Some("rw_abc123"));
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn apply_project_create_config_overwrites_auth_for_temporary_projects() {
+        let mut cfg = Config {
+            token: Some("jwt.token.value".to_string()),
+            email: Some("user@example.com".to_string()),
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "tmp_project".to_string(),
+            api_key: "rw_temporary".to_string(),
+            temporary: true,
+            claim_url: Some("https://app.rawtree.dev/claim/project?token=abc".to_string()),
+            claim_token: Some("abc".to_string()),
+            expires_in_seconds: Some(86400),
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.token.as_deref(), Some("rw_temporary"));
+        assert_eq!(cfg.email, None);
+        assert_eq!(cfg.default_organization, None);
+        assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
+        assert_eq!(
+            cfg.last_claim_url.as_deref(),
+            Some("https://app.rawtree.dev/claim/project?token=abc")
+        );
+        assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
+        assert_eq!(cfg.last_project_temporary, Some(true));
+        assert_eq!(cfg.last_project_expires_in_seconds, Some(86400));
+    }
+
+    #[test]
+    fn apply_project_create_config_preserves_jwt_for_standard_projects() {
+        let mut cfg = Config {
+            token: Some("jwt.token.value".to_string()),
+            email: Some("user@example.com".to_string()),
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "analytics".to_string(),
+            api_key: "rw_regular".to_string(),
+            temporary: false,
+            claim_url: None,
+            claim_token: None,
+            expires_in_seconds: None,
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.token.as_deref(), Some("jwt.token.value"));
+        assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
+        assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
+        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.last_claim_url, None);
+        assert_eq!(cfg.last_claim_token, None);
+        assert_eq!(cfg.last_project_temporary, Some(false));
+        assert_eq!(cfg.last_project_expires_in_seconds, None);
+    }
 }
