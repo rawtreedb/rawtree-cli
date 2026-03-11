@@ -238,6 +238,7 @@ fn run(cli: Cli) -> Result<()> {
             let password = prompt_password_if_missing(password)?;
             commands::auth::login(&client, &email, &password, json)
         }
+        Command::Logout => commands::auth::logout(json),
         Command::Project { action } => match action {
             ProjectCommand::List => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());

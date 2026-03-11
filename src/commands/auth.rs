@@ -40,6 +40,12 @@ fn update_and_save_config(client: &ApiClient, resp: &AuthResponse) -> Result<()>
     Ok(())
 }
 
+fn clear_auth_config(cfg: &mut config::Config) {
+    cfg.token = None;
+    cfg.email = None;
+    cfg.default_organization = None;
+}
+
 pub fn register(client: &ApiClient, email: &str, password: &str, json_mode: bool) -> Result<()> {
     let resp: AuthResponse = client.post(
         "/v1/auth/register",
@@ -72,9 +78,20 @@ pub fn login(client: &ApiClient, email: &str, password: &str, json_mode: bool) -
     Ok(())
 }
 
+pub fn logout(json_mode: bool) -> Result<()> {
+    let mut cfg = config::load()?;
+    clear_auth_config(&mut cfg);
+    config::save(&cfg)?;
+
+    output::print_result(&json!({"status": "logged_out"}), json_mode, |_| {
+        println!("Logged out. Credentials removed from local config.");
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{apply_auth_config, AuthResponse};
+    use super::{apply_auth_config, clear_auth_config, AuthResponse};
     use crate::config::Config;
 
     fn sample_auth_response() -> AuthResponse {
@@ -109,6 +126,22 @@ mod tests {
         let resp = sample_auth_response();
         apply_auth_config(&mut cfg, "https://api.rawtree.dev", &resp, None);
 
+        assert_eq!(cfg.default_organization, None);
+    }
+
+    #[test]
+    fn clear_auth_config_removes_local_credentials() {
+        let mut cfg = Config {
+            token: Some("rw_temp".to_string()),
+            email: Some("user@example.com".to_string()),
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+
+        clear_auth_config(&mut cfg);
+
+        assert_eq!(cfg.token, None);
+        assert_eq!(cfg.email, None);
         assert_eq!(cfg.default_organization, None);
     }
 }

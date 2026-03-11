@@ -37,6 +37,8 @@ pub enum Command {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Log out and remove saved local credentials
+    Logout,
     /// Manage projects
     Project {
         #[command(subcommand)]
