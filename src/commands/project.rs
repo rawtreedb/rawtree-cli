@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::client::ApiClient;
 use crate::config;
@@ -30,6 +30,12 @@ struct CreateProjectResponse {
     expires_in_seconds: Option<u64>,
 }
 
+pub struct CreatedProjectInfo {
+    pub project: String,
+    pub api_key: String,
+    pub claim_url: Option<String>,
+}
+
 fn token_looks_like_jwt(token: &str) -> bool {
     let mut parts = token.split('.');
     parts.next().is_some()
@@ -56,6 +62,40 @@ fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectRes
         cfg.email = None;
         cfg.default_organization = None;
     }
+}
+
+fn create_project_response(
+    client: &ApiClient,
+    name: Option<&str>,
+    organization: Option<&str>,
+) -> Result<CreateProjectResponse> {
+    let path = projects_collection_path(client, organization)?;
+    let create_client = ApiClient::new(
+        client.base_url.clone(),
+        jwt_token_for_project_create(client.token.as_deref()),
+    );
+
+    let mut payload = serde_json::Map::new();
+    if let Some(project_name) = name {
+        payload.insert(
+            "project".to_string(),
+            Value::String(project_name.to_string()),
+        );
+    }
+
+    create_client.post(&path, &Value::Object(payload))
+}
+
+fn create_and_persist(
+    client: &ApiClient,
+    name: Option<&str>,
+    organization: Option<&str>,
+) -> Result<CreateProjectResponse> {
+    let resp = create_project_response(client, name, organization)?;
+    let mut cfg = config::load()?;
+    apply_project_create_config(&mut cfg, &resp);
+    config::save(&cfg)?;
+    Ok(resp)
 }
 
 fn projects_collection_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
@@ -105,16 +145,7 @@ pub fn create(
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = projects_collection_path(client, organization)?;
-    let create_client = ApiClient::new(
-        client.base_url.clone(),
-        jwt_token_for_project_create(client.token.as_deref()),
-    );
-    let resp: CreateProjectResponse = create_client.post(&path, &json!({"project": name}))?;
-
-    let mut cfg = config::load()?;
-    apply_project_create_config(&mut cfg, &resp);
-    config::save(&cfg)?;
+    let resp = create_and_persist(client, Some(name), organization)?;
 
     output::print_result(
         &json!({
@@ -142,6 +173,15 @@ pub fn create(
         },
     );
     Ok(())
+}
+
+pub fn create_for_insert(client: &ApiClient, name: Option<&str>) -> Result<CreatedProjectInfo> {
+    let resp = create_and_persist(client, name, None)?;
+    Ok(CreatedProjectInfo {
+        project: resp.project,
+        api_key: resp.api_key,
+        claim_url: resp.claim_url,
+    })
 }
 
 pub fn use_project(name: &str, json_mode: bool) -> Result<()> {

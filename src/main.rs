@@ -111,6 +111,57 @@ fn resolve_effective_org_for_project_create(
     resolve_effective_org(client, cli_org)
 }
 
+fn should_bootstrap_anonymous_project_for_insert(
+    has_jwt_auth: bool,
+    token_present: bool,
+    cli_project: Option<&str>,
+    resolved_project: Option<&str>,
+) -> bool {
+    if has_jwt_auth {
+        return false;
+    }
+    if !token_present {
+        return true;
+    }
+    cli_project.is_some() || resolved_project.is_none()
+}
+
+fn create_anonymous_project_for_insert(
+    client: &ApiClient,
+    requested_project: Option<String>,
+    json_mode: bool,
+) -> Result<commands::project::CreatedProjectInfo> {
+    if !json_mode {
+        println!("Not logged in. Creating an anonymous project for this ingest...");
+    }
+
+    let initial_attempt =
+        commands::project::create_for_insert(client, requested_project.as_deref());
+    let created = match initial_attempt {
+        Ok(info) => info,
+        Err(err)
+            if requested_project.is_some() && format!("{:#}", err).contains("already exists") =>
+        {
+            if !json_mode {
+                println!(
+                    "Requested project name already exists. Creating a random anonymous project instead..."
+                );
+            }
+            commands::project::create_for_insert(client, None)?
+        }
+        Err(err) => return Err(err),
+    };
+
+    if !json_mode {
+        println!("Using anonymous project '{}'.", created.project);
+        if let Some(ref claim_url) = created.claim_url {
+            println!("Claim URL: {}", claim_url);
+        }
+    }
+
+    Ok(created)
+}
+
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
@@ -292,10 +343,48 @@ fn run(cli: Cli) -> Result<()> {
             data,
             file,
         } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let project = resolve_project(project)?;
+            let has_jwt_auth = should_resolve_org_for_project_create(client.token.as_deref());
+            let cli_project = project.clone();
+            let resolved_project = resolve_optional_project(project);
+            let token_present = client.token.is_some();
+
+            let mut insert_client = ApiClient::new(client.base_url.clone(), client.token.clone());
+            let (project, effective_org) = if has_jwt_auth {
+                (
+                    resolve_project(cli_project)?,
+                    resolve_effective_org(&client, cli_org.clone()),
+                )
+            } else {
+                let should_bootstrap = should_bootstrap_anonymous_project_for_insert(
+                    has_jwt_auth,
+                    token_present,
+                    cli_project.as_deref(),
+                    resolved_project.as_deref(),
+                );
+                if should_bootstrap {
+                    let requested_project = if token_present {
+                        cli_project.clone()
+                    } else {
+                        cli_project.clone().or(resolved_project.clone())
+                    };
+                    let created =
+                        create_anonymous_project_for_insert(&client, requested_project, json)?;
+                    insert_client = ApiClient::new(client.base_url.clone(), Some(created.api_key));
+                    (created.project, None)
+                } else {
+                    (
+                        resolved_project.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "No project specified. Use --project, RAWTREE_PROJECT env, or `rtree project use <name>`"
+                            )
+                        })?,
+                        None,
+                    )
+                }
+            };
+
             commands::insert::insert(
-                &client,
+                &insert_client,
                 &project,
                 effective_org.as_deref(),
                 &table,
@@ -371,7 +460,8 @@ fn run(cli: Cli) -> Result<()> {
 mod tests {
     use super::{
         resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
-        should_resolve_org_for_project_create, token_looks_like_jwt,
+        should_bootstrap_anonymous_project_for_insert, should_resolve_org_for_project_create,
+        token_looks_like_jwt,
     };
 
     #[test]
@@ -464,5 +554,33 @@ mod tests {
     fn resolve_project_uses_config_when_cli_and_env_missing() {
         let resolved = resolve_project_from_sources(None, None, Some("cfg-project".to_string()));
         assert_eq!(resolved.as_deref(), Some("cfg-project"));
+    }
+
+    #[test]
+    fn insert_bootstrap_skips_when_authenticated_with_jwt() {
+        let should_bootstrap =
+            should_bootstrap_anonymous_project_for_insert(true, true, Some("analytics"), None);
+        assert!(!should_bootstrap);
+    }
+
+    #[test]
+    fn insert_bootstrap_runs_when_no_token() {
+        let should_bootstrap =
+            should_bootstrap_anonymous_project_for_insert(false, false, None, Some("analytics"));
+        assert!(should_bootstrap);
+    }
+
+    #[test]
+    fn insert_bootstrap_runs_for_cli_project_with_api_key_token() {
+        let should_bootstrap =
+            should_bootstrap_anonymous_project_for_insert(false, true, Some("analytics"), None);
+        assert!(should_bootstrap);
+    }
+
+    #[test]
+    fn insert_bootstrap_skips_for_resolved_project_with_api_key_token() {
+        let should_bootstrap =
+            should_bootstrap_anonymous_project_for_insert(false, true, None, Some("analytics"));
+        assert!(!should_bootstrap);
     }
 }
