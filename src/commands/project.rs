@@ -27,8 +27,6 @@ struct CreateProjectResponse {
     #[serde(default)]
     temporary: bool,
     claim_url: Option<String>,
-    claim_token: Option<String>,
-    expires_in_seconds: Option<u64>,
 }
 
 pub struct CreatedProjectInfo {
@@ -153,29 +151,18 @@ pub fn create(
     output::print_result(
         &json!({
             "project": resp.project,
-            "api_key": resp.api_key,
             "organization_name": resp.organization_name,
-            "temporary": resp.temporary,
             "claim_url": resp.claim_url,
-            "claim_token": resp.claim_token,
-            "expires_in_seconds": resp.expires_in_seconds,
         }),
         json_mode,
         |_| {
-            println!("Project '{}' created.", resp.project);
-            println!("  api_key: {}", resp.api_key);
-            if let Some(ref organization_name) = resp.organization_name {
-                println!("  organization_name: {}", organization_name);
-            }
-            println!("  temporary: {}", resp.temporary);
+            let organization_name = resp.organization_name.as_deref().unwrap_or("unknown");
+            println!(
+                "Project '{}' created in organization '{}'.",
+                resp.project, organization_name
+            );
             if let Some(ref claim_url) = resp.claim_url {
-                println!("  claim_url: {}", claim_url);
-            }
-            if let Some(ref claim_token) = resp.claim_token {
-                println!("  claim_token: {}", claim_token);
-            }
-            if let Some(expires_in_seconds) = resp.expires_in_seconds {
-                println!("  expires_in_seconds: {}", expires_in_seconds);
+                println!("Use '{}' to claim your project.", claim_url);
             }
         },
     );
@@ -290,8 +277,6 @@ mod tests {
             organization_name: Some("temp_org".to_string()),
             temporary: true,
             claim_url: Some("https://app.rawtree.dev/claim/project?token=abc".to_string()),
-            claim_token: Some("abc".to_string()),
-            expires_in_seconds: Some(86400),
         };
 
         apply_project_create_config(&mut cfg, &resp);
@@ -320,8 +305,6 @@ mod tests {
             organization_name: None,
             temporary: false,
             claim_url: None,
-            claim_token: None,
-            expires_in_seconds: None,
         };
 
         apply_project_create_config(&mut cfg, &resp);
@@ -345,8 +328,6 @@ mod tests {
             organization_name: None,
             temporary: true,
             claim_url: None,
-            claim_token: None,
-            expires_in_seconds: Some(86400),
         };
 
         apply_project_create_config(&mut cfg, &resp);
@@ -366,8 +347,6 @@ mod tests {
             organization_name: Some("new_team".to_string()),
             temporary: false,
             claim_url: None,
-            claim_token: None,
-            expires_in_seconds: None,
         };
 
         apply_project_create_config(&mut cfg, &resp);
