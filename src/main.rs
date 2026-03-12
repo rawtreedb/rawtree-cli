@@ -114,9 +114,13 @@ fn resolve_effective_org_for_project_create(
 fn resolve_saved_claim_url(cfg: &config::Config) -> Result<String> {
     cfg.last_claim_url.clone().ok_or_else(|| {
         anyhow::anyhow!(
-            "No claim URL found. Create an anonymous project first and try `rtree open --claim` again."
+            "No claim URL found. Create an anonymous project first and try `rtree open` again."
         )
     })
+}
+
+fn should_open_claim_url_by_default(token: Option<&str>, cli_project: Option<&str>) -> bool {
+    cli_project.is_none() && token.map(|t| !token_looks_like_jwt(t)).unwrap_or(false)
 }
 
 fn should_bootstrap_anonymous_project_for_insert(
@@ -442,22 +446,23 @@ fn run(cli: Cli) -> Result<()> {
         Command::Docs => commands::docs::docs(&client),
         Command::Whoami => commands::whoami::whoami(&url, json),
         Command::Status => commands::status::status(&url, json),
-        Command::Open { claim, project } => {
-            if claim {
+        Command::Open { project } => {
+            if should_open_claim_url_by_default(client.token.as_deref(), project.as_deref()) {
                 let cfg = config::load()?;
-                let claim_url = resolve_saved_claim_url(&cfg)?;
-                commands::open::open_url(&claim_url, json)
-            } else {
-                let effective_org = resolve_effective_org(&client, cli_org);
-                let project = resolve_optional_project(project);
-                let ui_base_url = commands::open::resolve_ui_base_url();
-                commands::open::open(
-                    &ui_base_url,
-                    effective_org.as_deref(),
-                    project.as_deref(),
-                    json,
-                )
+                if let Ok(claim_url) = resolve_saved_claim_url(&cfg) {
+                    return commands::open::open_url(&claim_url, json);
+                }
             }
+
+            let effective_org = resolve_effective_org(&client, cli_org);
+            let project = resolve_optional_project(project);
+            let ui_base_url = commands::open::resolve_ui_base_url();
+            commands::open::open(
+                &ui_base_url,
+                effective_org.as_deref(),
+                project.as_deref(),
+                json,
+            )
         }
         Command::Completions { shell } => {
             let shell = match shell {
@@ -478,7 +483,8 @@ mod tests {
     use super::{
         resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
         resolve_saved_claim_url, should_bootstrap_anonymous_project_for_insert,
-        should_resolve_org_for_project_create, token_looks_like_jwt,
+        should_open_claim_url_by_default, should_resolve_org_for_project_create,
+        token_looks_like_jwt,
     };
 
     #[test]
@@ -620,5 +626,16 @@ mod tests {
             format!("{:#}", err).contains("No claim URL found"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn open_claim_url_by_default_requires_non_jwt_and_no_project_arg() {
+        assert!(should_open_claim_url_by_default(Some("rw_temp"), None));
+        assert!(!should_open_claim_url_by_default(Some("a.b.c"), None));
+        assert!(!should_open_claim_url_by_default(
+            Some("rw_temp"),
+            Some("events")
+        ));
+        assert!(!should_open_claim_url_by_default(None, None));
     }
 }

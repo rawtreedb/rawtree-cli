@@ -129,9 +129,6 @@ pub enum Command {
     Status,
     /// Open Rawtree UI in your browser
     Open {
-        /// Open last saved claim URL from anonymous project creation
-        #[arg(long, conflicts_with = "project")]
-        claim: bool,
         /// Project name (defaults to --project/RAWTREE_PROJECT/config default)
         #[arg(long)]
         project: Option<String>,
