@@ -15,8 +15,6 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             "default_organization": cfg.default_organization,
             "last_claim_url": cfg.last_claim_url,
             "last_claim_token": cfg.last_claim_token,
-            "last_project_temporary": cfg.last_project_temporary,
-            "last_project_expires_in_seconds": cfg.last_project_expires_in_seconds,
         }),
         json_mode,
         |_| {
@@ -36,12 +34,6 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             }
             if let Some(ref claim_token) = cfg.last_claim_token {
                 println!("Last claim token: {}", claim_token);
-            }
-            if let Some(temporary) = cfg.last_project_temporary {
-                println!("Last created project temporary: {}", temporary);
-            }
-            if let Some(expires_in_seconds) = cfg.last_project_expires_in_seconds {
-                println!("Last temporary project TTL (s): {}", expires_in_seconds);
             }
         },
     );

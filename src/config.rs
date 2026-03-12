@@ -20,10 +20,6 @@ pub struct Config {
     pub last_claim_url: Option<String>,
     #[serde(default)]
     pub last_claim_token: Option<String>,
-    #[serde(default)]
-    pub last_project_temporary: Option<bool>,
-    #[serde(default)]
-    pub last_project_expires_in_seconds: Option<u64>,
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -98,9 +94,7 @@ mod tests {
     fn new_config_with_claim_metadata_deserializes() {
         let new_cfg = r#"{
   "last_claim_url": "https://app.rawtree.dev/claim/project?token=abc",
-  "last_claim_token": "abc",
-  "last_project_temporary": true,
-  "last_project_expires_in_seconds": 86400
+  "last_claim_token": "abc"
 }"#;
         let cfg: Config = serde_json::from_str(new_cfg).expect("new config should parse");
         assert_eq!(
@@ -108,7 +102,5 @@ mod tests {
             Some("https://app.rawtree.dev/claim/project?token=abc")
         );
         assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
-        assert_eq!(cfg.last_project_temporary, Some(true));
-        assert_eq!(cfg.last_project_expires_in_seconds, Some(86400));
     }
 }

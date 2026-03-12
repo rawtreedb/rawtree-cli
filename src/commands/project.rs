@@ -55,8 +55,6 @@ fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectRes
     cfg.default_project = Some(resp.project.clone());
     cfg.last_claim_url = resp.claim_url.clone();
     cfg.last_claim_token = resp.claim_token.clone();
-    cfg.last_project_temporary = Some(resp.temporary);
-    cfg.last_project_expires_in_seconds = resp.expires_in_seconds;
 
     if resp.temporary {
         cfg.default_organization = resp.organization_name.clone();
@@ -308,8 +306,6 @@ mod tests {
             Some("https://app.rawtree.dev/claim/project?token=abc")
         );
         assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
-        assert_eq!(cfg.last_project_temporary, Some(true));
-        assert_eq!(cfg.last_project_expires_in_seconds, Some(86400));
     }
 
     #[test]
@@ -338,8 +334,6 @@ mod tests {
         assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
         assert_eq!(cfg.last_claim_url, None);
         assert_eq!(cfg.last_claim_token, None);
-        assert_eq!(cfg.last_project_temporary, Some(false));
-        assert_eq!(cfg.last_project_expires_in_seconds, None);
     }
 
     #[test]
