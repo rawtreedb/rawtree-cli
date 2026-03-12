@@ -54,7 +54,6 @@ fn jwt_token_for_project_create(token: Option<&str>) -> Option<String> {
 fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
     cfg.default_project = Some(resp.project.clone());
     cfg.last_claim_url = resp.claim_url.clone();
-    cfg.last_claim_token = resp.claim_token.clone();
 
     if resp.temporary {
         cfg.default_organization = resp.organization_name.clone();
@@ -305,7 +304,6 @@ mod tests {
             cfg.last_claim_url.as_deref(),
             Some("https://app.rawtree.dev/claim/project?token=abc")
         );
-        assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
     }
 
     #[test]
@@ -333,7 +331,6 @@ mod tests {
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
         assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
         assert_eq!(cfg.last_claim_url, None);
-        assert_eq!(cfg.last_claim_token, None);
     }
 
     #[test]

@@ -18,8 +18,6 @@ pub struct Config {
     pub default_organization: Option<String>,
     #[serde(default)]
     pub last_claim_url: Option<String>,
-    #[serde(default)]
-    pub last_claim_token: Option<String>,
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -93,14 +91,12 @@ mod tests {
     #[test]
     fn new_config_with_claim_metadata_deserializes() {
         let new_cfg = r#"{
-  "last_claim_url": "https://app.rawtree.dev/claim/project?token=abc",
-  "last_claim_token": "abc"
+  "last_claim_url": "https://app.rawtree.dev/claim/project?token=abc"
 }"#;
         let cfg: Config = serde_json::from_str(new_cfg).expect("new config should parse");
         assert_eq!(
             cfg.last_claim_url.as_deref(),
             Some("https://app.rawtree.dev/claim/project?token=abc")
         );
-        assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
     }
 }
