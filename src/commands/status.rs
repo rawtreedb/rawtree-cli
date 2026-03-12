@@ -13,7 +13,7 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             "authenticated": cfg.token.is_some(),
             "default_project": cfg.default_project,
             "default_organization": cfg.default_organization,
-            "last_claim_url": cfg.last_claim_url,
+            "last_claim_token": cfg.last_claim_token,
         }),
         json_mode,
         |_| {
@@ -28,8 +28,8 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             if let Some(ref organization) = cfg.default_organization {
                 println!("Default organization: {}", organization);
             }
-            if let Some(ref claim_url) = cfg.last_claim_url {
-                println!("Last claim URL: {}", claim_url);
+            if let Some(ref claim_token) = cfg.last_claim_token {
+                println!("Last claim token: {}", claim_token);
             }
         },
     );

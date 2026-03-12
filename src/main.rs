@@ -111,16 +111,26 @@ fn resolve_effective_org_for_project_create(
     resolve_effective_org(client, cli_org)
 }
 
-fn resolve_saved_claim_url(cfg: &config::Config) -> Result<String> {
-    cfg.last_claim_url.clone().ok_or_else(|| {
-        anyhow::anyhow!(
-            "No claim URL found. Create an anonymous project first and try `rtree open` again."
-        )
-    })
+fn resolve_saved_claim_token(cfg: &config::Config) -> Result<String> {
+    if let Some(claim_token) = cfg.last_claim_token.clone() {
+        return Ok(claim_token);
+    }
+
+    Err(anyhow::anyhow!(
+        "No claim token found. Create an anonymous project first and try `rtree open` again."
+    ))
 }
 
-fn should_open_claim_url_by_default(token: Option<&str>, cli_project: Option<&str>) -> bool {
-    cli_project.is_none() && token.map(|t| !token_looks_like_jwt(t)).unwrap_or(false)
+fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
+    format!(
+        "{}/claim/{}/dashboard",
+        base_url.trim_end_matches('/'),
+        urlencoding::encode(claim_token)
+    )
+}
+
+fn should_open_claim_dashboard_by_default(token: Option<&str>, claim_token: Option<&str>) -> bool {
+    token.map(|t| !token_looks_like_jwt(t)).unwrap_or(false) && claim_token.is_some()
 }
 
 fn should_bootstrap_anonymous_project_for_insert(
@@ -166,7 +176,9 @@ fn create_anonymous_project_for_insert(
 
     if !json_mode {
         println!("Using anonymous project '{}'.", created.project);
-        if let Some(ref claim_url) = created.claim_url {
+        if let Some(ref claim_token) = created.claim_token {
+            let claim_url =
+                build_claim_dashboard_url(&commands::open::resolve_ui_base_url(), claim_token);
             println!("Claim URL: {}", claim_url);
         }
     }
@@ -447,16 +459,21 @@ fn run(cli: Cli) -> Result<()> {
         Command::Whoami => commands::whoami::whoami(&url, json),
         Command::Status => commands::status::status(&url, json),
         Command::Open { project } => {
-            if should_open_claim_url_by_default(client.token.as_deref(), project.as_deref()) {
-                let cfg = config::load()?;
-                if let Ok(claim_url) = resolve_saved_claim_url(&cfg) {
-                    return commands::open::open_url(&claim_url, json);
+            let ui_base_url = commands::open::resolve_ui_base_url();
+            let cfg = config::load()?;
+
+            if should_open_claim_dashboard_by_default(
+                client.token.as_deref(),
+                cfg.last_claim_token.as_deref(),
+            ) {
+                if let Ok(claim_token) = resolve_saved_claim_token(&cfg) {
+                    let claim_dashboard_url = build_claim_dashboard_url(&ui_base_url, &claim_token);
+                    return commands::open::open_url(&claim_dashboard_url, json);
                 }
             }
 
             let effective_org = resolve_effective_org(&client, cli_org);
             let project = resolve_optional_project(project);
-            let ui_base_url = commands::open::resolve_ui_base_url();
             commands::open::open(
                 &ui_base_url,
                 effective_org.as_deref(),
@@ -481,10 +498,10 @@ mod tests {
     use crate::config::Config;
 
     use super::{
-        resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
-        resolve_saved_claim_url, should_bootstrap_anonymous_project_for_insert,
-        should_open_claim_url_by_default, should_resolve_org_for_project_create,
-        token_looks_like_jwt,
+        build_claim_dashboard_url, resolve_effective_org_with, resolve_org_from_sources,
+        resolve_project_from_sources, resolve_saved_claim_token,
+        should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
+        should_resolve_org_for_project_create, token_looks_like_jwt,
     };
 
     #[test]
@@ -608,34 +625,49 @@ mod tests {
     }
 
     #[test]
-    fn resolve_saved_claim_url_returns_value_when_present() {
+    fn resolve_saved_claim_token_returns_value_when_present() {
         let cfg = Config {
-            last_claim_url: Some("https://rawtree.com/claim/project?token=abc".to_string()),
+            last_claim_token: Some("abc".to_string()),
             ..Config::default()
         };
-        let claim_url = resolve_saved_claim_url(&cfg).expect("claim URL should resolve");
-        assert_eq!(claim_url, "https://rawtree.com/claim/project?token=abc");
+        let claim_token = resolve_saved_claim_token(&cfg).expect("claim token should resolve");
+        assert_eq!(claim_token, "abc");
     }
 
     #[test]
-    fn resolve_saved_claim_url_errors_when_missing() {
+    fn resolve_saved_claim_token_errors_when_missing_token() {
         let cfg = Config::default();
         let err =
-            resolve_saved_claim_url(&cfg).expect_err("missing claim URL should produce error");
+            resolve_saved_claim_token(&cfg).expect_err("missing claim token should produce error");
         assert!(
-            format!("{:#}", err).contains("No claim URL found"),
+            format!("{:#}", err).contains("No claim token found"),
             "unexpected error: {err:#}"
         );
     }
 
     #[test]
-    fn open_claim_url_by_default_requires_non_jwt_and_no_project_arg() {
-        assert!(should_open_claim_url_by_default(Some("rw_temp"), None));
-        assert!(!should_open_claim_url_by_default(Some("a.b.c"), None));
-        assert!(!should_open_claim_url_by_default(
+    fn build_claim_dashboard_url_appends_dashboard_route() {
+        let url = build_claim_dashboard_url("https://rawtree.com/", "a/b");
+        assert_eq!(url, "https://rawtree.com/claim/a%2Fb/dashboard");
+    }
+
+    #[test]
+    fn open_claim_dashboard_by_default_requires_temporary_auth_and_claim_token() {
+        assert!(should_open_claim_dashboard_by_default(
             Some("rw_temp"),
-            Some("events")
+            Some("claim_abc")
         ));
-        assert!(!should_open_claim_url_by_default(None, None));
+        assert!(!should_open_claim_dashboard_by_default(
+            Some("a.b.c"),
+            Some("claim_abc")
+        ));
+        assert!(!should_open_claim_dashboard_by_default(
+            Some("rw_temp"),
+            None
+        ));
+        assert!(!should_open_claim_dashboard_by_default(
+            None,
+            Some("claim_abc")
+        ));
     }
 }
