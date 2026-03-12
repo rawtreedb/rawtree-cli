@@ -35,20 +35,6 @@ pub struct CreatedProjectInfo {
     pub claim_url: Option<String>,
 }
 
-fn token_looks_like_jwt(token: &str) -> bool {
-    let mut parts = token.split('.');
-    parts.next().is_some()
-        && parts.next().is_some()
-        && parts.next().is_some()
-        && parts.next().is_none()
-}
-
-fn jwt_token_for_project_create(token: Option<&str>) -> Option<String> {
-    token
-        .filter(|candidate| token_looks_like_jwt(candidate))
-        .map(ToString::to_string)
-}
-
 fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
     cfg.default_project = Some(resp.project.clone());
     cfg.last_claim_url = resp.claim_url.clone();
@@ -71,10 +57,6 @@ fn create_project_response(
     organization: Option<&str>,
 ) -> Result<CreateProjectResponse> {
     let path = projects_collection_path(client, organization)?;
-    let create_client = ApiClient::new(
-        client.base_url.clone(),
-        jwt_token_for_project_create(client.token.as_deref()),
-    );
 
     let mut payload = serde_json::Map::new();
     if let Some(project_name) = name {
@@ -84,7 +66,7 @@ fn create_project_response(
         );
     }
 
-    create_client.post(&path, &Value::Object(payload))
+    client.post(&path, &Value::Object(payload))
 }
 
 fn create_and_persist(
@@ -244,24 +226,8 @@ pub fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_project_create_config, jwt_token_for_project_create, token_looks_like_jwt,
-        CreateProjectResponse,
-    };
+    use super::{apply_project_create_config, CreateProjectResponse};
     use crate::config::Config;
-
-    #[test]
-    fn token_looks_like_jwt_detects_three_part_tokens() {
-        assert!(token_looks_like_jwt("a.b.c"));
-        assert!(!token_looks_like_jwt("rw_example"));
-        assert!(!token_looks_like_jwt("a.b"));
-    }
-
-    #[test]
-    fn jwt_token_for_project_create_drops_api_key_tokens() {
-        let token = jwt_token_for_project_create(Some("rw_abc123"));
-        assert_eq!(token, None);
-    }
 
     #[test]
     fn apply_project_create_config_overwrites_auth_for_temporary_projects() {
