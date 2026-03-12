@@ -26,26 +26,45 @@ struct CreateProjectResponse {
     organization_name: Option<String>,
     #[serde(default)]
     temporary: bool,
-    claim_url: Option<String>,
+    #[serde(default)]
+    claim_token: Option<String>,
 }
 
 pub struct CreatedProjectInfo {
     pub project: String,
     pub api_key: String,
-    pub claim_url: Option<String>,
+    pub claim_token: Option<String>,
+}
+
+fn build_claim_dashboard_url(claim_token: &str) -> String {
+    let ui_base_url = crate::commands::open::resolve_ui_base_url();
+    format!(
+        "{}/claim/{}/dashboard",
+        ui_base_url.trim_end_matches('/'),
+        urlencoding::encode(claim_token)
+    )
+}
+
+fn claim_url_from_response(resp: &CreateProjectResponse) -> Option<String> {
+    resp.claim_token.as_deref().map(build_claim_dashboard_url)
+}
+
+fn is_temporary_project(resp: &CreateProjectResponse) -> bool {
+    resp.temporary || resp.claim_token.is_some()
 }
 
 fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
+    let is_temporary = is_temporary_project(resp);
     cfg.default_project = Some(resp.project.clone());
-    cfg.last_claim_url = resp.claim_url.clone();
+    cfg.last_claim_token = resp.claim_token.clone();
 
-    if resp.temporary {
+    if is_temporary {
         cfg.default_organization = resp.organization_name.clone();
     } else if let Some(ref organization_name) = resp.organization_name {
         cfg.default_organization = Some(organization_name.clone());
     }
 
-    if resp.temporary {
+    if is_temporary {
         cfg.token = Some(resp.api_key.clone());
         cfg.email = None;
     }
@@ -129,12 +148,15 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let resp = create_and_persist(client, Some(name), organization)?;
+    let claim_url = claim_url_from_response(&resp);
+    let claim_token = resp.claim_token.clone();
 
     output::print_result(
         &json!({
             "project": resp.project,
             "organization_name": resp.organization_name,
-            "claim_url": resp.claim_url,
+            "claim_token": claim_token,
+            "claim_url": claim_url,
         }),
         json_mode,
         |_| {
@@ -143,7 +165,7 @@ pub fn create(
                 "Project '{}' created in organization '{}'.",
                 resp.project, organization_name
             );
-            if let Some(ref claim_url) = resp.claim_url {
+            if let Some(ref claim_url) = claim_url {
                 println!("Use '{}' to claim your project.", claim_url);
             }
         },
@@ -156,7 +178,7 @@ pub fn create_for_insert(client: &ApiClient, name: Option<&str>) -> Result<Creat
     Ok(CreatedProjectInfo {
         project: resp.project,
         api_key: resp.api_key,
-        claim_url: resp.claim_url,
+        claim_token: resp.claim_token,
     })
 }
 
@@ -242,7 +264,7 @@ mod tests {
             api_key: "rw_temporary".to_string(),
             organization_name: Some("temp_org".to_string()),
             temporary: true,
-            claim_url: Some("https://app.rawtree.dev/claim/project?token=abc".to_string()),
+            claim_token: Some("abc".to_string()),
         };
 
         apply_project_create_config(&mut cfg, &resp);
@@ -251,10 +273,7 @@ mod tests {
         assert_eq!(cfg.email, None);
         assert_eq!(cfg.default_organization.as_deref(), Some("temp_org"));
         assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
-        assert_eq!(
-            cfg.last_claim_url.as_deref(),
-            Some("https://app.rawtree.dev/claim/project?token=abc")
-        );
+        assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
     }
 
     #[test]
@@ -270,7 +289,7 @@ mod tests {
             api_key: "rw_regular".to_string(),
             organization_name: None,
             temporary: false,
-            claim_url: None,
+            claim_token: None,
         };
 
         apply_project_create_config(&mut cfg, &resp);
@@ -279,7 +298,7 @@ mod tests {
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
         assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
-        assert_eq!(cfg.last_claim_url, None);
+        assert_eq!(cfg.last_claim_token, None);
     }
 
     #[test]
@@ -293,7 +312,7 @@ mod tests {
             api_key: "rw_temp".to_string(),
             organization_name: None,
             temporary: true,
-            claim_url: None,
+            claim_token: None,
         };
 
         apply_project_create_config(&mut cfg, &resp);
@@ -312,11 +331,36 @@ mod tests {
             api_key: "rw_regular".to_string(),
             organization_name: Some("new_team".to_string()),
             temporary: false,
-            claim_url: None,
+            claim_token: None,
         };
 
         apply_project_create_config(&mut cfg, &resp);
 
         assert_eq!(cfg.default_organization.as_deref(), Some("new_team"));
+    }
+
+    #[test]
+    fn apply_project_create_config_infers_temporary_from_claim_token() {
+        let mut cfg = Config {
+            token: Some("jwt.token.value".to_string()),
+            email: Some("user@example.com".to_string()),
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "tmp_project".to_string(),
+            api_key: "rw_temporary".to_string(),
+            organization_name: None,
+            temporary: false,
+            claim_token: Some("abc".to_string()),
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.token.as_deref(), Some("rw_temporary"));
+        assert_eq!(cfg.email, None);
+        assert_eq!(cfg.default_organization, None);
+        assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
+        assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
     }
 }
