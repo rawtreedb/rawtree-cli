@@ -37,6 +37,8 @@ pub enum Command {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Log out and remove saved local credentials
+    Logout,
     /// Manage projects
     Project {
         #[command(subcommand)]
@@ -125,6 +127,12 @@ pub enum Command {
     Whoami,
     /// Show current auth state and server URL
     Status,
+    /// Open Rawtree UI in your browser
+    Open {
+        /// Project name (defaults to --project/RAWTREE_PROJECT/config default)
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

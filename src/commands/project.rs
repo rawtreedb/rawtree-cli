@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::client::ApiClient;
 use crate::config;
@@ -23,6 +23,62 @@ struct ListProjectsResponse {
 struct CreateProjectResponse {
     project: String,
     api_key: String,
+    organization_name: Option<String>,
+    #[serde(default)]
+    temporary: bool,
+    claim_url: Option<String>,
+}
+
+pub struct CreatedProjectInfo {
+    pub project: String,
+    pub api_key: String,
+    pub claim_url: Option<String>,
+}
+
+fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
+    cfg.default_project = Some(resp.project.clone());
+    cfg.last_claim_url = resp.claim_url.clone();
+
+    if resp.temporary {
+        cfg.default_organization = resp.organization_name.clone();
+    } else if let Some(ref organization_name) = resp.organization_name {
+        cfg.default_organization = Some(organization_name.clone());
+    }
+
+    if resp.temporary {
+        cfg.token = Some(resp.api_key.clone());
+        cfg.email = None;
+    }
+}
+
+fn create_project_response(
+    client: &ApiClient,
+    name: Option<&str>,
+    organization: Option<&str>,
+) -> Result<CreateProjectResponse> {
+    let path = projects_collection_path(client, organization)?;
+
+    let mut payload = serde_json::Map::new();
+    if let Some(project_name) = name {
+        payload.insert(
+            "project".to_string(),
+            Value::String(project_name.to_string()),
+        );
+    }
+
+    client.post(&path, &Value::Object(payload))
+}
+
+fn create_and_persist(
+    client: &ApiClient,
+    name: Option<&str>,
+    organization: Option<&str>,
+) -> Result<CreateProjectResponse> {
+    let resp = create_project_response(client, name, organization)?;
+    let mut cfg = config::load()?;
+    apply_project_create_config(&mut cfg, &resp);
+    config::save(&cfg)?;
+    Ok(resp)
 }
 
 fn projects_collection_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
@@ -72,17 +128,36 @@ pub fn create(
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = projects_collection_path(client, organization)?;
-    let resp: CreateProjectResponse = client.post(&path, &json!({"project": name}))?;
+    let resp = create_and_persist(client, Some(name), organization)?;
+
     output::print_result(
-        &json!({"project": resp.project, "api_key": resp.api_key}),
+        &json!({
+            "project": resp.project,
+            "organization_name": resp.organization_name,
+            "claim_url": resp.claim_url,
+        }),
         json_mode,
         |_| {
-            println!("Project '{}' created.", resp.project);
-            println!("  api_key: {}", resp.api_key);
+            let organization_name = resp.organization_name.as_deref().unwrap_or("unknown");
+            println!(
+                "Project '{}' created in organization '{}'.",
+                resp.project, organization_name
+            );
+            if let Some(ref claim_url) = resp.claim_url {
+                println!("Use '{}' to claim your project.", claim_url);
+            }
         },
     );
     Ok(())
+}
+
+pub fn create_for_insert(client: &ApiClient, name: Option<&str>) -> Result<CreatedProjectInfo> {
+    let resp = create_and_persist(client, name, None)?;
+    Ok(CreatedProjectInfo {
+        project: resp.project,
+        api_key: resp.api_key,
+        claim_url: resp.claim_url,
+    })
 }
 
 pub fn use_project(name: &str, json_mode: bool) -> Result<()> {
@@ -147,4 +222,101 @@ pub fn delete(
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_project_create_config, CreateProjectResponse};
+    use crate::config::Config;
+
+    #[test]
+    fn apply_project_create_config_overwrites_auth_for_temporary_projects() {
+        let mut cfg = Config {
+            token: Some("jwt.token.value".to_string()),
+            email: Some("user@example.com".to_string()),
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "tmp_project".to_string(),
+            api_key: "rw_temporary".to_string(),
+            organization_name: Some("temp_org".to_string()),
+            temporary: true,
+            claim_url: Some("https://app.rawtree.dev/claim/project?token=abc".to_string()),
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.token.as_deref(), Some("rw_temporary"));
+        assert_eq!(cfg.email, None);
+        assert_eq!(cfg.default_organization.as_deref(), Some("temp_org"));
+        assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
+        assert_eq!(
+            cfg.last_claim_url.as_deref(),
+            Some("https://app.rawtree.dev/claim/project?token=abc")
+        );
+    }
+
+    #[test]
+    fn apply_project_create_config_preserves_jwt_for_standard_projects() {
+        let mut cfg = Config {
+            token: Some("jwt.token.value".to_string()),
+            email: Some("user@example.com".to_string()),
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "analytics".to_string(),
+            api_key: "rw_regular".to_string(),
+            organization_name: None,
+            temporary: false,
+            claim_url: None,
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.token.as_deref(), Some("jwt.token.value"));
+        assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
+        assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
+        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.last_claim_url, None);
+    }
+
+    #[test]
+    fn apply_project_create_config_clears_default_org_for_temporary_when_missing_org_name() {
+        let mut cfg = Config {
+            default_organization: Some("team_alpha".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "tmp_project".to_string(),
+            api_key: "rw_temp".to_string(),
+            organization_name: None,
+            temporary: true,
+            claim_url: None,
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.default_organization, None);
+    }
+
+    #[test]
+    fn apply_project_create_config_updates_default_org_when_standard_response_has_org_name() {
+        let mut cfg = Config {
+            default_organization: Some("old_team".to_string()),
+            ..Config::default()
+        };
+        let resp = CreateProjectResponse {
+            project: "analytics".to_string(),
+            api_key: "rw_regular".to_string(),
+            organization_name: Some("new_team".to_string()),
+            temporary: false,
+            claim_url: None,
+        };
+
+        apply_project_create_config(&mut cfg, &resp);
+
+        assert_eq!(cfg.default_organization.as_deref(), Some("new_team"));
+    }
 }
