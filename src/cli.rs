@@ -32,10 +32,16 @@ pub enum Command {
     /// Log in and save token
     Login {
         #[arg(long)]
-        email: String,
+        email: Option<String>,
         /// Password (prompted interactively if omitted)
-        #[arg(long)]
+        #[arg(long, requires = "email")]
         password: Option<String>,
+        /// Do not try to open the browser automatically
+        #[arg(long, default_value_t = false)]
+        no_browser: bool,
+        /// Max seconds to wait for browser login approval
+        #[arg(long, default_value_t = 300)]
+        timeout_seconds: u64,
     },
     /// Log out and remove saved local credentials
     Logout,
@@ -245,4 +251,25 @@ pub enum TableCommand {
         /// Table name
         table: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn login_without_email_is_allowed_for_browser_flow() {
+        let cli = Cli::try_parse_from(["rtree", "login"]).expect("login should parse");
+        match cli.command {
+            Command::Login { email, .. } => assert!(email.is_none()),
+            _ => panic!("expected login command"),
+        }
+    }
+
+    #[test]
+    fn login_with_password_requires_email() {
+        let result = Cli::try_parse_from(["rtree", "login", "--password", "secret123"]);
+        assert!(result.is_err(), "password without email should fail");
+    }
 }
