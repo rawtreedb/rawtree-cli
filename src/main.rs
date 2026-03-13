@@ -250,9 +250,18 @@ fn run(cli: Cli) -> Result<()> {
             let password = prompt_password_if_missing(password)?;
             commands::auth::register(&client, &email, &password, json)
         }
-        Command::Login { email, password } => {
-            let password = prompt_password_if_missing(password)?;
-            commands::auth::login(&client, &email, &password, json)
+        Command::Login {
+            email,
+            password,
+            no_browser,
+            timeout_seconds,
+        } => {
+            if let Some(email) = email {
+                let password = prompt_password_if_missing(password)?;
+                commands::auth::login(&client, &email, &password, json)
+            } else {
+                commands::auth::login_with_browser(&client, no_browser, timeout_seconds, json)
+            }
         }
         Command::Logout => commands::auth::logout(json),
         Command::Project { action } => match action {
