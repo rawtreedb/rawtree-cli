@@ -62,20 +62,20 @@ pub fn insert(
     table: &str,
     data: Option<&str>,
     file: Option<&str>,
-    source_url: Option<&str>,
+    url: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let api_path = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
 
     // Small inline data — send in one request
     if let Some(raw) = data {
         let json_data: Value = serde_json::from_str(raw).context("invalid JSON in --data")?;
-        let resp: InsertResponse = client.post(&url, &json_data)?;
+        let resp: InsertResponse = client.post(&api_path, &json_data)?;
         print_inserted(resp.inserted, json_mode);
         return Ok(());
     }
 
-    if let Some(raw_url) = source_url {
+    if let Some(raw_url) = url {
         return insert_from_url(client, project, organization, table, raw_url, json_mode);
     }
 
@@ -89,7 +89,7 @@ pub fn insert(
         let contents =
             fs::read_to_string(path).with_context(|| format!("failed to read file '{}'", path))?;
         let json_data: Value = serde_json::from_str(&contents).context("invalid JSON in file")?;
-        let resp: InsertResponse = client.post(&url, &json_data)?;
+        let resp: InsertResponse = client.post(&api_path, &json_data)?;
         print_inserted(resp.inserted, json_mode);
     }
 
@@ -106,10 +106,10 @@ fn insert_from_url(
     project: &str,
     organization: Option<&str>,
     table: &str,
-    source_url: &str,
+    url: &str,
     json_mode: bool,
 ) -> Result<()> {
-    let body = json!({ "url": source_url });
+    let body = json!({ "url": url });
     let candidate_paths = [
         org::project_scoped_path(project, &format!("/tables/{table}/url"), organization),
         org::project_scoped_path(

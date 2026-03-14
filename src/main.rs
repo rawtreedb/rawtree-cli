@@ -376,7 +376,7 @@ fn run(cli: Cli) -> Result<()> {
             table,
             data,
             file,
-            source_url,
+            url,
         } => {
             let has_jwt_auth = should_resolve_org_for_project_create(client.token.as_deref());
             let cli_project = project.clone();
@@ -425,7 +425,7 @@ fn run(cli: Cli) -> Result<()> {
                 &table,
                 data.as_deref(),
                 file.as_deref(),
-                source_url.as_deref(),
+                url.as_deref(),
                 json,
             )
         }
