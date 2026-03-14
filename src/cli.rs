@@ -3,9 +3,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "rtree", about = "CLI for the RawTree analytics platform")]
 pub struct Cli {
-    /// Server URL (overrides RAWTREE_URL env and config file)
+    /// API URL (overrides RAWTREE_URL env and config file)
     #[arg(long, global = true)]
-    pub url: Option<String>,
+    pub api_url: Option<String>,
 
     /// Output results as JSON (for scripting and agents)
     #[arg(long, global = true)]
@@ -94,6 +94,9 @@ pub enum Command {
         /// Path to a JSON or JSONL file
         #[arg(long, conflicts_with = "data")]
         file: Option<String>,
+        /// Public URL to JSON or JSONL content
+        #[arg(long, conflicts_with_all = ["data", "file"])]
+        url: Option<String>,
     },
     /// Preview rows from a table
     Sample {
@@ -271,5 +274,92 @@ mod tests {
     fn login_with_password_requires_email() {
         let result = Cli::try_parse_from(["rtree", "login", "--password", "secret123"]);
         assert!(result.is_err(), "password without email should fail");
+    }
+
+    #[test]
+    fn insert_with_url_is_allowed() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "insert",
+            "--project",
+            "analytics",
+            "--table",
+            "events",
+            "--url",
+            "https://example.com/events.jsonl",
+        ])
+        .expect("insert --url should parse");
+
+        match cli.command {
+            Command::Insert { url, .. } => {
+                assert_eq!(
+                    url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
+            }
+            _ => panic!("expected insert command"),
+        }
+    }
+
+    #[test]
+    fn insert_url_conflicts_with_data() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "insert",
+            "--project",
+            "analytics",
+            "--table",
+            "events",
+            "--url",
+            "https://example.com/events.jsonl",
+            "--data",
+            r#"{"id":1}"#,
+        ]);
+        assert!(result.is_err(), "insert --url should conflict with --data");
+    }
+
+    #[test]
+    fn api_url_and_insert_url_can_both_be_provided() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "--api-url",
+            "https://api.rawtree.dev",
+            "insert",
+            "--project",
+            "analytics",
+            "--table",
+            "events",
+            "--url",
+            "https://example.com/events.jsonl",
+        ])
+        .expect("--api-url and insert --url should parse");
+
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
+        match cli.command {
+            Command::Insert { url, .. } => {
+                assert_eq!(
+                    url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
+            }
+            _ => panic!("expected insert command"),
+        }
+    }
+
+    #[test]
+    fn api_url_can_be_passed_before_subcommand() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "--api-url",
+            "https://api.rawtree.dev",
+            "query",
+            "--project",
+            "analytics",
+            "--query",
+            "SELECT 1",
+        ])
+        .expect("--api-url should parse before subcommand");
+
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
     }
 }

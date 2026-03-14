@@ -62,19 +62,25 @@ pub fn insert(
     table: &str,
     data: Option<&str>,
     file: Option<&str>,
+    url: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let api_path = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
 
     // Small inline data — send in one request
     if let Some(raw) = data {
         let json_data: Value = serde_json::from_str(raw).context("invalid JSON in --data")?;
-        let resp: InsertResponse = client.post(&url, &json_data)?;
+        let resp: InsertResponse = client.post(&api_path, &json_data)?;
         print_inserted(resp.inserted, json_mode);
         return Ok(());
     }
 
-    let path = file.ok_or_else(|| anyhow::anyhow!("provide either --data or --file"))?;
+    if let Some(raw_url) = url {
+        return insert_from_url(client, project, organization, table, raw_url, json_mode);
+    }
+
+    let path =
+        file.ok_or_else(|| anyhow::anyhow!("provide exactly one of --data, --file, or --url"))?;
 
     if is_jsonl(path) {
         insert_jsonl_streaming(client, project, organization, table, path, json_mode)?;
@@ -83,11 +89,39 @@ pub fn insert(
         let contents =
             fs::read_to_string(path).with_context(|| format!("failed to read file '{}'", path))?;
         let json_data: Value = serde_json::from_str(&contents).context("invalid JSON in file")?;
-        let resp: InsertResponse = client.post(&url, &json_data)?;
+        let resp: InsertResponse = client.post(&api_path, &json_data)?;
         print_inserted(resp.inserted, json_mode);
     }
 
     Ok(())
+}
+
+fn insert_from_url(
+    client: &ApiClient,
+    project: &str,
+    organization: Option<&str>,
+    table: &str,
+    url: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let path = build_url_ingest_path(project, organization, table, url);
+    let resp: InsertResponse = client.post_empty(&path)?;
+    print_inserted(resp.inserted, json_mode);
+    Ok(())
+}
+
+fn build_url_ingest_path(
+    project: &str,
+    organization: Option<&str>,
+    table: &str,
+    url: &str,
+) -> String {
+    let encoded_url = urlencoding::encode(url);
+    org::project_scoped_path(
+        project,
+        &format!("/tables/{table}?url={encoded_url}"),
+        organization,
+    )
 }
 
 /// Stream JSONL: reader thread reads raw lines into batches, sender threads
@@ -234,4 +268,20 @@ fn insert_jsonl_streaming(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_url_ingest_path;
+
+    #[test]
+    fn url_ingest_path_uses_query_param_route() {
+        let path =
+            build_url_ingest_path("events_2", None, "events", "https://example.com/a b.ndjson");
+
+        assert_eq!(
+            path,
+            "/v1/events_2/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson"
+        );
+    }
 }
