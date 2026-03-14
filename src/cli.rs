@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "rtree", about = "CLI for the RawTree analytics platform")]
 pub struct Cli {
-    /// Server URL (overrides RAWTREE_URL env and config file). Pass before subcommand.
-    #[arg(long)]
+    /// Server URL (overrides RAWTREE_URL env and config file)
+    #[arg(long, global = true)]
     pub url: Option<String>,
 
     /// Output results as JSON (for scripting and agents)
@@ -338,5 +338,22 @@ mod tests {
             }
             _ => panic!("expected insert command"),
         }
+    }
+
+    #[test]
+    fn global_url_can_be_passed_after_non_insert_subcommand() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "query",
+            "--project",
+            "analytics",
+            "--query",
+            "SELECT 1",
+            "--url",
+            "https://api.rawtree.dev",
+        ])
+        .expect("global --url should parse after non-insert subcommands");
+
+        assert_eq!(cli.url.as_deref(), Some("https://api.rawtree.dev"));
     }
 }

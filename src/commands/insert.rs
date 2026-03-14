@@ -117,7 +117,6 @@ fn insert_from_url(
             &format!("/tables/{table}/insert-url"),
             organization,
         ),
-        org::project_scoped_path(project, &format!("/tables/{table}"), organization),
     ];
 
     let mut last_err = None;
@@ -134,7 +133,11 @@ fn insert_from_url(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("insert-by-url endpoint is unavailable")))
+    Err(last_err.unwrap_or_else(|| {
+        anyhow::anyhow!(
+            "insert --url is not supported by this server version (missing URL ingest endpoint)"
+        )
+    }))
 }
 
 /// Stream JSONL: reader thread reads raw lines into batches, sender threads
