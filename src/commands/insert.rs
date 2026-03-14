@@ -62,6 +62,7 @@ pub fn insert(
     table: &str,
     data: Option<&str>,
     file: Option<&str>,
+    source_url: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
     let url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
@@ -74,7 +75,12 @@ pub fn insert(
         return Ok(());
     }
 
-    let path = file.ok_or_else(|| anyhow::anyhow!("provide either --data or --file"))?;
+    if let Some(raw_url) = source_url {
+        return insert_from_url(client, project, organization, table, raw_url, json_mode);
+    }
+
+    let path =
+        file.ok_or_else(|| anyhow::anyhow!("provide exactly one of --data, --file, or --url"))?;
 
     if is_jsonl(path) {
         insert_jsonl_streaming(client, project, organization, table, path, json_mode)?;
@@ -88,6 +94,47 @@ pub fn insert(
     }
 
     Ok(())
+}
+
+fn is_missing_route_error(err: &anyhow::Error) -> bool {
+    let msg = format!("{:#}", err);
+    msg.contains("Server error (404)") || msg.contains("Server error (405)")
+}
+
+fn insert_from_url(
+    client: &ApiClient,
+    project: &str,
+    organization: Option<&str>,
+    table: &str,
+    source_url: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let body = json!({ "url": source_url });
+    let candidate_paths = [
+        org::project_scoped_path(project, &format!("/tables/{table}/url"), organization),
+        org::project_scoped_path(
+            project,
+            &format!("/tables/{table}/insert-url"),
+            organization,
+        ),
+        org::project_scoped_path(project, &format!("/tables/{table}"), organization),
+    ];
+
+    let mut last_err = None;
+    for path in candidate_paths {
+        match client.post::<InsertResponse>(&path, &body) {
+            Ok(resp) => {
+                print_inserted(resp.inserted, json_mode);
+                return Ok(());
+            }
+            Err(err) if is_missing_route_error(&err) => {
+                last_err = Some(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("insert-by-url endpoint is unavailable")))
 }
 
 /// Stream JSONL: reader thread reads raw lines into batches, sender threads
