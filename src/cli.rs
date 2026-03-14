@@ -95,8 +95,8 @@ pub enum Command {
         #[arg(long, conflicts_with = "data")]
         file: Option<String>,
         /// Public URL to JSON or JSONL content
-        #[arg(long, conflicts_with_all = ["data", "file"])]
-        url: Option<String>,
+        #[arg(long = "source-url", visible_alias = "url", conflicts_with_all = ["data", "file"])]
+        source_url: Option<String>,
     },
     /// Preview rows from a table
     Sample {
@@ -291,8 +291,36 @@ mod tests {
         .expect("insert --url should parse");
 
         match cli.command {
-            Command::Insert { url, .. } => {
-                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
+            Command::Insert { source_url, .. } => {
+                assert_eq!(
+                    source_url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
+            }
+            _ => panic!("expected insert command"),
+        }
+    }
+
+    #[test]
+    fn insert_with_source_url_is_allowed() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "insert",
+            "--project",
+            "analytics",
+            "--table",
+            "events",
+            "--source-url",
+            "https://example.com/events.jsonl",
+        ])
+        .expect("insert --source-url should parse");
+
+        match cli.command {
+            Command::Insert { source_url, .. } => {
+                assert_eq!(
+                    source_url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
             }
             _ => panic!("expected insert command"),
         }
@@ -333,8 +361,11 @@ mod tests {
 
         assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
         match cli.command {
-            Command::Insert { url, .. } => {
-                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
+            Command::Insert { source_url, .. } => {
+                assert_eq!(
+                    source_url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
             }
             _ => panic!("expected insert command"),
         }
