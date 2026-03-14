@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(name = "rtree", about = "CLI for the RawTree analytics platform")]
 pub struct Cli {
     /// API URL (overrides RAWTREE_URL env and config file)
-    #[arg(long = "api-url", global = true)]
+    #[arg(long, global = true)]
     pub api_url: Option<String>,
 
     /// Output results as JSON (for scripting and agents)
