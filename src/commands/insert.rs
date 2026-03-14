@@ -119,25 +119,20 @@ fn insert_from_url(
         ),
     ];
 
-    let mut last_err = None;
     for path in candidate_paths {
         match client.post::<InsertResponse>(&path, &body) {
             Ok(resp) => {
                 print_inserted(resp.inserted, json_mode);
                 return Ok(());
             }
-            Err(err) if is_missing_route_error(&err) => {
-                last_err = Some(err);
-            }
+            Err(err) if is_missing_route_error(&err) => continue,
             Err(err) => return Err(err),
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        anyhow::anyhow!(
-            "insert --url is not supported by this server version (missing URL ingest endpoint)"
-        )
-    }))
+    Err(anyhow::anyhow!(
+        "insert --url is not supported by this server version (missing URL ingest endpoint)"
+    ))
 }
 
 /// Stream JSONL: reader thread reads raw lines into batches, sender threads
