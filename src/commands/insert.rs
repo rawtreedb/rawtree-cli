@@ -96,16 +96,6 @@ pub fn insert(
     Ok(())
 }
 
-fn is_missing_route_status(err: &anyhow::Error) -> bool {
-    let msg = format!("{:#}", err);
-    msg.contains("Server error (404)") || msg.contains("Server error (405)")
-}
-
-fn is_likely_missing_endpoint_error(err: &anyhow::Error) -> bool {
-    let msg = format!("{:#}", err).to_ascii_lowercase();
-    msg.contains("server error (405)") || msg.contains("cannot post")
-}
-
 fn insert_from_url(
     client: &ApiClient,
     project: &str,
@@ -115,48 +105,24 @@ fn insert_from_url(
     json_mode: bool,
 ) -> Result<()> {
     let body = json!({ "url": url });
-    let candidate_paths = [
-        org::project_scoped_path(project, &format!("/tables/{table}/url"), organization),
-        org::project_scoped_path(
-            project,
-            &format!("/tables/{table}/insert-url"),
-            organization,
-        ),
-    ];
+    let path = build_url_ingest_path(project, organization, table, url);
+    let resp: InsertResponse = client.post(&path, &body)?;
+    print_inserted(resp.inserted, json_mode);
+    Ok(())
+}
 
-    let mut saw_missing_status = false;
-    let mut first_non_endpoint_404 = None;
-
-    for path in candidate_paths {
-        match client.post::<InsertResponse>(&path, &body) {
-            Ok(resp) => {
-                print_inserted(resp.inserted, json_mode);
-                return Ok(());
-            }
-            Err(err) if is_missing_route_status(&err) => {
-                saw_missing_status = true;
-                if !is_likely_missing_endpoint_error(&err) && first_non_endpoint_404.is_none() {
-                    first_non_endpoint_404 = Some(err);
-                }
-                continue;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    if let Some(err) = first_non_endpoint_404 {
-        return Err(err);
-    }
-
-    if saw_missing_status {
-        return Err(anyhow::anyhow!(
-            "insert --url is not supported by this server version (missing URL ingest endpoint)"
-        ));
-    }
-
-    Err(anyhow::anyhow!(
-        "insert --url failed due to an unknown server error"
-    ))
+fn build_url_ingest_path(
+    project: &str,
+    organization: Option<&str>,
+    table: &str,
+    url: &str,
+) -> String {
+    let encoded_url = urlencoding::encode(url);
+    org::project_scoped_path(
+        project,
+        &format!("/tables/{table}?url={encoded_url}"),
+        organization,
+    )
 }
 
 /// Stream JSONL: reader thread reads raw lines into batches, sender threads
@@ -307,26 +273,16 @@ fn insert_jsonl_streaming(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_likely_missing_endpoint_error, is_missing_route_status};
+    use super::build_url_ingest_path;
 
     #[test]
-    fn missing_route_status_detects_404_and_405() {
-        let err_404 = anyhow::anyhow!("Server error (404): Not Found");
-        let err_405 = anyhow::anyhow!("Server error (405): Method Not Allowed");
-        let err_400 = anyhow::anyhow!("Server error (400): Bad Request");
+    fn url_ingest_path_uses_query_param_route() {
+        let path =
+            build_url_ingest_path("events_2", None, "events", "https://example.com/a b.ndjson");
 
-        assert!(is_missing_route_status(&err_404));
-        assert!(is_missing_route_status(&err_405));
-        assert!(!is_missing_route_status(&err_400));
-    }
-
-    #[test]
-    fn likely_missing_endpoint_distinguishes_table_not_found() {
-        let endpoint_missing =
-            anyhow::anyhow!("Server error (404): Cannot POST /v1/p/tables/x/url");
-        let table_missing = anyhow::anyhow!("Server error (404): table 'x' not found");
-
-        assert!(is_likely_missing_endpoint_error(&endpoint_missing));
-        assert!(!is_likely_missing_endpoint_error(&table_missing));
+        assert_eq!(
+            path,
+            "/v1/events_2/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson"
+        );
     }
 }
