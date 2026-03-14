@@ -5,6 +5,7 @@ mod config;
 mod org;
 mod output;
 
+use std::ffi::OsString;
 use std::io::{self, IsTerminal, Read};
 
 use anyhow::Result;
@@ -212,12 +213,39 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_insert_url_flags(std::env::args_os().collect()));
     let json_mode = cli.json;
     if let Err(e) = run(cli) {
         let code = output::print_error(&e, json_mode);
         std::process::exit(code);
     }
+}
+
+fn normalize_insert_url_flags(args: Vec<OsString>) -> Vec<OsString> {
+    let mut normalized = Vec::with_capacity(args.len());
+    let mut in_insert_subcommand = false;
+
+    for (idx, arg) in args.into_iter().enumerate() {
+        if idx == 0 {
+            normalized.push(arg);
+            continue;
+        }
+
+        if !in_insert_subcommand && arg == "insert" {
+            in_insert_subcommand = true;
+            normalized.push(arg);
+            continue;
+        }
+
+        if in_insert_subcommand && arg == "--url" {
+            normalized.push("--source-url".into());
+            continue;
+        }
+
+        normalized.push(arg);
+    }
+
+    normalized
 }
 
 fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
@@ -376,7 +404,7 @@ fn run(cli: Cli) -> Result<()> {
             table,
             data,
             file,
-            url,
+            source_url,
         } => {
             let has_jwt_auth = should_resolve_org_for_project_create(client.token.as_deref());
             let cli_project = project.clone();
@@ -425,7 +453,7 @@ fn run(cli: Cli) -> Result<()> {
                 &table,
                 data.as_deref(),
                 file.as_deref(),
-                url.as_deref(),
+                source_url.as_deref(),
                 json,
             )
         }
@@ -506,11 +534,14 @@ fn run(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
+    use crate::cli::{Cli, Command};
     use crate::config::Config;
 
     use super::{
-        build_claim_dashboard_url, resolve_effective_org_with, resolve_org_from_sources,
-        resolve_project_from_sources, resolve_saved_claim_token,
+        build_claim_dashboard_url, normalize_insert_url_flags, resolve_effective_org_with,
+        resolve_org_from_sources, resolve_project_from_sources, resolve_saved_claim_token,
         should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
         should_resolve_org_for_project_create, token_looks_like_jwt,
     };
@@ -680,5 +711,60 @@ mod tests {
             None,
             Some("claim_abc")
         ));
+    }
+
+    #[test]
+    fn normalize_insert_url_keeps_root_url_and_rewrites_insert_url() {
+        let args = normalize_insert_url_flags(
+            [
+                "rtree",
+                "--url",
+                "https://api.rawtree.dev",
+                "insert",
+                "--project",
+                "analytics",
+                "--table",
+                "events",
+                "--url",
+                "https://example.com/events.jsonl",
+            ]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect(),
+        );
+
+        let cli = Cli::try_parse_from(args).expect("normalized insert args should parse");
+        assert_eq!(cli.url.as_deref(), Some("https://api.rawtree.dev"));
+        match cli.command {
+            Command::Insert { source_url, .. } => {
+                assert_eq!(
+                    source_url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
+            }
+            _ => panic!("expected insert command"),
+        }
+    }
+
+    #[test]
+    fn normalize_insert_url_does_not_rewrite_non_insert_subcommands() {
+        let args = normalize_insert_url_flags(
+            [
+                "rtree",
+                "query",
+                "--project",
+                "analytics",
+                "--query",
+                "SELECT 1",
+                "--url",
+                "https://api.rawtree.dev",
+            ]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect(),
+        );
+
+        let cli = Cli::try_parse_from(args).expect("query args should parse");
+        assert_eq!(cli.url.as_deref(), Some("https://api.rawtree.dev"));
     }
 }

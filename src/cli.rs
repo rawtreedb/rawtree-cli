@@ -89,14 +89,14 @@ pub enum Command {
         #[arg(long)]
         table: String,
         /// Inline JSON data
-        #[arg(long, conflicts_with_all = ["file", "url"])]
+        #[arg(long, conflicts_with_all = ["file", "source_url"])]
         data: Option<String>,
         /// Path to a JSON or JSONL file
-        #[arg(long, conflicts_with_all = ["data", "url"])]
+        #[arg(long, conflicts_with_all = ["data", "source_url"])]
         file: Option<String>,
         /// Public URL to JSON or JSONL content
-        #[arg(long, conflicts_with_all = ["data", "file"])]
-        url: Option<String>,
+        #[arg(long = "source-url", conflicts_with_all = ["data", "file"])]
+        source_url: Option<String>,
     },
     /// Preview rows from a table
     Sample {
@@ -285,14 +285,17 @@ mod tests {
             "analytics",
             "--table",
             "events",
-            "--url",
+            "--source-url",
             "https://example.com/events.jsonl",
         ])
         .expect("insert --url should parse");
 
         match cli.command {
-            Command::Insert { url, .. } => {
-                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
+            Command::Insert { source_url, .. } => {
+                assert_eq!(
+                    source_url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
             }
             _ => panic!("expected insert command"),
         }
@@ -307,7 +310,7 @@ mod tests {
             "analytics",
             "--table",
             "events",
-            "--url",
+            "--source-url",
             "https://example.com/events.jsonl",
             "--data",
             r#"{"id":1}"#,
@@ -316,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn root_url_and_insert_url_can_both_be_provided() {
+    fn root_url_and_insert_source_url_can_both_be_provided() {
         let cli = Cli::try_parse_from([
             "rtree",
             "--url",
@@ -326,15 +329,18 @@ mod tests {
             "analytics",
             "--table",
             "events",
-            "--url",
+            "--source-url",
             "https://example.com/events.jsonl",
         ])
         .expect("root --url and insert --url should parse");
 
         assert_eq!(cli.url.as_deref(), Some("https://api.rawtree.dev"));
         match cli.command {
-            Command::Insert { url, .. } => {
-                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
+            Command::Insert { source_url, .. } => {
+                assert_eq!(
+                    source_url.as_deref(),
+                    Some("https://example.com/events.jsonl")
+                )
             }
             _ => panic!("expected insert command"),
         }
