@@ -3,9 +3,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "rtree", about = "CLI for the RawTree analytics platform")]
 pub struct Cli {
-    /// Server URL (overrides RAWTREE_URL env and config file)
-    #[arg(long, global = true)]
-    pub url: Option<String>,
+    /// API URL (overrides RAWTREE_URL env and config file)
+    #[arg(long = "api-url")]
+    pub api_url: Option<String>,
 
     /// Output results as JSON (for scripting and agents)
     #[arg(long, global = true)]
@@ -89,14 +89,14 @@ pub enum Command {
         #[arg(long)]
         table: String,
         /// Inline JSON data
-        #[arg(long, conflicts_with_all = ["file", "source_url"])]
+        #[arg(long, conflicts_with = "file")]
         data: Option<String>,
         /// Path to a JSON or JSONL file
-        #[arg(long, conflicts_with_all = ["data", "source_url"])]
+        #[arg(long, conflicts_with = "data")]
         file: Option<String>,
         /// Public URL to JSON or JSONL content
-        #[arg(long = "source-url", conflicts_with_all = ["data", "file"])]
-        source_url: Option<String>,
+        #[arg(long, conflicts_with_all = ["data", "file"])]
+        url: Option<String>,
     },
     /// Preview rows from a table
     Sample {
@@ -285,17 +285,14 @@ mod tests {
             "analytics",
             "--table",
             "events",
-            "--source-url",
+            "--url",
             "https://example.com/events.jsonl",
         ])
         .expect("insert --url should parse");
 
         match cli.command {
-            Command::Insert { source_url, .. } => {
-                assert_eq!(
-                    source_url.as_deref(),
-                    Some("https://example.com/events.jsonl")
-                )
+            Command::Insert { url, .. } => {
+                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
             }
             _ => panic!("expected insert command"),
         }
@@ -310,7 +307,7 @@ mod tests {
             "analytics",
             "--table",
             "events",
-            "--source-url",
+            "--url",
             "https://example.com/events.jsonl",
             "--data",
             r#"{"id":1}"#,
@@ -319,47 +316,44 @@ mod tests {
     }
 
     #[test]
-    fn root_url_and_insert_source_url_can_both_be_provided() {
+    fn api_url_and_insert_url_can_both_be_provided() {
         let cli = Cli::try_parse_from([
             "rtree",
-            "--url",
+            "--api-url",
             "https://api.rawtree.dev",
             "insert",
             "--project",
             "analytics",
             "--table",
             "events",
-            "--source-url",
+            "--url",
             "https://example.com/events.jsonl",
         ])
-        .expect("root --url and insert --url should parse");
+        .expect("--api-url and insert --url should parse");
 
-        assert_eq!(cli.url.as_deref(), Some("https://api.rawtree.dev"));
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
         match cli.command {
-            Command::Insert { source_url, .. } => {
-                assert_eq!(
-                    source_url.as_deref(),
-                    Some("https://example.com/events.jsonl")
-                )
+            Command::Insert { url, .. } => {
+                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
             }
             _ => panic!("expected insert command"),
         }
     }
 
     #[test]
-    fn global_url_can_be_passed_after_non_insert_subcommand() {
+    fn api_url_can_be_passed_before_subcommand() {
         let cli = Cli::try_parse_from([
             "rtree",
+            "--api-url",
+            "https://api.rawtree.dev",
             "query",
             "--project",
             "analytics",
             "--query",
             "SELECT 1",
-            "--url",
-            "https://api.rawtree.dev",
         ])
-        .expect("global --url should parse after non-insert subcommands");
+        .expect("--api-url should parse before subcommand");
 
-        assert_eq!(cli.url.as_deref(), Some("https://api.rawtree.dev"));
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
     }
 }
