@@ -31,6 +31,16 @@ impl ApiClient {
         handle_response(resp)
     }
 
+    pub fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = self.client.post(&url);
+        if let Some(ref token) = self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().context("failed to connect to server")?;
+        handle_response(resp)
+    }
+
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let mut req = self.client.patch(&url).json(body);

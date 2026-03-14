@@ -104,9 +104,8 @@ fn insert_from_url(
     url: &str,
     json_mode: bool,
 ) -> Result<()> {
-    let body = json!({ "url": url });
     let path = build_url_ingest_path(project, organization, table, url);
-    let resp: InsertResponse = client.post(&path, &body)?;
+    let resp: InsertResponse = client.post_empty(&path)?;
     print_inserted(resp.inserted, json_mode);
     Ok(())
 }
