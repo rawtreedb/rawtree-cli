@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -27,6 +28,16 @@ fn num_senders() -> usize {
 #[derive(Deserialize)]
 struct InsertResponse {
     inserted: usize,
+    query_id: Option<String>,
+    status: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct InsertStatusResponse {
+    query_id: String,
+    status: String,
+    total_rows: Option<usize>,
+    error: Option<String>,
 }
 
 fn is_jsonl(path: &str) -> bool {
@@ -104,13 +115,63 @@ fn insert_from_url(
     url: &str,
     json_mode: bool,
 ) -> Result<()> {
-    let path = build_url_ingest_path(project, organization, table, url);
+    let path = build_url_insert_path(project, organization, table, url);
     let resp: InsertResponse = client.post_empty(&path)?;
-    print_inserted(resp.inserted, json_mode);
-    Ok(())
+
+    // Backward-compatibility path for older servers that still return synchronous counts.
+    let query_id = match resp.query_id {
+        Some(id) => id,
+        None => {
+            print_inserted(resp.inserted, json_mode);
+            return Ok(());
+        }
+    };
+
+    if resp.status.as_deref() != Some("accepted") {
+        bail!(
+            "URL insert was not accepted by server (status={:?})",
+            resp.status
+        );
+    }
+
+    let status_path =
+        org::project_scoped_path(project, &format!("/inserts/{query_id}"), organization);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let status: InsertStatusResponse = client.get(&status_path)?;
+        match status.status.as_str() {
+            "finished" => {
+                let inserted = status.total_rows.unwrap_or(0);
+                print_inserted(inserted, json_mode);
+                return Ok(());
+            }
+            "failed" => {
+                let details = status.error.unwrap_or_else(|| "Insert failed.".to_string());
+                bail!(
+                    "URL insert failed (query_id={}): {}",
+                    status.query_id,
+                    details
+                );
+            }
+            "accepted" | "running" | "unknown" => {
+                if Instant::now() >= deadline {
+                    bail!(
+                        "Timed out waiting for URL insert to finish (query_id={})",
+                        status.query_id
+                    );
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+            other => bail!(
+                "Unexpected insert status '{}' for query_id={}",
+                other,
+                status.query_id
+            ),
+        }
+    }
 }
 
-fn build_url_ingest_path(
+fn build_url_insert_path(
     project: &str,
     organization: Option<&str>,
     table: &str,
@@ -122,6 +183,34 @@ fn build_url_ingest_path(
         &format!("/tables/{table}?url={encoded_url}"),
         organization,
     )
+}
+
+#[cfg(test)]
+fn build_insert_status_path(project: &str, organization: Option<&str>, query_id: &str) -> String {
+    org::project_scoped_path(project, &format!("/inserts/{query_id}"), organization)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_insert_status_path, build_url_insert_path};
+
+    #[test]
+    fn url_insert_path_uses_query_param_route() {
+        let path =
+            build_url_insert_path("events_2", None, "events", "https://example.com/a b.ndjson");
+
+        assert_eq!(
+            path,
+            "/v1/events_2/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson"
+        );
+    }
+
+    #[test]
+    fn insert_status_path_uses_insert_status_route() {
+        let path = build_insert_status_path("events_2", Some("org_1"), "abc-123");
+
+        assert_eq!(path, "/v1/org_1/events_2/inserts/abc-123");
+    }
 }
 
 /// Stream JSONL: reader thread reads raw lines into batches, sender threads
@@ -268,20 +357,4 @@ fn insert_jsonl_streaming(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::build_url_ingest_path;
-
-    #[test]
-    fn url_ingest_path_uses_query_param_route() {
-        let path =
-            build_url_ingest_path("events_2", None, "events", "https://example.com/a b.ndjson");
-
-        assert_eq!(
-            path,
-            "/v1/events_2/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson"
-        );
-    }
 }
