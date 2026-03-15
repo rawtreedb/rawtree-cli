@@ -28,8 +28,8 @@ fn num_senders() -> usize {
 #[derive(Deserialize)]
 struct InsertResponse {
     inserted: usize,
-    query_id: Option<String>,
-    status: Option<String>,
+    query_id: String,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -127,21 +127,10 @@ fn insert_from_url(
 ) -> Result<()> {
     let path = build_url_insert_path(project, organization, table, url);
     let resp: InsertResponse = client.post_empty(&path)?;
+    let query_id = resp.query_id;
 
-    // Backward-compatibility path for older servers that still return synchronous counts.
-    let query_id = match resp.query_id {
-        Some(id) => id,
-        None => {
-            print_inserted(resp.inserted, json_mode);
-            return Ok(());
-        }
-    };
-
-    if resp.status.as_deref() != Some("started") {
-        bail!(
-            "URL insert was not started by server (status={:?})",
-            resp.status
-        );
+    if resp.status != "started" {
+        bail!("URL insert was not started by server (status={})", resp.status);
     }
 
     let status_path =
@@ -182,7 +171,7 @@ fn insert_from_url(
                     details
                 );
             }
-            "started" | "accepted" | "running" | "unknown" => {
+            "started" | "running" | "unknown" => {
                 if Instant::now() >= deadline {
                     bail!(
                         "Timed out waiting for URL insert to finish (query_id={})",
