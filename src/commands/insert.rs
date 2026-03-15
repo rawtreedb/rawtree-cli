@@ -137,9 +137,9 @@ fn insert_from_url(
         }
     };
 
-    if resp.status.as_deref() != Some("accepted") {
+    if resp.status.as_deref() != Some("started") {
         bail!(
-            "URL insert was not accepted by server (status={:?})",
+            "URL insert was not started by server (status={:?})",
             resp.status
         );
     }
@@ -182,7 +182,7 @@ fn insert_from_url(
                     details
                 );
             }
-            "accepted" | "running" | "unknown" => {
+            "started" | "accepted" | "running" | "unknown" => {
                 if Instant::now() >= deadline {
                     bail!(
                         "Timed out waiting for URL insert to finish (query_id={})",
