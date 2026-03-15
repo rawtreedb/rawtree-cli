@@ -1,16 +1,16 @@
 use std::fs;
 use std::io::{BufRead, BufReader, IsTerminal};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::client::ApiClient;
 use crate::org;
@@ -33,7 +33,7 @@ struct InsertResponse {
 }
 
 #[derive(Deserialize)]
-struct InsertStatusResponse {
+struct ProcessStatusResponse {
     query_id: String,
     status: String,
     total_rows: Option<usize>,
@@ -64,6 +64,16 @@ fn print_inserted(count: usize, json_mode: bool) {
     output::print_result(&json!({"inserted": count}), json_mode, |_| {
         println!("Inserted {} row(s).", count)
     });
+}
+
+fn print_process_not_running(query_id: &str, json_mode: bool) {
+    output::print_result(
+        &json!({"query_id": query_id, "status": "not_running"}),
+        json_mode,
+        |_| {
+            println!("Process is no longer running (query_id={query_id}).");
+        },
+    );
 }
 
 pub fn insert(
@@ -135,10 +145,29 @@ fn insert_from_url(
     }
 
     let status_path =
-        org::project_scoped_path(project, &format!("/inserts/{query_id}"), organization);
+        org::project_scoped_path(project, &format!("/processes/{query_id}"), organization);
     let deadline = Instant::now() + Duration::from_secs(120);
+    let mut not_found_streak = 0u32;
     loop {
-        let status: InsertStatusResponse = client.get(&status_path)?;
+        let status = match client.get_optional::<ProcessStatusResponse>(&status_path)? {
+            Some(status) => status,
+            None => {
+                not_found_streak += 1;
+                if not_found_streak >= 3 {
+                    print_process_not_running(&query_id, json_mode);
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    bail!(
+                        "Timed out waiting for URL insert process to appear/complete (query_id={})",
+                        query_id
+                    );
+                }
+                thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        };
+        not_found_streak = 0;
         match status.status.as_str() {
             "finished" => {
                 let inserted = status.total_rows.unwrap_or(0);
@@ -186,13 +215,13 @@ fn build_url_insert_path(
 }
 
 #[cfg(test)]
-fn build_insert_status_path(project: &str, organization: Option<&str>, query_id: &str) -> String {
-    org::project_scoped_path(project, &format!("/inserts/{query_id}"), organization)
+fn build_process_status_path(project: &str, organization: Option<&str>, query_id: &str) -> String {
+    org::project_scoped_path(project, &format!("/processes/{query_id}"), organization)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_insert_status_path, build_url_insert_path};
+    use super::{build_process_status_path, build_url_insert_path};
 
     #[test]
     fn url_insert_path_uses_query_param_route() {
@@ -206,10 +235,10 @@ mod tests {
     }
 
     #[test]
-    fn insert_status_path_uses_insert_status_route() {
-        let path = build_insert_status_path("events_2", Some("org_1"), "abc-123");
+    fn process_status_path_uses_process_status_route() {
+        let path = build_process_status_path("events_2", Some("org_1"), "abc-123");
 
-        assert_eq!(path, "/v1/org_1/events_2/inserts/abc-123");
+        assert_eq!(path, "/v1/org_1/events_2/processes/abc-123");
     }
 }
 

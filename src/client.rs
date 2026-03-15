@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -69,6 +69,26 @@ impl ApiClient {
         }
         let resp = req.send().context("failed to connect to server")?;
         handle_response(resp)
+    }
+
+    /// GET that returns None when the endpoint responds with 404.
+    pub fn get_optional<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = self.client.get(&url);
+        if let Some(ref token) = self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().context("failed to connect to server")?;
+        let status = resp.status();
+        let text = resp.text().context("failed to read response body")?;
+        if status.as_u16() == 404 {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(format_server_error(&text, status.as_u16()));
+        }
+        let parsed = serde_json::from_str(&text).context("failed to parse server response")?;
+        Ok(Some(parsed))
     }
 
     /// POST with a pre-serialized JSON string body, gzip-compressed.
