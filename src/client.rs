@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::Write;
@@ -31,14 +31,23 @@ impl ApiClient {
         handle_response(resp)
     }
 
-    pub fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+    /// POST without a body and return a streaming response.
+    pub fn post_empty_stream(&self, path: &str) -> Result<Response> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.post(&url);
+        let mut req = self
+            .client
+            .post(&url)
+            .header("accept", "application/x-ndjson");
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
         let resp = req.send().context("failed to connect to server")?;
-        handle_response(resp)
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().context("failed to read response body")?;
+            return Err(format_server_error(&text, status.as_u16()));
+        }
+        Ok(resp)
     }
 
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
