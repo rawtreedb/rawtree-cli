@@ -292,10 +292,7 @@ mod tests {
 
         match cli.command {
             Command::Insert { url, .. } => {
-                assert_eq!(
-                    url.as_deref(),
-                    Some("https://example.com/events.jsonl")
-                )
+                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
             }
             _ => panic!("expected insert command"),
         }
@@ -337,10 +334,7 @@ mod tests {
         assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
         match cli.command {
             Command::Insert { url, .. } => {
-                assert_eq!(
-                    url.as_deref(),
-                    Some("https://example.com/events.jsonl")
-                )
+                assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
             }
             _ => panic!("expected insert command"),
         }
