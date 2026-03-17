@@ -481,14 +481,16 @@ fn consume_url_insert_stream_reader<R: BufRead>(
                     query_id = event.query_id.clone();
                 }
                 if let Some(rows) = event.effective_rows() {
+                    let progress_bytes = event.effective_bytes().or(last_progress_bytes);
+                    let progress_elapsed_ms = event_elapsed_ms.or(last_progress_elapsed_ms);
                     last_progress_rows = Some(rows);
-                    last_progress_bytes = event.effective_bytes();
-                    last_progress_elapsed_ms = event_elapsed_ms;
+                    last_progress_bytes = progress_bytes;
+                    last_progress_elapsed_ms = progress_elapsed_ms;
                     if show_progress {
                         let progress_line = format_url_insert_progress_line_with_bytes(
                             rows,
-                            event.effective_bytes(),
-                            event_elapsed_ms,
+                            progress_bytes,
+                            progress_elapsed_ms,
                         );
                         url_insert_pb.set_message(progress_line);
                     }
@@ -871,5 +873,19 @@ X-ClickHouse-Progress: {"read_rows":"1000000","read_bytes":"8000000","total_rows
         assert_eq!(summary.inserted, 98_798);
         assert_eq!(summary.processed_bytes, Some(834_982_334));
         assert_eq!(summary.elapsed_ms, Some(3520));
+    }
+
+    #[test]
+    fn url_insert_stream_preserves_previous_bytes_and_elapsed_on_partial_progress() {
+        let payload = r#"{"type":"progress","query_id":"q1","written_rows":10,"written_bytes":1000,"elapsed_ms":100}
+{"type":"progress","query_id":"q1","written_rows":12}
+{"type":"done","query_id":"q1","written_rows":12}
+"#;
+
+        let summary = consume_url_insert_stream_reader(Cursor::new(payload), true)
+            .expect("partial progress should preserve previous stats");
+        assert_eq!(summary.inserted, 12);
+        assert_eq!(summary.processed_bytes, Some(1000));
+        assert_eq!(summary.elapsed_ms, Some(100));
     }
 }
