@@ -258,19 +258,23 @@ fn format_count_compact(value: u64) -> String {
         return value.to_string();
     }
 
-    const UNITS: [&str; 4] = ["k", "M", "B", "T"];
+    const UNITS: [&str; 5] = ["", "k", "M", "B", "T"];
     let mut scaled = value as f64;
-    let mut idx = 0usize;
-    while scaled >= 1_000.0 && idx < UNITS.len() {
+    let mut unit_index = 0usize;
+    while scaled >= 1_000.0 && unit_index < UNITS.len() - 1 {
         scaled /= 1_000.0;
-        idx += 1;
+        unit_index += 1;
     }
 
-    if idx == 0 {
-        value.to_string()
-    } else {
-        format!("{}{}", format_decimal_trim(scaled, 1), UNITS[idx - 1])
+    // Prevent outputs like `1000k` by promoting after rounding.
+    let mut rounded = round_to_places(scaled, 1);
+    while rounded >= 1_000.0 && unit_index < UNITS.len() - 1 {
+        scaled /= 1_000.0;
+        unit_index += 1;
+        rounded = round_to_places(scaled, 1);
     }
+
+    format!("{}{}", format_decimal_trim(rounded, 1), UNITS[unit_index])
 }
 
 fn format_bytes_compact(bytes: u64) -> String {
@@ -286,7 +290,15 @@ fn format_bytes_compact(bytes: u64) -> String {
         unit_index += 1;
     }
 
-    format!("{} {}", format_decimal_trim(size, 1), UNITS[unit_index])
+    // Prevent outputs like `1000 KB` by promoting after rounding.
+    let mut rounded = round_to_places(size, 1);
+    while rounded >= 1_000.0 && unit_index < UNITS.len() - 1 {
+        size /= 1_000.0;
+        unit_index += 1;
+        rounded = round_to_places(size, 1);
+    }
+
+    format!("{} {}", format_decimal_trim(rounded, 1), UNITS[unit_index])
 }
 
 fn format_duration_compact(elapsed_ms: f64) -> String {
@@ -308,6 +320,11 @@ fn format_decimal_trim(value: f64, places: usize) -> String {
         }
     }
     s
+}
+
+fn round_to_places(value: f64, places: usize) -> f64 {
+    let factor = 10_f64.powi(places as i32);
+    (value * factor).round() / factor
 }
 
 #[cfg(test)]
@@ -413,7 +430,7 @@ mod tests {
         let footer = format_query_footer(&summary, 10, 20_000).expect("footer");
         assert_eq!(
             footer,
-            "3.1 MB processed, 1.2M rows x 20k columns (2.50s)"
+            "3.1 MB processed, 1.3M rows x 20k columns (2.50s)"
         );
     }
 
@@ -428,6 +445,32 @@ mod tests {
 
         let footer = format_query_footer(&summary, 0, 2).expect("footer");
         assert_eq!(footer, "25 B processed, 15.4k rows x 2 columns (0.35s)");
+    }
+
+    #[test]
+    fn footer_promotes_count_unit_when_rounding_crosses_boundary() {
+        let summary = QuerySummary {
+            rows: Some(999_950),
+            elapsed_seconds: Some(0.35),
+            rows_read: None,
+            bytes_read: Some(25),
+        };
+
+        let footer = format_query_footer(&summary, 0, 2).expect("footer");
+        assert_eq!(footer, "25 B processed, 1M rows x 2 columns (0.35s)");
+    }
+
+    #[test]
+    fn footer_promotes_byte_unit_when_rounding_crosses_boundary() {
+        let summary = QuerySummary {
+            rows: Some(1),
+            elapsed_seconds: Some(0.35),
+            rows_read: None,
+            bytes_read: Some(999_950),
+        };
+
+        let footer = format_query_footer(&summary, 0, 2).expect("footer");
+        assert_eq!(footer, "1 MB processed, 1 rows x 2 columns (0.35s)");
     }
 
     #[test]
