@@ -73,7 +73,6 @@ struct UrlInsertSummary {
     processed_bytes: Option<u64>,
     query_id: Option<String>,
     elapsed_ms: Option<u64>,
-    streamed_events: bool,
 }
 
 fn is_jsonl(path: &str) -> bool {
@@ -433,8 +432,6 @@ fn consume_url_insert_stream_reader<R: BufRead>(
     let mut elapsed_ms: Option<u64> = None;
     let mut last_progress_elapsed_ms: Option<u64> = None;
     let mut legacy_inserted: Option<usize> = None;
-    let mut streamed_events = false;
-
     loop {
         line.clear();
         let read = reader
@@ -467,7 +464,6 @@ fn consume_url_insert_stream_reader<R: BufRead>(
 
         match event.event_type.as_deref() {
             Some("started") => {
-                streamed_events = true;
                 if query_id.is_none() {
                     query_id = event.query_id.clone();
                 }
@@ -476,7 +472,6 @@ fn consume_url_insert_stream_reader<R: BufRead>(
                 }
             }
             Some("progress") => {
-                streamed_events = true;
                 if query_id.is_none() {
                     query_id = event.query_id.clone();
                 }
@@ -497,7 +492,6 @@ fn consume_url_insert_stream_reader<R: BufRead>(
                 }
             }
             Some("done") => {
-                streamed_events = true;
                 saw_done = true;
                 if query_id.is_none() {
                     query_id = event.query_id.clone();
@@ -542,7 +536,6 @@ fn consume_url_insert_stream_reader<R: BufRead>(
             processed_bytes: None,
             query_id: None,
             elapsed_ms: None,
-            streamed_events: false,
         });
     }
 
@@ -562,7 +555,6 @@ fn consume_url_insert_stream_reader<R: BufRead>(
         processed_bytes: done_bytes.or(last_progress_bytes),
         query_id,
         elapsed_ms: elapsed_ms.or(last_progress_elapsed_ms),
-        streamed_events,
     })
 }
 
@@ -743,7 +735,6 @@ mod tests {
         assert_eq!(summary.inserted, 12);
         assert_eq!(summary.query_id.as_deref(), Some("q1"));
         assert_eq!(summary.elapsed_ms, Some(150));
-        assert!(summary.streamed_events);
     }
 
     #[test]
@@ -755,7 +746,6 @@ mod tests {
         let summary = consume_url_insert_stream_reader(Cursor::new(payload), true)
             .expect("stream should parse");
         assert_eq!(summary.inserted, 7);
-        assert!(summary.streamed_events);
     }
 
     #[test]
@@ -859,7 +849,6 @@ X-ClickHouse-Progress: {"read_rows":"1000000","read_bytes":"8000000","total_rows
         assert_eq!(summary.inserted, 1_000_000);
         assert_eq!(summary.processed_bytes, Some(8_000_000));
         assert_eq!(summary.elapsed_ms, Some(38));
-        assert!(summary.streamed_events);
     }
 
     #[test]

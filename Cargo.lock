@@ -1096,6 +1096,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
+name = "rawtree-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap_complete",
+ "comfy-table",
+ "flate2",
+ "indicatif",
+ "reqwest",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "urlencoding",
+ "webbrowser",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1179,25 +1198,6 @@ checksum = "a7cc970b249fbe527d6e02e0a227762c9108b2f49d81094fe357ffc6d14d7f6f"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "rtree"
-version = "0.7.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap_complete",
- "comfy-table",
- "flate2",
- "indicatif",
- "reqwest",
- "rpassword",
- "serde",
- "serde_json",
- "tempfile",
- "urlencoding",
- "webbrowser",
 ]
 
 [[package]]
