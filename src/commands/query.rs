@@ -72,6 +72,7 @@ fn print_json_as_table(value: &Value) -> bool {
         rendered_rows.push(cells);
     }
 
+    println!();
     println!("{}", render_clickhouse_table(&columns, &rendered_rows));
     print_query_summary(&summary, displayed_rows, displayed_columns);
     true
