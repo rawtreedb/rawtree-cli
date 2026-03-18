@@ -41,7 +41,10 @@ pub fn query(
 
     if let Ok(value) = serde_json::from_str::<Value>(&raw) {
         if json_mode {
-            println!("{}", serde_json::to_string_pretty(&value)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_output_with_hints(&value))?
+            );
         } else if !print_json_as_table(&value) {
             println!("{}", serde_json::to_string_pretty(&value)?);
         }
@@ -87,6 +90,29 @@ fn print_json_as_table(value: &Value) -> bool {
         colorize_muted,
     );
     true
+}
+
+fn json_output_with_hints(value: &Value) -> Value {
+    let mut output = value.clone();
+    let Some(obj) = output.as_object_mut() else {
+        return output;
+    };
+
+    let has_top_level_hints = obj.get("hints").map(|v| !v.is_null()).unwrap_or(false);
+    if has_top_level_hints {
+        return output;
+    }
+
+    if let Some(hints) = obj
+        .get("statistics")
+        .and_then(Value::as_object)
+        .and_then(|stats| stats.get("hints"))
+        .cloned()
+    {
+        obj.insert("hints".to_string(), hints);
+    }
+
+    output
 }
 
 fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>], colorize_muted: bool) -> String {
@@ -332,7 +358,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        extract_rows_and_columns, format_query_footer, render_clickhouse_table, QuerySummary,
+        extract_rows_and_columns, format_query_footer, json_output_with_hints,
+        render_clickhouse_table, QuerySummary,
     };
 
     #[test]
@@ -492,5 +519,28 @@ mod tests {
         assert!(rendered.contains("1. │"));
         assert!(rendered.contains("2. │"));
         assert!(rendered.contains("└"));
+    }
+
+    #[test]
+    fn json_output_with_hints_keeps_top_level_hints() {
+        let value = json!({
+            "data": [{"a": 1}],
+            "hints": ["use index"]
+        });
+        let output = json_output_with_hints(&value);
+        assert_eq!(output["hints"], json!(["use index"]));
+    }
+
+    #[test]
+    fn json_output_with_hints_promotes_statistics_hints_when_missing_top_level_hints() {
+        let value = json!({
+            "data": [{"a": 1}],
+            "statistics": {
+                "elapsed": 0.1,
+                "hints": ["cache warm"]
+            }
+        });
+        let output = json_output_with_hints(&value);
+        assert_eq!(output["hints"], json!(["cache warm"]));
     }
 }
