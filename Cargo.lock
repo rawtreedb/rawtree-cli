@@ -1103,6 +1103,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "comfy-table",
+ "console",
  "flate2",
  "indicatif",
  "reqwest",
