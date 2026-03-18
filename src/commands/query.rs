@@ -15,6 +15,7 @@ struct QuerySummary {
     elapsed_seconds: Option<f64>,
     rows_read: Option<u64>,
     bytes_read: Option<u64>,
+    hints: Vec<String>,
 }
 
 pub fn query(
@@ -80,17 +81,19 @@ fn print_json_as_table(value: &Value) -> bool {
         "{}",
         render_clickhouse_table(&columns, &rendered_rows, colorize_muted)
     );
-    print_query_summary(
-        &summary,
-        displayed_rows,
-        displayed_columns,
-        colorize_muted,
-    );
+    print_query_summary(&summary, displayed_rows, displayed_columns, colorize_muted);
     true
 }
 
-fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>], colorize_muted: bool) -> String {
-    let mut widths = columns.iter().map(|col| col.chars().count()).collect::<Vec<_>>();
+fn render_clickhouse_table(
+    columns: &[String],
+    rows: &[Vec<String>],
+    colorize_muted: bool,
+) -> String {
+    let mut widths = columns
+        .iter()
+        .map(|col| col.chars().count())
+        .collect::<Vec<_>>();
     for row in rows {
         for (idx, cell) in row.iter().enumerate() {
             widths[idx] = widths[idx].max(cell.chars().count());
@@ -149,12 +152,39 @@ fn print_query_summary(
     columns_count: usize,
     colorize_muted: bool,
 ) {
+    let mut printed_footer = false;
     if let Some(footer) = format_query_footer(summary, displayed_rows, columns_count) {
         println!();
         if colorize_muted {
             println!("{}", style(footer).color256(245));
         } else {
             println!("{footer}");
+        }
+        printed_footer = true;
+    }
+
+    if !summary.hints.is_empty() {
+        if !printed_footer {
+            println!();
+        }
+        print_query_hints(&summary.hints, colorize_muted);
+    }
+}
+
+fn print_query_hints(hints: &[String], colorize_warning: bool) {
+    println!();
+    if colorize_warning {
+        println!("{}", style("Hints:").yellow());
+    } else {
+        println!("Hints:");
+    }
+
+    for hint in hints {
+        let line = format!("- {hint}");
+        if colorize_warning {
+            println!("{}", style(line).yellow());
+        } else {
+            println!("{line}");
         }
     }
 }
@@ -202,6 +232,7 @@ fn extract_rows_and_columns<'a>(
                 elapsed_seconds: parse_f64(statistics.and_then(|stats| stats.get("elapsed"))),
                 rows_read: parse_u64(statistics.and_then(|stats| stats.get("rows_read"))),
                 bytes_read: parse_u64(statistics.and_then(|stats| stats.get("bytes_read"))),
+                hints: extract_hints(obj.get("hints")),
             };
             (rows, columns, summary)
         }
@@ -250,6 +281,29 @@ fn parse_f64(value: Option<&Value>) -> Option<f64> {
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::String(s)) => s.parse::<f64>().ok(),
         _ => None,
+    }
+}
+
+fn extract_hints(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(hint_value_to_string)
+            .filter(|s| !s.trim().is_empty())
+            .collect(),
+        Some(other) => hint_value_to_string(other).into_iter().collect(),
+        None => Vec::new(),
+    }
+}
+
+fn hint_value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(v) => Some(v.to_string()),
+        Value::Number(v) => Some(v.to_string()),
+        other => Some(other.to_string()),
     }
 }
 
@@ -352,6 +406,7 @@ mod tests {
         assert!(summary.elapsed_seconds.is_none());
         assert!(summary.rows_read.is_none());
         assert!(summary.bytes_read.is_none());
+        assert!(summary.hints.is_empty());
     }
 
     #[test]
@@ -368,6 +423,7 @@ mod tests {
         assert!(summary.elapsed_seconds.is_none());
         assert!(summary.rows_read.is_none());
         assert!(summary.bytes_read.is_none());
+        assert!(summary.hints.is_empty());
     }
 
     #[test]
@@ -387,6 +443,22 @@ mod tests {
         assert_eq!(summary.bytes_read, Some(25));
         assert_eq!(summary.rows_read, Some(1));
         assert_eq!(summary.elapsed_seconds, Some(0.000571999));
+        assert!(summary.hints.is_empty());
+    }
+
+    #[test]
+    fn extract_rows_includes_hints_summary() {
+        let value = json!({
+            "rows": 1,
+            "hints": ["slow query", "consider index"],
+            "data": [{"id": 1}]
+        });
+
+        let (_, _, summary) = extract_rows_and_columns(&value).expect("tabular json");
+        assert_eq!(
+            summary.hints,
+            vec!["slow query".to_string(), "consider index".to_string()]
+        );
     }
 
     #[test]
@@ -402,13 +474,11 @@ mod tests {
             elapsed_seconds: Some(0.0047),
             rows_read: Some(15420),
             bytes_read: Some(15360),
+            hints: Vec::new(),
         };
 
         let footer = format_query_footer(&summary, 5, 20).expect("footer");
-        assert_eq!(
-            footer,
-            "15.4 KB processed, 5 rows x 20 columns (4.70ms)"
-        );
+        assert_eq!(footer, "15.4 KB processed, 5 rows x 20 columns (4.70ms)");
     }
 
     #[test]
@@ -425,13 +495,11 @@ mod tests {
             elapsed_seconds: Some(2.5),
             rows_read: Some(2_000_000),
             bytes_read: Some(3 * 1024 * 1024),
+            hints: Vec::new(),
         };
 
         let footer = format_query_footer(&summary, 10, 20_000).expect("footer");
-        assert_eq!(
-            footer,
-            "3.1 MB processed, 1.3M rows x 20k columns (2.50s)"
-        );
+        assert_eq!(footer, "3.1 MB processed, 1.3M rows x 20k columns (2.50s)");
     }
 
     #[test]
@@ -441,6 +509,7 @@ mod tests {
             elapsed_seconds: Some(0.35),
             rows_read: Some(15_420),
             bytes_read: Some(25),
+            hints: Vec::new(),
         };
 
         let footer = format_query_footer(&summary, 0, 2).expect("footer");
@@ -454,6 +523,7 @@ mod tests {
             elapsed_seconds: Some(0.35),
             rows_read: None,
             bytes_read: Some(25),
+            hints: Vec::new(),
         };
 
         let footer = format_query_footer(&summary, 0, 2).expect("footer");
@@ -467,6 +537,7 @@ mod tests {
             elapsed_seconds: Some(0.35),
             rows_read: None,
             bytes_read: Some(999_950),
+            hints: Vec::new(),
         };
 
         let footer = format_query_footer(&summary, 0, 2).expect("footer");
