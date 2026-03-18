@@ -10,6 +10,11 @@ use serde_json::{Map, Value};
 use crate::client::ApiClient;
 use crate::org;
 
+struct QuerySummary<'a> {
+    rows: Option<&'a Value>,
+    statistics: Option<&'a Map<String, Value>>,
+}
+
 pub fn query(
     client: &ApiClient,
     project: &str,
@@ -46,7 +51,7 @@ pub fn query(
 }
 
 fn print_json_as_table(value: &Value) -> bool {
-    let Some((columns, rows)) = extract_rows_and_columns(value) else {
+    let Some((columns, rows, summary)) = extract_rows_and_columns(value) else {
         return false;
     };
 
@@ -72,11 +77,47 @@ fn print_json_as_table(value: &Value) -> bool {
     }
 
     println!("{table}");
+    print_query_summary(&summary);
     true
 }
 
-fn extract_rows_and_columns(value: &Value) -> Option<(Vec<String>, Vec<&Map<String, Value>>)> {
-    let (rows, mut columns) = match value {
+fn print_query_summary(summary: &QuerySummary<'_>) {
+    let has_rows = summary.rows.is_some();
+    let has_statistics = summary
+        .statistics
+        .map(|statistics| !statistics.is_empty())
+        .unwrap_or(false);
+
+    if !has_rows && !has_statistics {
+        return;
+    }
+
+    println!();
+    if let Some(rows) = summary.rows {
+        println!("rows: {}", format_cell_value(Some(rows)));
+    }
+
+    if let Some(statistics) = summary.statistics {
+        if statistics.is_empty() {
+            return;
+        }
+
+        let mut statistics_table = new_cli_table();
+        statistics_table.set_header(vec!["statistic", "value"]);
+        for (name, value) in statistics {
+            statistics_table.add_row(vec![
+                Cell::new(name),
+                Cell::new(format_cell_value(Some(value))),
+            ]);
+        }
+        println!("{statistics_table}");
+    }
+}
+
+fn extract_rows_and_columns<'a>(
+    value: &'a Value,
+) -> Option<(Vec<String>, Vec<&'a Map<String, Value>>, QuerySummary<'a>)> {
+    let (rows, mut columns, summary) = match value {
         Value::Object(obj) => {
             let rows = obj.get("data")?.as_array()?;
             let columns = obj
@@ -89,9 +130,20 @@ fn extract_rows_and_columns(value: &Value) -> Option<(Vec<String>, Vec<&Map<Stri
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            (rows, columns)
+            let summary = QuerySummary {
+                rows: obj.get("rows"),
+                statistics: obj.get("statistics").and_then(Value::as_object),
+            };
+            (rows, columns, summary)
         }
-        Value::Array(rows) => (rows, Vec::new()),
+        Value::Array(rows) => (
+            rows,
+            Vec::new(),
+            QuerySummary {
+                rows: None,
+                statistics: None,
+            },
+        ),
         _ => return None,
     };
 
@@ -110,7 +162,7 @@ fn extract_rows_and_columns(value: &Value) -> Option<(Vec<String>, Vec<&Map<Stri
         }
     }
 
-    Some((columns, row_objects))
+    Some((columns, row_objects, summary))
 }
 
 fn format_cell_value(value: Option<&Value>) -> String {
@@ -148,9 +200,11 @@ mod tests {
             ]
         });
 
-        let (columns, rows) = extract_rows_and_columns(&value).expect("tabular json");
+        let (columns, rows, summary) = extract_rows_and_columns(&value).expect("tabular json");
         assert_eq!(columns, vec!["id", "name", "extra"]);
         assert_eq!(rows.len(), 2);
+        assert!(summary.rows.is_none());
+        assert!(summary.statistics.is_none());
     }
 
     #[test]
@@ -160,9 +214,30 @@ mod tests {
             {"a": 2, "b": 3}
         ]);
 
-        let (columns, rows) = extract_rows_and_columns(&value).expect("tabular json");
+        let (columns, rows, summary) = extract_rows_and_columns(&value).expect("tabular json");
         assert_eq!(columns, vec!["a", "b"]);
         assert_eq!(rows.len(), 2);
+        assert!(summary.rows.is_none());
+        assert!(summary.statistics.is_none());
+    }
+
+    #[test]
+    fn extract_rows_includes_rows_and_statistics_summary() {
+        let value = json!({
+            "rows": 1,
+            "statistics": {
+                "bytes_read": 25,
+                "elapsed": 0.000571999,
+                "rows_read": 1
+            },
+            "data": [{"id": 1}]
+        });
+
+        let (_, _, summary) = extract_rows_and_columns(&value).expect("tabular json");
+        assert_eq!(summary.rows, Some(&json!(1)));
+        let statistics = summary.statistics.expect("statistics");
+        assert_eq!(statistics.get("bytes_read"), Some(&json!(25)));
+        assert_eq!(statistics.get("rows_read"), Some(&json!(1)));
     }
 
     #[test]
