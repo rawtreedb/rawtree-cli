@@ -1,9 +1,6 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, ContentArrangement, Table};
 use serde_json::json;
 use serde_json::{Map, Value};
 
@@ -66,25 +63,67 @@ fn print_json_as_table(value: &Value) -> bool {
         return true;
     }
 
-    let mut table = new_cli_table();
-    table.set_header(
-        columns
-            .iter()
-            .map(|name| Cell::new(name))
-            .collect::<Vec<_>>(),
-    );
-
+    let mut rendered_rows = Vec::with_capacity(rows.len());
     for row in rows {
         let cells = columns
             .iter()
-            .map(|name| Cell::new(format_cell_value(row.get(name))))
+            .map(|name| format_cell_value(row.get(name)))
             .collect::<Vec<_>>();
-        table.add_row(cells);
+        rendered_rows.push(cells);
     }
 
-    println!("{table}");
+    println!("{}", render_clickhouse_table(&columns, &rendered_rows));
     print_query_summary(&summary, displayed_rows, displayed_columns);
     true
+}
+
+fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>]) -> String {
+    let mut widths = columns.iter().map(|col| col.chars().count()).collect::<Vec<_>>();
+    for row in rows {
+        for (idx, cell) in row.iter().enumerate() {
+            widths[idx] = widths[idx].max(cell.chars().count());
+        }
+    }
+
+    let row_num_width = rows.len().max(1).to_string().len();
+    let gutter = " ".repeat(row_num_width + 2);
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+
+    let top = columns
+        .iter()
+        .enumerate()
+        .map(|(idx, col)| {
+            let col_width = widths[idx];
+            let header_width = col.chars().count();
+            let trailing = col_width + 1 - header_width;
+            format!("─{}{}", col, "─".repeat(trailing))
+        })
+        .collect::<Vec<_>>()
+        .join("┬");
+    lines.push(format!("{gutter}┌{top}┐"));
+
+    for (idx, row) in rows.iter().enumerate() {
+        let row_prefix = format!("{:>width$}. ", idx + 1, width = row_num_width);
+        let body = row
+            .iter()
+            .enumerate()
+            .map(|(col_idx, cell)| {
+                let pad = widths[col_idx].saturating_sub(cell.chars().count());
+                format!(" {cell}{} ", " ".repeat(pad))
+            })
+            .collect::<Vec<_>>()
+            .join("│");
+        lines.push(format!("{row_prefix}│{body}│"));
+    }
+
+    let bottom = widths
+        .iter()
+        .map(|width| "─".repeat(width + 2))
+        .collect::<Vec<_>>()
+        .join("┴");
+    lines.push(format!("{gutter}└{bottom}┘"));
+
+    lines.join("\n")
 }
 
 fn print_query_summary(summary: &QuerySummary, displayed_rows: usize, columns_count: usize) {
@@ -107,7 +146,7 @@ fn format_query_footer(
     let elapsed_ms = summary.elapsed_seconds.unwrap_or(0.0) * 1000.0;
 
     Some(format!(
-        "{} processed, ({} rows x {} columns) in {}",
+        "{} processed, {} rows x {} columns ({})",
         format_bytes_compact(bytes_processed),
         format_count_compact(rows_in_set),
         format_count_compact(columns_count as u64),
@@ -188,24 +227,12 @@ fn parse_f64(value: Option<&Value>) -> Option<f64> {
     }
 }
 
-fn format_count(value: u64) -> String {
-    let chars = value.to_string().chars().rev().collect::<Vec<_>>();
-    let mut out = String::new();
-    for (idx, ch) in chars.iter().enumerate() {
-        if idx > 0 && idx % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*ch);
-    }
-    out.chars().rev().collect()
-}
-
 fn format_count_compact(value: u64) -> String {
     if value < 1_000 {
-        return format_count(value);
+        return value.to_string();
     }
 
-    const UNITS: [&str; 4] = ["K", "M", "B", "T"];
+    const UNITS: [&str; 4] = ["k", "M", "B", "T"];
     let mut scaled = value as f64;
     let mut idx = 0usize;
     while scaled >= 1_000.0 && idx < UNITS.len() {
@@ -214,46 +241,56 @@ fn format_count_compact(value: u64) -> String {
     }
 
     if idx == 0 {
-        format_count(value)
+        value.to_string()
     } else {
-        format!("{scaled:.2}{}", UNITS[idx - 1])
+        format!("{}{}", format_decimal_trim(scaled, 1), UNITS[idx - 1])
     }
 }
 
 fn format_bytes_compact(bytes: u64) -> String {
-    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if bytes < 1_000 {
+        return format!("{bytes} B");
+    }
+
     let mut size = bytes as f64;
     let mut unit_index = 0usize;
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
+    while size >= 1_000.0 && unit_index < UNITS.len() - 1 {
+        size /= 1_000.0;
         unit_index += 1;
     }
 
-    format!("{size:.2}{}", UNITS[unit_index])
+    format!("{} {}", format_decimal_trim(size, 1), UNITS[unit_index])
 }
 
 fn format_duration_compact(elapsed_ms: f64) -> String {
-    if elapsed_ms < 1_000.0 {
-        format!("{elapsed_ms:.2}ms")
-    } else {
+    if elapsed_ms >= 100.0 {
         format!("{:.2}s", elapsed_ms / 1_000.0)
+    } else {
+        format!("{elapsed_ms:.2}ms")
     }
 }
 
-fn new_cli_table() -> Table {
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_content_arrangement(ContentArrangement::Dynamic);
-    table
+fn format_decimal_trim(value: f64, places: usize) -> String {
+    let mut s = format!("{value:.places$}");
+    if let Some(dot_idx) = s.find('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.len() == dot_idx + 1 {
+            s.pop();
+        }
+    }
+    s
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{extract_rows_and_columns, format_query_footer, QuerySummary};
+    use super::{
+        extract_rows_and_columns, format_query_footer, render_clickhouse_table, QuerySummary,
+    };
 
     #[test]
     fn extract_rows_uses_meta_order_and_appends_missing_keys() {
@@ -327,7 +364,7 @@ mod tests {
         let footer = format_query_footer(&summary, 5, 20).expect("footer");
         assert_eq!(
             footer,
-            "15.00KiB processed, (5 rows x 20 columns) in 4.70ms"
+            "15.4 KB processed, 5 rows x 20 columns (4.70ms)"
         );
     }
 
@@ -335,7 +372,7 @@ mod tests {
     fn footer_uses_displayed_row_count_when_rows_summary_missing() {
         let summary = QuerySummary::default();
         let footer = format_query_footer(&summary, 2, 3).expect("footer");
-        assert_eq!(footer, "0.00B processed, (2 rows x 3 columns) in 0.00ms");
+        assert_eq!(footer, "0 B processed, 2 rows x 3 columns (0.00ms)");
     }
 
     #[test]
@@ -350,7 +387,7 @@ mod tests {
         let footer = format_query_footer(&summary, 10, 20_000).expect("footer");
         assert_eq!(
             footer,
-            "3.00MiB processed, (1.25M rows x 20.00K columns) in 2.50s"
+            "3.1 MB processed, 1.2M rows x 20k columns (2.50s)"
         );
     }
 
@@ -358,12 +395,33 @@ mod tests {
     fn footer_uses_rows_read_when_rows_missing() {
         let summary = QuerySummary {
             rows: None,
-            elapsed_seconds: Some(0.01),
+            elapsed_seconds: Some(0.35),
             rows_read: Some(15_420),
             bytes_read: Some(25),
         };
 
         let footer = format_query_footer(&summary, 0, 2).expect("footer");
-        assert_eq!(footer, "25.00B processed, (15.42K rows x 2 columns) in 10.00ms");
+        assert_eq!(footer, "25 B processed, 15.4k rows x 2 columns (0.35s)");
+    }
+
+    #[test]
+    fn clickhouse_table_renderer_formats_header_and_row_numbers() {
+        let columns = vec!["user_id".to_string(), "email".to_string()];
+        let rows = vec![
+            vec![
+                "9ec3b48a-1b3e-44b9-8442-88c01022e78d".to_string(),
+                "a@example.com".to_string(),
+            ],
+            vec![
+                "9abbcf75-c1d1-4246-b9d0-7dea86b67297".to_string(),
+                "b@example.com".to_string(),
+            ],
+        ];
+
+        let rendered = render_clickhouse_table(&columns, &rows);
+        assert!(rendered.contains("┌─user_id"));
+        assert!(rendered.contains("1. │"));
+        assert!(rendered.contains("2. │"));
+        assert!(rendered.contains("└"));
     }
 }
