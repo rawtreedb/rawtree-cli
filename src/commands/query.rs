@@ -1,6 +1,8 @@
 use std::collections::HashSet;
+use std::io::IsTerminal;
 
 use anyhow::Result;
+use console::style;
 use serde_json::json;
 use serde_json::{Map, Value};
 
@@ -56,10 +58,11 @@ fn print_json_as_table(value: &Value) -> bool {
     };
     let displayed_rows = rows.len();
     let displayed_columns = columns.len();
+    let colorize_muted = std::io::stdout().is_terminal();
 
     if columns.is_empty() {
         println!("No rows returned.");
-        print_query_summary(&summary, displayed_rows, displayed_columns);
+        print_query_summary(&summary, displayed_rows, displayed_columns, colorize_muted);
         return true;
     }
 
@@ -73,12 +76,20 @@ fn print_json_as_table(value: &Value) -> bool {
     }
 
     println!();
-    println!("{}", render_clickhouse_table(&columns, &rendered_rows));
-    print_query_summary(&summary, displayed_rows, displayed_columns);
+    println!(
+        "{}",
+        render_clickhouse_table(&columns, &rendered_rows, colorize_muted)
+    );
+    print_query_summary(
+        &summary,
+        displayed_rows,
+        displayed_columns,
+        colorize_muted,
+    );
     true
 }
 
-fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>]) -> String {
+fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>], colorize_muted: bool) -> String {
     let mut widths = columns.iter().map(|col| col.chars().count()).collect::<Vec<_>>();
     for row in rows {
         for (idx, cell) in row.iter().enumerate() {
@@ -104,7 +115,12 @@ fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>]) -> String {
     lines.push(format!("{gutter}┌{top}┐"));
 
     for (idx, row) in rows.iter().enumerate() {
-        let row_prefix = format!("{:>width$}. ", idx + 1, width = row_num_width);
+        let row_prefix_plain = format!("{:>width$}. ", idx + 1, width = row_num_width);
+        let row_prefix = if colorize_muted {
+            style(row_prefix_plain).color256(245).to_string()
+        } else {
+            row_prefix_plain
+        };
         let body = row
             .iter()
             .enumerate()
@@ -127,10 +143,19 @@ fn render_clickhouse_table(columns: &[String], rows: &[Vec<String>]) -> String {
     lines.join("\n")
 }
 
-fn print_query_summary(summary: &QuerySummary, displayed_rows: usize, columns_count: usize) {
+fn print_query_summary(
+    summary: &QuerySummary,
+    displayed_rows: usize,
+    columns_count: usize,
+    colorize_muted: bool,
+) {
     if let Some(footer) = format_query_footer(summary, displayed_rows, columns_count) {
         println!();
-        println!("{footer}");
+        if colorize_muted {
+            println!("{}", style(footer).color256(245));
+        } else {
+            println!("{footer}");
+        }
     }
 }
 
@@ -419,7 +444,7 @@ mod tests {
             ],
         ];
 
-        let rendered = render_clickhouse_table(&columns, &rows);
+        let rendered = render_clickhouse_table(&columns, &rows, false);
         assert!(rendered.contains("┌─user_id"));
         assert!(rendered.contains("1. │"));
         assert!(rendered.contains("2. │"));
