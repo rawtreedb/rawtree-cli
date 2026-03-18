@@ -1,8 +1,8 @@
 [package]
-name = "rtree"
-version = "0.7.1"
+name = "rawtree-cli"
+version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/rawtreedb/rtree"
+repository = "https://github.com/rawtreedb/rawtree-cli"
 
 [[bin]]
 name = "rtree"
