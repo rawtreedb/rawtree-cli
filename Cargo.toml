@@ -1,6 +1,6 @@
 [package]
 name = "rtree"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 repository = "https://github.com/rawtreedb/rtree"
 
@@ -21,6 +21,7 @@ urlencoding = "2"
 flate2 = "1"
 comfy-table = "7.2.2"
 webbrowser = "1"
+console = "0.16.2"
 
 [dev-dependencies]
 tempfile = "3"
