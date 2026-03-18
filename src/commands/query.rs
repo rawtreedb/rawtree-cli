@@ -10,9 +10,12 @@ use serde_json::{Map, Value};
 use crate::client::ApiClient;
 use crate::org;
 
-struct QuerySummary<'a> {
-    rows: Option<&'a Value>,
-    statistics: Option<&'a Map<String, Value>>,
+#[derive(Default)]
+struct QuerySummary {
+    rows: Option<u64>,
+    elapsed_seconds: Option<f64>,
+    rows_read: Option<u64>,
+    bytes_read: Option<u64>,
 }
 
 pub fn query(
@@ -54,9 +57,11 @@ fn print_json_as_table(value: &Value) -> bool {
     let Some((columns, rows, summary)) = extract_rows_and_columns(value) else {
         return false;
     };
+    let displayed_rows = rows.len();
 
     if columns.is_empty() {
         println!("No rows returned.");
+        print_query_summary(&summary, displayed_rows);
         return true;
     }
 
@@ -77,46 +82,37 @@ fn print_json_as_table(value: &Value) -> bool {
     }
 
     println!("{table}");
-    print_query_summary(&summary);
+    print_query_summary(&summary, displayed_rows);
     true
 }
 
-fn print_query_summary(summary: &QuerySummary<'_>) {
-    let has_rows = summary.rows.is_some();
-    let has_statistics = summary
-        .statistics
-        .map(|statistics| !statistics.is_empty())
-        .unwrap_or(false);
+fn print_query_summary(summary: &QuerySummary, displayed_rows: usize) {
+    if let Some(footer) = format_query_footer(summary, displayed_rows) {
+        println!();
+        println!("{footer}");
+    }
+}
 
-    if !has_rows && !has_statistics {
-        return;
+fn format_query_footer(summary: &QuerySummary, displayed_rows: usize) -> Option<String> {
+    let rows_in_set = summary.rows.or(Some(displayed_rows as u64))?;
+    let mut parts = vec![format!("{} rows in set", format_count(rows_in_set))];
+
+    if let Some(elapsed) = summary.elapsed_seconds {
+        parts.push(format!("Elapsed: {elapsed:.3} sec"));
+    }
+    if let Some(rows_read) = summary.rows_read {
+        parts.push(format!("Rows read: {}", format_count(rows_read)));
+    }
+    if let Some(bytes_read) = summary.bytes_read {
+        parts.push(format!("Bytes read: {}", format_bytes(bytes_read)));
     }
 
-    println!();
-    if let Some(rows) = summary.rows {
-        println!("rows: {}", format_cell_value(Some(rows)));
-    }
-
-    if let Some(statistics) = summary.statistics {
-        if statistics.is_empty() {
-            return;
-        }
-
-        let mut statistics_table = new_cli_table();
-        statistics_table.set_header(vec!["statistic", "value"]);
-        for (name, value) in statistics {
-            statistics_table.add_row(vec![
-                Cell::new(name),
-                Cell::new(format_cell_value(Some(value))),
-            ]);
-        }
-        println!("{statistics_table}");
-    }
+    Some(format!("{}.", parts.join(". ")))
 }
 
 fn extract_rows_and_columns<'a>(
     value: &'a Value,
-) -> Option<(Vec<String>, Vec<&'a Map<String, Value>>, QuerySummary<'a>)> {
+) -> Option<(Vec<String>, Vec<&'a Map<String, Value>>, QuerySummary)> {
     let (rows, mut columns, summary) = match value {
         Value::Object(obj) => {
             let rows = obj.get("data")?.as_array()?;
@@ -130,20 +126,16 @@ fn extract_rows_and_columns<'a>(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let statistics = obj.get("statistics").and_then(Value::as_object);
             let summary = QuerySummary {
-                rows: obj.get("rows"),
-                statistics: obj.get("statistics").and_then(Value::as_object),
+                rows: parse_u64(obj.get("rows")),
+                elapsed_seconds: parse_f64(statistics.and_then(|stats| stats.get("elapsed"))),
+                rows_read: parse_u64(statistics.and_then(|stats| stats.get("rows_read"))),
+                bytes_read: parse_u64(statistics.and_then(|stats| stats.get("bytes_read"))),
             };
             (rows, columns, summary)
         }
-        Value::Array(rows) => (
-            rows,
-            Vec::new(),
-            QuerySummary {
-                rows: None,
-                statistics: None,
-            },
-        ),
+        Value::Array(rows) => (rows, Vec::new(), QuerySummary::default()),
         _ => return None,
     };
 
@@ -175,6 +167,50 @@ fn format_cell_value(value: Option<&Value>) -> String {
     }
 }
 
+fn parse_u64(value: Option<&Value>) -> Option<u64> {
+    match value {
+        Some(Value::Number(n)) => n.as_u64(),
+        Some(Value::String(s)) => s.parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn parse_f64(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn format_count(value: u64) -> String {
+    let chars = value.to_string().chars().rev().collect::<Vec<_>>();
+    let mut out = String::new();
+    for (idx, ch) in chars.iter().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*ch);
+    }
+    out.chars().rev().collect()
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+
+    let mut size = bytes as f64;
+    let mut unit_index = 0usize;
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    format!("{size:.1} {}", UNITS[unit_index])
+}
+
 fn new_cli_table() -> Table {
     let mut table = Table::new();
     table
@@ -188,7 +224,7 @@ fn new_cli_table() -> Table {
 mod tests {
     use serde_json::json;
 
-    use super::extract_rows_and_columns;
+    use super::{extract_rows_and_columns, format_query_footer, QuerySummary};
 
     #[test]
     fn extract_rows_uses_meta_order_and_appends_missing_keys() {
@@ -204,7 +240,9 @@ mod tests {
         assert_eq!(columns, vec!["id", "name", "extra"]);
         assert_eq!(rows.len(), 2);
         assert!(summary.rows.is_none());
-        assert!(summary.statistics.is_none());
+        assert!(summary.elapsed_seconds.is_none());
+        assert!(summary.rows_read.is_none());
+        assert!(summary.bytes_read.is_none());
     }
 
     #[test]
@@ -218,7 +256,9 @@ mod tests {
         assert_eq!(columns, vec!["a", "b"]);
         assert_eq!(rows.len(), 2);
         assert!(summary.rows.is_none());
-        assert!(summary.statistics.is_none());
+        assert!(summary.elapsed_seconds.is_none());
+        assert!(summary.rows_read.is_none());
+        assert!(summary.bytes_read.is_none());
     }
 
     #[test]
@@ -234,15 +274,38 @@ mod tests {
         });
 
         let (_, _, summary) = extract_rows_and_columns(&value).expect("tabular json");
-        assert_eq!(summary.rows, Some(&json!(1)));
-        let statistics = summary.statistics.expect("statistics");
-        assert_eq!(statistics.get("bytes_read"), Some(&json!(25)));
-        assert_eq!(statistics.get("rows_read"), Some(&json!(1)));
+        assert_eq!(summary.rows, Some(1));
+        assert_eq!(summary.bytes_read, Some(25));
+        assert_eq!(summary.rows_read, Some(1));
+        assert_eq!(summary.elapsed_seconds, Some(0.000571999));
     }
 
     #[test]
     fn extract_rows_rejects_non_object_rows() {
         let value = json!({"data": [1, 2, 3]});
         assert!(extract_rows_and_columns(&value).is_none());
+    }
+
+    #[test]
+    fn footer_includes_summary_stats_with_human_readable_values() {
+        let summary = QuerySummary {
+            rows: Some(5),
+            elapsed_seconds: Some(0.002),
+            rows_read: Some(15420),
+            bytes_read: Some(15360),
+        };
+
+        let footer = format_query_footer(&summary, 5).expect("footer");
+        assert_eq!(
+            footer,
+            "5 rows in set. Elapsed: 0.002 sec. Rows read: 15,420. Bytes read: 15.0 KiB."
+        );
+    }
+
+    #[test]
+    fn footer_uses_displayed_row_count_when_rows_summary_missing() {
+        let summary = QuerySummary::default();
+        let footer = format_query_footer(&summary, 2).expect("footer");
+        assert_eq!(footer, "2 rows in set.");
     }
 }
