@@ -100,11 +100,20 @@ fn format_query_footer(summary: &QuerySummary, displayed_rows: usize) -> Option<
     if let Some(elapsed) = summary.elapsed_seconds {
         parts.push(format!("Elapsed: {elapsed:.3} sec"));
     }
-    if let Some(rows_read) = summary.rows_read {
-        parts.push(format!("Rows read: {}", format_count(rows_read)));
-    }
-    if let Some(bytes_read) = summary.bytes_read {
-        parts.push(format!("Bytes read: {}", format_bytes(bytes_read)));
+    if summary.rows_read.is_some() || summary.bytes_read.is_some() {
+        let read_segment = match (summary.rows_read, summary.bytes_read) {
+            (Some(rows_read), Some(bytes_read)) => format!(
+                "Read: {} rows and {}",
+                format_count(rows_read),
+                format_bytes(bytes_read)
+            ),
+            (Some(rows_read), None) => format!("Read: {} rows", format_count(rows_read)),
+            (None, Some(bytes_read)) => format!("Read: {}", format_bytes(bytes_read)),
+            (None, None) => String::new(),
+        };
+        if !read_segment.is_empty() {
+            parts.push(read_segment);
+        }
     }
 
     Some(format!("{}.", parts.join(". ")))
@@ -298,7 +307,7 @@ mod tests {
         let footer = format_query_footer(&summary, 5).expect("footer");
         assert_eq!(
             footer,
-            "5 rows in set. Elapsed: 0.002 sec. Rows read: 15,420. Bytes read: 15.0 KiB."
+            "5 rows in set. Elapsed: 0.002 sec. Read: 15,420 rows and 15.0 KiB."
         );
     }
 
