@@ -58,10 +58,11 @@ fn print_json_as_table(value: &Value) -> bool {
         return false;
     };
     let displayed_rows = rows.len();
+    let displayed_columns = columns.len();
 
     if columns.is_empty() {
         println!("No rows returned.");
-        print_query_summary(&summary, displayed_rows);
+        print_query_summary(&summary, displayed_rows, displayed_columns);
         return true;
     }
 
@@ -82,41 +83,33 @@ fn print_json_as_table(value: &Value) -> bool {
     }
 
     println!("{table}");
-    print_query_summary(&summary, displayed_rows);
+    print_query_summary(&summary, displayed_rows, displayed_columns);
     true
 }
 
-fn print_query_summary(summary: &QuerySummary, displayed_rows: usize) {
-    if let Some(footer) = format_query_footer(summary, displayed_rows) {
+fn print_query_summary(summary: &QuerySummary, displayed_rows: usize, columns_count: usize) {
+    if let Some(footer) = format_query_footer(summary, displayed_rows, columns_count) {
         println!();
         println!("{footer}");
     }
 }
 
-fn format_query_footer(summary: &QuerySummary, displayed_rows: usize) -> Option<String> {
+fn format_query_footer(
+    summary: &QuerySummary,
+    displayed_rows: usize,
+    columns_count: usize,
+) -> Option<String> {
     let rows_in_set = summary.rows.or(Some(displayed_rows as u64))?;
-    let mut parts = vec![format!("{} rows in set", format_count(rows_in_set))];
+    let bytes_processed = summary.bytes_read.unwrap_or(0);
+    let elapsed_ms = summary.elapsed_seconds.unwrap_or(0.0) * 1000.0;
 
-    if let Some(elapsed) = summary.elapsed_seconds {
-        parts.push(format!("Elapsed: {elapsed:.3} sec"));
-    }
-    if summary.rows_read.is_some() || summary.bytes_read.is_some() {
-        let read_segment = match (summary.rows_read, summary.bytes_read) {
-            (Some(rows_read), Some(bytes_read)) => format!(
-                "Read: {} rows and {}",
-                format_count(rows_read),
-                format_bytes(bytes_read)
-            ),
-            (Some(rows_read), None) => format!("Read: {} rows", format_count(rows_read)),
-            (None, Some(bytes_read)) => format!("Read: {}", format_bytes(bytes_read)),
-            (None, None) => String::new(),
-        };
-        if !read_segment.is_empty() {
-            parts.push(read_segment);
-        }
-    }
-
-    Some(format!("{}.", parts.join(". ")))
+    Some(format!(
+        "{} processed, ({} rows x {} columns) in {:.2}ms",
+        format_bytes_compact(bytes_processed),
+        format_count(rows_in_set),
+        format_count(columns_count as u64),
+        elapsed_ms
+    ))
 }
 
 fn extract_rows_and_columns<'a>(
@@ -204,12 +197,8 @@ fn format_count(value: u64) -> String {
     out.chars().rev().collect()
 }
 
-fn format_bytes(bytes: u64) -> String {
+fn format_bytes_compact(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
-    }
-
     let mut size = bytes as f64;
     let mut unit_index = 0usize;
     while size >= 1024.0 && unit_index < UNITS.len() - 1 {
@@ -217,7 +206,7 @@ fn format_bytes(bytes: u64) -> String {
         unit_index += 1;
     }
 
-    format!("{size:.1} {}", UNITS[unit_index])
+    format!("{size:.2}{}", UNITS[unit_index])
 }
 
 fn new_cli_table() -> Table {
@@ -299,22 +288,22 @@ mod tests {
     fn footer_includes_summary_stats_with_human_readable_values() {
         let summary = QuerySummary {
             rows: Some(5),
-            elapsed_seconds: Some(0.002),
+            elapsed_seconds: Some(0.0047),
             rows_read: Some(15420),
             bytes_read: Some(15360),
         };
 
-        let footer = format_query_footer(&summary, 5).expect("footer");
+        let footer = format_query_footer(&summary, 5, 20).expect("footer");
         assert_eq!(
             footer,
-            "5 rows in set. Elapsed: 0.002 sec. Read: 15,420 rows and 15.0 KiB."
+            "15.00KiB processed, (5 rows x 20 columns) in 4.70ms"
         );
     }
 
     #[test]
     fn footer_uses_displayed_row_count_when_rows_summary_missing() {
         let summary = QuerySummary::default();
-        let footer = format_query_footer(&summary, 2).expect("footer");
-        assert_eq!(footer, "2 rows in set.");
+        let footer = format_query_footer(&summary, 2, 3).expect("footer");
+        assert_eq!(footer, "0.00B processed, (2 rows x 3 columns) in 0.00ms");
     }
 }
