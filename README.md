@@ -78,7 +78,7 @@ Config file location:
 
 Resolution priority by setting:
 
-- API URL: `--api-url` -> `RAWTREE_URL` -> config file -> `https://api.rawtree.dev`
+- API URL: `--api-url` -> `RAWTREE_URL` -> config file -> `https://api.us-east-1.aws.rawtree.com`
 - Project: `--project` -> `RAWTREE_PROJECT` -> config file default project
 - Organization: `--org` -> `RAWTREE_ORG` -> config file default organization
 

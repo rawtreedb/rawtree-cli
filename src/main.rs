@@ -28,7 +28,7 @@ fn resolve_url(cli_url: Option<&str>) -> String {
             return url;
         }
     }
-    "https://api.rawtree.dev".to_string()
+    "https://api.us-east-1.aws.rawtree.com".to_string()
 }
 
 fn resolve_token() -> Option<String> {

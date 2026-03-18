@@ -259,7 +259,7 @@ mod tests {
         let resp = sample_auth_response();
         apply_auth_config(
             &mut cfg,
-            "https://api.rawtree.dev",
+            "https://api.us-east-1.aws.rawtree.com",
             &resp,
             Some("team_alpha".to_string()),
         );
@@ -276,7 +276,7 @@ mod tests {
             ..Config::default()
         };
         let resp = sample_auth_response();
-        apply_auth_config(&mut cfg, "https://api.rawtree.dev", &resp, None);
+        apply_auth_config(&mut cfg, "https://api.us-east-1.aws.rawtree.com", &resp, None);
 
         assert_eq!(cfg.default_organization, None);
     }

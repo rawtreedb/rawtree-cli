@@ -320,7 +320,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "--api-url",
-            "https://api.rawtree.dev",
+            "https://api.us-east-1.aws.rawtree.com",
             "insert",
             "--project",
             "analytics",
@@ -331,7 +331,7 @@ mod tests {
         ])
         .expect("--api-url and insert --url should parse");
 
-        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.us-east-1.aws.rawtree.com"));
         match cli.command {
             Command::Insert { url, .. } => {
                 assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
@@ -345,7 +345,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "--api-url",
-            "https://api.rawtree.dev",
+            "https://api.us-east-1.aws.rawtree.com",
             "query",
             "--project",
             "analytics",
@@ -354,6 +354,6 @@ mod tests {
         ])
         .expect("--api-url should parse before subcommand");
 
-        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.dev"));
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.us-east-1.aws.rawtree.com"));
     }
 }

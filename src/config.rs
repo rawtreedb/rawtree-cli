@@ -71,7 +71,7 @@ mod tests {
         let old = r#"{
   "token": "t",
   "email": "e@example.com",
-  "url": "https://api.rawtree.dev",
+  "url": "https://api.us-east-1.aws.rawtree.com",
   "default_project": "analytics"
 }"#;
         let cfg: Config = serde_json::from_str(old).expect("old config should parse");
