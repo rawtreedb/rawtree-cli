@@ -99,16 +99,19 @@ fn format_query_footer(
     displayed_rows: usize,
     columns_count: usize,
 ) -> Option<String> {
-    let rows_in_set = summary.rows.or(Some(displayed_rows as u64))?;
+    let rows_in_set = summary
+        .rows
+        .or(summary.rows_read)
+        .or(Some(displayed_rows as u64))?;
     let bytes_processed = summary.bytes_read.unwrap_or(0);
     let elapsed_ms = summary.elapsed_seconds.unwrap_or(0.0) * 1000.0;
 
     Some(format!(
-        "{} processed, ({} rows x {} columns) in {:.2}ms",
+        "{} processed, ({} rows x {} columns) in {}",
         format_bytes_compact(bytes_processed),
-        format_count(rows_in_set),
-        format_count(columns_count as u64),
-        elapsed_ms
+        format_count_compact(rows_in_set),
+        format_count_compact(columns_count as u64),
+        format_duration_compact(elapsed_ms)
     ))
 }
 
@@ -197,6 +200,26 @@ fn format_count(value: u64) -> String {
     out.chars().rev().collect()
 }
 
+fn format_count_compact(value: u64) -> String {
+    if value < 1_000 {
+        return format_count(value);
+    }
+
+    const UNITS: [&str; 4] = ["K", "M", "B", "T"];
+    let mut scaled = value as f64;
+    let mut idx = 0usize;
+    while scaled >= 1_000.0 && idx < UNITS.len() {
+        scaled /= 1_000.0;
+        idx += 1;
+    }
+
+    if idx == 0 {
+        format_count(value)
+    } else {
+        format!("{scaled:.2}{}", UNITS[idx - 1])
+    }
+}
+
 fn format_bytes_compact(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     let mut size = bytes as f64;
@@ -207,6 +230,14 @@ fn format_bytes_compact(bytes: u64) -> String {
     }
 
     format!("{size:.2}{}", UNITS[unit_index])
+}
+
+fn format_duration_compact(elapsed_ms: f64) -> String {
+    if elapsed_ms < 1_000.0 {
+        format!("{elapsed_ms:.2}ms")
+    } else {
+        format!("{:.2}s", elapsed_ms / 1_000.0)
+    }
 }
 
 fn new_cli_table() -> Table {
@@ -305,5 +336,34 @@ mod tests {
         let summary = QuerySummary::default();
         let footer = format_query_footer(&summary, 2, 3).expect("footer");
         assert_eq!(footer, "0.00B processed, (2 rows x 3 columns) in 0.00ms");
+    }
+
+    #[test]
+    fn footer_uses_compact_format_for_large_counts_and_seconds() {
+        let summary = QuerySummary {
+            rows: Some(1_250_000),
+            elapsed_seconds: Some(2.5),
+            rows_read: Some(2_000_000),
+            bytes_read: Some(3 * 1024 * 1024),
+        };
+
+        let footer = format_query_footer(&summary, 10, 20_000).expect("footer");
+        assert_eq!(
+            footer,
+            "3.00MiB processed, (1.25M rows x 20.00K columns) in 2.50s"
+        );
+    }
+
+    #[test]
+    fn footer_uses_rows_read_when_rows_missing() {
+        let summary = QuerySummary {
+            rows: None,
+            elapsed_seconds: Some(0.01),
+            rows_read: Some(15_420),
+            bytes_read: Some(25),
+        };
+
+        let footer = format_query_footer(&summary, 0, 2).expect("footer");
+        assert_eq!(footer, "25.00B processed, (15.42K rows x 2 columns) in 10.00ms");
     }
 }
