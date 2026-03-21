@@ -304,6 +304,16 @@ fn print_inserted(count: usize, json_mode: bool) {
     });
 }
 
+fn append_transform_param(path: &str, transform: Option<&str>) -> String {
+    match transform {
+        Some(t) => {
+            let sep = if path.contains('?') { '&' } else { '?' };
+            format!("{path}{sep}transform={}", urlencoding::encode(t))
+        }
+        None => path.to_string(),
+    }
+}
+
 pub fn insert(
     client: &ApiClient,
     project: &str,
@@ -312,9 +322,11 @@ pub fn insert(
     data: Option<&str>,
     file: Option<&str>,
     url: Option<&str>,
+    transform: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let api_path = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let base_path = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let api_path = append_transform_param(&base_path, transform);
 
     // Small inline data — send in one request
     if let Some(raw) = data {
@@ -325,14 +337,14 @@ pub fn insert(
     }
 
     if let Some(raw_url) = url {
-        return insert_from_url(client, project, organization, table, raw_url, json_mode);
+        return insert_from_url(client, project, organization, table, raw_url, transform, json_mode);
     }
 
     let path =
         file.ok_or_else(|| anyhow::anyhow!("provide exactly one of --data, --file, or --url"))?;
 
     if is_jsonl(path) {
-        insert_jsonl_streaming(client, project, organization, table, path, json_mode)?;
+        insert_jsonl_streaming(client, project, organization, table, path, transform, json_mode)?;
     } else {
         // Non-JSONL files: parse entire file (assumed to be a JSON array or object)
         let contents =
@@ -351,9 +363,11 @@ fn insert_from_url(
     organization: Option<&str>,
     table: &str,
     url: &str,
+    transform: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = build_url_ingest_path(project, organization, table, url);
+    let base_path = build_url_ingest_path(project, organization, table, url);
+    let path = append_transform_param(&base_path, transform);
     let resp = client.post_empty_stream(&path)?;
     let summary = consume_url_insert_stream(resp, json_mode)?;
     if json_mode {
@@ -566,6 +580,7 @@ fn insert_jsonl_streaming(
     organization: Option<&str>,
     table: &str,
     path: &str,
+    transform: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
     let file_size = fs::metadata(path)
@@ -595,7 +610,8 @@ fn insert_jsonl_streaming(
     let first_error: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
 
     // Spawn sender threads — each reuses a body buffer, compresses, and POSTs
-    let url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let base_url = org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+    let url = append_transform_param(&base_url, transform);
     let mut handles = Vec::with_capacity(senders);
     for _ in 0..senders {
         let rx = Arc::clone(&rx);

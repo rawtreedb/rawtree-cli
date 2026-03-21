@@ -97,6 +97,9 @@ pub enum Command {
         /// Public URL to JSON or JSONL content
         #[arg(long, conflicts_with_all = ["data", "file"])]
         url: Option<String>,
+        /// Apply a predefined transform (e.g., otlp-traces, otlp-logs, otlp-metrics)
+        #[arg(long)]
+        transform: Option<String>,
     },
     /// Preview rows from a table
     Sample {
