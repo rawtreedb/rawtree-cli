@@ -259,21 +259,33 @@ fn run(cli: Cli) -> Result<()> {
     let client = ApiClient::new(url.clone(), token);
 
     match command {
-        Command::Register { email, password } => {
+        Command::Register {
+            email,
+            password,
+            project,
+        } => {
             let password = prompt_password_if_missing(password)?;
-            commands::auth::register(&client, &email, &password, json)
+            commands::auth::register(&client, &email, &password, cli_org.clone(), project, json)
         }
         Command::Login {
             email,
             password,
             no_browser,
             timeout_seconds,
+            project,
         } => {
             if let Some(email) = email {
                 let password = prompt_password_if_missing(password)?;
-                commands::auth::login(&client, &email, &password, json)
+                commands::auth::login(&client, &email, &password, cli_org.clone(), project, json)
             } else {
-                commands::auth::login_with_browser(&client, no_browser, timeout_seconds, json)
+                commands::auth::login_with_browser(
+                    &client,
+                    no_browser,
+                    timeout_seconds,
+                    cli_org.clone(),
+                    project,
+                    json,
+                )
             }
         }
         Command::Logout => commands::auth::logout(json),

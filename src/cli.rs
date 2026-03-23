@@ -28,6 +28,9 @@ pub enum Command {
         /// Password (prompted interactively if omitted)
         #[arg(long)]
         password: Option<String>,
+        /// Project name to set as default after authentication
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Log in and save token
     Login {
@@ -42,6 +45,9 @@ pub enum Command {
         /// Max seconds to wait for browser login approval
         #[arg(long, default_value_t = 300)]
         timeout_seconds: u64,
+        /// Project name to set as default after authentication
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Log out and remove saved local credentials
     Logout,
@@ -280,6 +286,41 @@ mod tests {
     }
 
     #[test]
+    fn login_with_project_without_email_is_allowed_for_browser_flow() {
+        let cli = Cli::try_parse_from(["rtree", "login", "--project", "analytics"])
+            .expect("login with --project should parse");
+        match cli.command {
+            Command::Login { email, project, .. } => {
+                assert!(email.is_none());
+                assert_eq!(project.as_deref(), Some("analytics"));
+            }
+            _ => panic!("expected login command"),
+        }
+    }
+
+    #[test]
+    fn register_with_project_parses() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "register",
+            "--email",
+            "user@example.com",
+            "--password",
+            "secret123",
+            "--project",
+            "analytics",
+        ])
+        .expect("register with --project should parse");
+
+        match cli.command {
+            Command::Register { project, .. } => {
+                assert_eq!(project.as_deref(), Some("analytics"));
+            }
+            _ => panic!("expected register command"),
+        }
+    }
+
+    #[test]
     fn insert_with_url_is_allowed() {
         let cli = Cli::try_parse_from([
             "rtree",
@@ -334,7 +375,10 @@ mod tests {
         ])
         .expect("--api-url and insert --url should parse");
 
-        assert_eq!(cli.api_url.as_deref(), Some("https://api.us-east-1.aws.rawtree.com"));
+        assert_eq!(
+            cli.api_url.as_deref(),
+            Some("https://api.us-east-1.aws.rawtree.com")
+        );
         match cli.command {
             Command::Insert { url, .. } => {
                 assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
@@ -357,6 +401,9 @@ mod tests {
         ])
         .expect("--api-url should parse before subcommand");
 
-        assert_eq!(cli.api_url.as_deref(), Some("https://api.us-east-1.aws.rawtree.com"));
+        assert_eq!(
+            cli.api_url.as_deref(),
+            Some("https://api.us-east-1.aws.rawtree.com")
+        );
     }
 }

@@ -46,31 +46,212 @@ enum CliDeviceTokenPoll {
     Approved(CliDeviceTokenResponse),
 }
 
+#[derive(Clone, Debug, Default)]
+struct AuthSelection {
+    organization: Option<String>,
+    project: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProjectItem {
+    project_name: String,
+}
+
+#[derive(Deserialize)]
+struct ListProjectsResponse {
+    projects: Vec<ProjectItem>,
+}
+
 fn apply_auth_config(
     cfg: &mut config::Config,
     base_url: &str,
     resp: &AuthResponse,
-    default_organization: Option<String>,
+    selection: &AuthSelection,
 ) {
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
-    cfg.default_organization = default_organization;
+    cfg.default_organization = selection.organization.clone();
+    cfg.default_project = selection.project.clone();
     if cfg.url.is_none() && base_url != "https://app.rawtree.dev" {
         cfg.url = Some(base_url.to_string());
     }
 }
 
-fn resolve_default_organization(base_url: &str, token: &str) -> Option<String> {
-    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
-    org::first_organization_name(&authed_client)
+fn organization_by_name<'a>(
+    organizations: &'a [org::OrganizationItem],
+    name: &str,
+) -> Option<&'a org::OrganizationItem> {
+    organizations
+        .iter()
+        .find(|item| item.organization_name == name)
 }
 
-fn update_and_save_config(client: &ApiClient, resp: &AuthResponse) -> Result<()> {
+fn select_organization(
+    organizations: &[org::OrganizationItem],
+    cli_org: Option<&str>,
+    env_org: Option<&str>,
+    cfg_org: Option<&str>,
+) -> Result<Option<org::OrganizationItem>> {
+    if let Some(name) = cli_org {
+        return organization_by_name(organizations, name)
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| anyhow::anyhow!("Organization '{}' not found for current user.", name));
+    }
+
+    if let Some(name) = env_org {
+        if let Some(found) = organization_by_name(organizations, name) {
+            return Ok(Some(found.clone()));
+        }
+    }
+
+    if let Some(name) = cfg_org {
+        if let Some(found) = organization_by_name(organizations, name) {
+            return Ok(Some(found.clone()));
+        }
+    }
+
+    Ok(organizations.first().cloned())
+}
+
+fn select_project(
+    project_names: &[String],
+    selected_org: &str,
+    cli_project: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(name) = cli_project {
+        return project_names
+            .iter()
+            .find(|project| project.as_str() == name)
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Project '{}' not found in organization '{}'.",
+                    name,
+                    selected_org
+                )
+            });
+    }
+
+    Ok(project_names.first().cloned())
+}
+
+fn resolve_selected_project(
+    project_names_result: Result<Vec<String>>,
+    selected_org: &str,
+    cli_project: Option<&str>,
+) -> Result<Option<String>> {
+    match project_names_result {
+        Ok(project_names) => select_project(&project_names, selected_org, cli_project),
+        Err(err) if cli_project.is_some() => Err(err),
+        Err(_err) => Ok(None),
+    }
+}
+
+fn list_projects_for_organization(
+    client: &ApiClient,
+    organization_id: &str,
+) -> Result<Vec<String>> {
+    let path = format!(
+        "/v1/projects?organization_id={}",
+        urlencoding::encode(organization_id)
+    );
+    let resp: ListProjectsResponse = client.get(&path)?;
+    Ok(resp
+        .projects
+        .into_iter()
+        .map(|item| item.project_name)
+        .collect())
+}
+
+fn resolve_auth_selection(
+    base_url: &str,
+    token: &str,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+    env_org: Option<&str>,
+    cfg_org: Option<&str>,
+) -> Result<AuthSelection> {
+    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
+    let organizations = match org::list_organizations(&authed_client) {
+        Ok(items) => items,
+        Err(err) => {
+            if cli_org.is_some() || cli_project.is_some() {
+                return Err(err.context("failed to list organizations for auth-time selection"));
+            }
+            return Ok(AuthSelection::default());
+        }
+    };
+
+    let selected_org = select_organization(&organizations, cli_org, env_org, cfg_org)?;
+    let selected_org = match selected_org {
+        Some(item) => item,
+        None => {
+            if let Some(project_name) = cli_project {
+                anyhow::bail!(
+                    "Cannot select project '{}' because no organization is available.",
+                    project_name
+                );
+            }
+            return Ok(AuthSelection::default());
+        }
+    };
+
+    let selected_project = resolve_selected_project(
+        list_projects_for_organization(&authed_client, &selected_org.organization_id).with_context(
+            || {
+                format!(
+                    "failed to list projects for organization '{}'",
+                    selected_org.organization_name
+                )
+            },
+        ),
+        &selected_org.organization_name,
+        cli_project,
+    )?;
+
+    Ok(AuthSelection {
+        organization: Some(selected_org.organization_name),
+        project: selected_project,
+    })
+}
+
+fn update_and_save_config(
+    client: &ApiClient,
+    resp: &AuthResponse,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+) -> Result<AuthSelection> {
     let mut cfg = config::load()?;
-    let default_organization = resolve_default_organization(&client.base_url, &resp.token);
-    apply_auth_config(&mut cfg, &client.base_url, resp, default_organization);
+    let env_org = std::env::var("RAWTREE_ORG").ok();
+    let selection = resolve_auth_selection(
+        &client.base_url,
+        &resp.token,
+        cli_org,
+        cli_project,
+        env_org.as_deref(),
+        cfg.default_organization.as_deref(),
+    )?;
+    apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
     config::save(&cfg)?;
-    Ok(())
+    Ok(selection)
+}
+
+fn print_selected_context(selection: &AuthSelection) {
+    match &selection.organization {
+        Some(org_name) => println!("Selected organization: {}", org_name),
+        None => println!("Selected organization: none"),
+    }
+    match &selection.project {
+        Some(project_name) => println!("Selected project: {}", project_name),
+        None => {
+            println!("Selected project: none");
+            eprintln!(
+                "Warning: No default project selected. Create one with `rtree project create <name>`."
+            );
+        }
+    }
 }
 
 fn clear_auth_config(cfg: &mut config::Config) {
@@ -79,34 +260,70 @@ fn clear_auth_config(cfg: &mut config::Config) {
     cfg.default_organization = None;
 }
 
-pub fn register(client: &ApiClient, email: &str, password: &str, json_mode: bool) -> Result<()> {
+pub fn register(
+    client: &ApiClient,
+    email: &str,
+    password: &str,
+    organization: Option<String>,
+    project: Option<String>,
+    json_mode: bool,
+) -> Result<()> {
     let resp: AuthResponse = client.post(
         "/v1/auth/register",
         &json!({"email": email, "password": password}),
     )?;
 
-    update_and_save_config(client, &resp)?;
+    let selection =
+        update_and_save_config(client, &resp, organization.as_deref(), project.as_deref())?;
+    let selected_organization = selection.organization.clone();
+    let selected_project = selection.project.clone();
 
     output::print_result(
-        &json!({"email": resp.email, "status": "registered"}),
+        &json!({
+            "email": resp.email,
+            "status": "registered",
+            "selected_organization": selected_organization,
+            "selected_project": selected_project,
+        }),
         json_mode,
-        |_| println!("Registered and logged in as {}.", resp.email),
+        |_| {
+            println!("Registered and logged in as {}.", resp.email);
+            print_selected_context(&selection);
+        },
     );
     Ok(())
 }
 
-pub fn login(client: &ApiClient, email: &str, password: &str, json_mode: bool) -> Result<()> {
+pub fn login(
+    client: &ApiClient,
+    email: &str,
+    password: &str,
+    organization: Option<String>,
+    project: Option<String>,
+    json_mode: bool,
+) -> Result<()> {
     let resp: AuthResponse = client.post(
         "/v1/auth/login",
         &json!({"email": email, "password": password}),
     )?;
 
-    update_and_save_config(client, &resp)?;
+    let selection =
+        update_and_save_config(client, &resp, organization.as_deref(), project.as_deref())?;
+    let selected_organization = selection.organization.clone();
+    let selected_project = selection.project.clone();
 
     output::print_result(
-        &json!({"email": resp.email, "status": "logged_in"}),
+        &json!({
+            "email": resp.email,
+            "status": "logged_in",
+            "selected_organization": selected_organization,
+            "selected_project": selected_project,
+        }),
         json_mode,
-        |_| println!("Logged in as {}.", resp.email),
+        |_| {
+            println!("Logged in as {}.", resp.email);
+            print_selected_context(&selection);
+        },
     );
     Ok(())
 }
@@ -170,6 +387,8 @@ pub fn login_with_browser(
     client: &ApiClient,
     no_browser: bool,
     timeout_seconds: u64,
+    organization: Option<String>,
+    project: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     let start: CliDeviceStartResponse = client.post("/v1/auth/cli/device/start", &json!({}))?;
@@ -209,11 +428,27 @@ pub fn login_with_browser(
                     email,
                 } = resp;
                 let auth = AuthResponse { token, email };
-                update_and_save_config(client, &auth)?;
+                let selection = update_and_save_config(
+                    client,
+                    &auth,
+                    organization.as_deref(),
+                    project.as_deref(),
+                )?;
+                let selected_organization = selection.organization.clone();
+                let selected_project = selection.project.clone();
                 output::print_result(
-                    &json!({"email": auth.email, "status": "logged_in", "method": "browser"}),
+                    &json!({
+                        "email": auth.email,
+                        "status": "logged_in",
+                        "method": "browser",
+                        "selected_organization": selected_organization,
+                        "selected_project": selected_project,
+                    }),
                     json_mode,
-                    |_| println!("Logged in as {}.", auth.email),
+                    |_| {
+                        println!("Logged in as {}.", auth.email);
+                        print_selected_context(&selection);
+                    },
                 );
                 return Ok(());
             }
@@ -243,8 +478,12 @@ pub fn logout(json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_auth_config, clear_auth_config, effective_timeout_seconds, AuthResponse};
+    use super::{
+        apply_auth_config, clear_auth_config, effective_timeout_seconds, resolve_selected_project,
+        select_organization, select_project, AuthResponse, AuthSelection,
+    };
     use crate::config::Config;
+    use crate::org::OrganizationItem;
 
     fn sample_auth_response() -> AuthResponse {
         AuthResponse {
@@ -253,32 +492,141 @@ mod tests {
         }
     }
 
+    fn sample_org(organization_id: &str, organization_name: &str) -> OrganizationItem {
+        OrganizationItem {
+            organization_id: organization_id.to_string(),
+            organization_name: organization_name.to_string(),
+            role: "owner".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
     #[test]
-    fn apply_auth_config_sets_default_organization() {
+    fn apply_auth_config_sets_default_organization_and_project() {
         let mut cfg = Config::default();
         let resp = sample_auth_response();
+        let selection = AuthSelection {
+            organization: Some("team_alpha".to_string()),
+            project: Some("analytics".to_string()),
+        };
         apply_auth_config(
             &mut cfg,
             "https://api.us-east-1.aws.rawtree.com",
             &resp,
-            Some("team_alpha".to_string()),
+            &selection,
         );
 
         assert_eq!(cfg.token.as_deref(), Some("jwt"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
+        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
     }
 
     #[test]
-    fn apply_auth_config_clears_default_organization_when_missing() {
+    fn apply_auth_config_clears_default_selection_when_missing() {
         let mut cfg = Config {
+            default_project: Some("old_project".to_string()),
             default_organization: Some("old_team".to_string()),
             ..Config::default()
         };
         let resp = sample_auth_response();
-        apply_auth_config(&mut cfg, "https://api.us-east-1.aws.rawtree.com", &resp, None);
+        let selection = AuthSelection::default();
+        apply_auth_config(
+            &mut cfg,
+            "https://api.us-east-1.aws.rawtree.com",
+            &resp,
+            &selection,
+        );
 
         assert_eq!(cfg.default_organization, None);
+        assert_eq!(cfg.default_project, None);
+    }
+
+    #[test]
+    fn select_organization_uses_cli_when_present() {
+        let organizations = vec![sample_org("1", "team_alpha"), sample_org("2", "team_beta")];
+        let selected = select_organization(
+            &organizations,
+            Some("team_beta"),
+            Some("team_alpha"),
+            Some("team_alpha"),
+        )
+        .expect("selection should succeed")
+        .expect("organization should be selected");
+
+        assert_eq!(selected.organization_name, "team_beta");
+    }
+
+    #[test]
+    fn select_organization_errors_for_unknown_cli_org() {
+        let organizations = vec![sample_org("1", "team_alpha")];
+        let result = select_organization(&organizations, Some("missing"), None, None);
+        assert!(result.is_err(), "unknown CLI org should fail");
+    }
+
+    #[test]
+    fn select_organization_uses_env_then_cfg_then_first() {
+        let organizations = vec![sample_org("1", "team_alpha"), sample_org("2", "team_beta")];
+
+        let env_selected = select_organization(&organizations, None, Some("team_beta"), None)
+            .expect("env selection should succeed")
+            .expect("organization should exist");
+        assert_eq!(env_selected.organization_name, "team_beta");
+
+        let cfg_selected =
+            select_organization(&organizations, None, Some("missing"), Some("team_beta"))
+                .expect("cfg selection should succeed")
+                .expect("organization should exist");
+        assert_eq!(cfg_selected.organization_name, "team_beta");
+
+        let first_selected =
+            select_organization(&organizations, None, Some("missing"), Some("also_missing"))
+                .expect("fallback selection should succeed")
+                .expect("organization should exist");
+        assert_eq!(first_selected.organization_name, "team_alpha");
+    }
+
+    #[test]
+    fn select_project_prefers_cli_and_fails_when_unknown() {
+        let projects = vec!["analytics".to_string(), "billing".to_string()];
+
+        let selected = select_project(&projects, "team_alpha", Some("billing"))
+            .expect("selection should succeed")
+            .expect("project should exist");
+        assert_eq!(selected, "billing");
+
+        let err = select_project(&projects, "team_alpha", Some("missing"));
+        assert!(err.is_err(), "unknown CLI project should fail");
+    }
+
+    #[test]
+    fn select_project_defaults_to_first_when_cli_missing() {
+        let projects = vec!["analytics".to_string(), "billing".to_string()];
+        let selected = select_project(&projects, "team_alpha", None)
+            .expect("selection should succeed")
+            .expect("first project should be selected");
+        assert_eq!(selected, "analytics");
+    }
+
+    #[test]
+    fn resolve_selected_project_tolerates_fetch_errors_when_cli_project_missing() {
+        let result = resolve_selected_project(
+            Err(anyhow::anyhow!("failed to list projects")),
+            "team_alpha",
+            None,
+        )
+        .expect("implicit selection should not fail");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_selected_project_fails_on_fetch_errors_when_cli_project_provided() {
+        let result = resolve_selected_project(
+            Err(anyhow::anyhow!("failed to list projects")),
+            "team_alpha",
+            Some("analytics"),
+        );
+        assert!(result.is_err(), "explicit project should remain strict");
     }
 
     #[test]

@@ -58,6 +58,10 @@ rtree open
 
 - Browser-based (default): `rtree login`
 - Email/password: `rtree login --email you@example.com --password '***'`
+- Select defaults during auth: `rtree login --org team-alpha --project analytics`
+
+After `login` or `register`, the CLI prints the selected organization and project.
+If `--project` is omitted, it selects the first project in the selected organization.
 
 ### Token resolution
 
