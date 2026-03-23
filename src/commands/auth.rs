@@ -256,7 +256,9 @@ fn print_selected_context(selection: &AuthSelection) {
 }
 
 fn clear_auth_config(cfg: &mut config::Config) {
+    let preserved_url = cfg.url.clone();
     *cfg = config::Config::default();
+    cfg.url = preserved_url;
 }
 
 pub fn register(
@@ -645,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_auth_config_removes_all_saved_auth_state() {
+    fn clear_auth_config_removes_auth_state_but_preserves_url() {
         let mut cfg = Config {
             token: Some("rw_temp".to_string()),
             email: Some("user@example.com".to_string()),
@@ -660,7 +662,10 @@ mod tests {
 
         assert_eq!(cfg.token, None);
         assert_eq!(cfg.email, None);
-        assert_eq!(cfg.url, None);
+        assert_eq!(
+            cfg.url.as_deref(),
+            Some("https://api.us-east-1.aws.rawtree.com")
+        );
         assert_eq!(cfg.default_project, None);
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.last_claim_token, None);
