@@ -11,6 +11,8 @@ use crate::config;
 use crate::org;
 use crate::output;
 
+const DEFAULT_API_URL: &str = "https://api.us-east-1.aws.rawtree.com";
+
 #[derive(Deserialize)]
 struct AuthResponse {
     token: String,
@@ -72,7 +74,7 @@ fn apply_auth_config(
     cfg.email = Some(resp.email.clone());
     cfg.default_organization = selection.organization.clone();
     cfg.default_project = selection.project.clone();
-    if cfg.url.is_none() && base_url != "https://app.rawtree.dev" {
+    if cfg.url.is_none() && base_url != DEFAULT_API_URL {
         cfg.url = Some(base_url.to_string());
     }
 }
@@ -518,6 +520,22 @@ mod tests {
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
         assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.url, None);
+    }
+
+    #[test]
+    fn apply_auth_config_sets_url_when_using_non_default_api_url() {
+        let mut cfg = Config::default();
+        let resp = sample_auth_response();
+        let selection = AuthSelection::default();
+        apply_auth_config(
+            &mut cfg,
+            "https://staging.rawtree.dev",
+            &resp,
+            &selection,
+        );
+
+        assert_eq!(cfg.url.as_deref(), Some("https://staging.rawtree.dev"));
     }
 
     #[test]
