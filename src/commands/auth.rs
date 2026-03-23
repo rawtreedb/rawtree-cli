@@ -255,9 +255,7 @@ fn print_selected_context(selection: &AuthSelection) {
 }
 
 fn clear_auth_config(cfg: &mut config::Config) {
-    cfg.token = None;
-    cfg.email = None;
-    cfg.default_organization = None;
+    *cfg = config::Config::default();
 }
 
 pub fn register(
@@ -630,11 +628,14 @@ mod tests {
     }
 
     #[test]
-    fn clear_auth_config_removes_local_credentials() {
+    fn clear_auth_config_removes_all_saved_auth_state() {
         let mut cfg = Config {
             token: Some("rw_temp".to_string()),
             email: Some("user@example.com".to_string()),
+            url: Some("https://api.us-east-1.aws.rawtree.com".to_string()),
+            default_project: Some("analytics".to_string()),
             default_organization: Some("team_alpha".to_string()),
+            last_claim_token: Some("claim_abc".to_string()),
             ..Config::default()
         };
 
@@ -642,7 +643,10 @@ mod tests {
 
         assert_eq!(cfg.token, None);
         assert_eq!(cfg.email, None);
+        assert_eq!(cfg.url, None);
+        assert_eq!(cfg.default_project, None);
         assert_eq!(cfg.default_organization, None);
+        assert_eq!(cfg.last_claim_token, None);
     }
 
     #[test]
