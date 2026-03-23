@@ -2,6 +2,7 @@ mod cli;
 mod client;
 mod commands;
 mod config;
+mod constants;
 mod org;
 mod output;
 
@@ -15,6 +16,7 @@ use cli::{
     Cli, Command, KeysCommand, OrganizationCommand, ProjectCommand, ShellType, TableCommand,
 };
 use client::ApiClient;
+use constants::DEFAULT_API_URL;
 
 fn resolve_url(cli_url: Option<&str>) -> String {
     if let Some(url) = cli_url {
@@ -28,7 +30,7 @@ fn resolve_url(cli_url: Option<&str>) -> String {
             return url;
         }
     }
-    "https://api.us-east-1.aws.rawtree.com".to_string()
+    DEFAULT_API_URL.to_string()
 }
 
 fn resolve_token() -> Option<String> {

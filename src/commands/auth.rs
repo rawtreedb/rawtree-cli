@@ -8,10 +8,9 @@ use serde_json::json;
 
 use crate::client::ApiClient;
 use crate::config;
+use crate::constants::DEFAULT_API_URL;
 use crate::org;
 use crate::output;
-
-const DEFAULT_API_URL: &str = "https://api.us-east-1.aws.rawtree.com";
 
 #[derive(Deserialize)]
 struct AuthResponse {
