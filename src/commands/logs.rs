@@ -68,16 +68,24 @@ fn resolve_time_range(
 ) -> Result<(String, String)> {
     let now = Utc::now();
 
-    // Absolute timestamps mode (pass through as-is, user is responsible for format)
+    // Absolute timestamps mode
     if start_time.is_some() || end_time.is_some() {
-        let start = start_time.map(|s| s.to_string()).unwrap_or_else(|| {
-            (now - chrono::Duration::hours(24))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string()
-        });
         let end = end_time
             .map(|s| s.to_string())
             .unwrap_or_else(|| now.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+        let start = start_time.map(|s| s.to_string()).unwrap_or_else(|| {
+            // Default to 24h before end_time, not 24h before now
+            chrono::DateTime::parse_from_rfc3339(&end)
+                .map(|dt| (dt - chrono::Duration::hours(24)).format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .unwrap_or_else(|_| {
+                    (now - chrono::Duration::hours(24))
+                        .format("%Y-%m-%dT%H:%M:%SZ")
+                        .to_string()
+                })
+        });
+        if start > end {
+            bail!("invalid time range: --start-time ({}) is after --end-time ({})", start, end);
+        }
         return Ok((start, end));
     }
 
