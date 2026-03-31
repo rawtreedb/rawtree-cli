@@ -91,6 +91,14 @@ fn resolve_time_range(
         None => chrono::Duration::zero(),
     };
 
+    if since_delta < until_delta {
+        bail!(
+            "invalid time range: --since ({}) must be greater than --until ({})",
+            since.unwrap_or("24h"),
+            until.unwrap_or("0")
+        );
+    }
+
     let start = (now - since_delta)
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
