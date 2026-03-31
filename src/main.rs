@@ -390,7 +390,6 @@ fn run(cli: Cli) -> Result<()> {
             until,
             start_time,
             end_time,
-            follow,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             let project = resolve_project(project)?;
@@ -407,7 +406,6 @@ fn run(cli: Cli) -> Result<()> {
                 until.as_deref(),
                 start_time.as_deref(),
                 end_time.as_deref(),
-                follow,
                 json,
             )
         }

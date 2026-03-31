@@ -1,7 +1,3 @@
-use std::collections::HashSet;
-use std::thread;
-use std::time::Duration;
-
 use anyhow::{bail, Result};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -225,21 +221,8 @@ pub fn logs(
     until: Option<&str>,
     start_time: Option<&str>,
     end_time: Option<&str>,
-    follow: bool,
     json_mode: bool,
 ) -> Result<()> {
-    if follow {
-        return follow_logs(
-            client,
-            project,
-            organization,
-            log_type,
-            table,
-            status,
-            json_mode,
-        );
-    }
-
     let (resolved_start, resolved_end) = resolve_time_range(since, until, start_time, end_time)?;
 
     let resp = fetch_logs(
@@ -272,64 +255,6 @@ pub fn logs(
     });
 
     Ok(())
-}
-
-fn follow_logs(
-    client: &ApiClient,
-    project: &str,
-    organization: Option<&str>,
-    log_type: Option<&str>,
-    table: Option<&str>,
-    status: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let poll_limit: u64 = 100;
-
-    // First poll: look back 2 minutes
-    let mut start_from = Local::now() - chrono::Duration::minutes(2);
-
-    loop {
-        let start_time = start_from.format("%Y-%m-%d %H:%M:%S").to_string();
-        let now = Local::now();
-        let end_time = now.format("%Y-%m-%d %H:%M:%S").to_string();
-
-        match fetch_logs(
-            client,
-            project,
-            organization,
-            &start_time,
-            &end_time,
-            log_type,
-            table,
-            status,
-            poll_limit,
-            0,
-        ) {
-            Ok(resp) => {
-                let mut current_ids: HashSet<String> = HashSet::new();
-                for entry in &resp.logs {
-                    current_ids.insert(entry.query_id.clone());
-                    if seen.insert(entry.query_id.clone()) {
-                        if json_mode {
-                            println!("{}", serde_json::to_string(entry).unwrap());
-                        } else {
-                            println!("{}", format_log_line(entry));
-                        }
-                    }
-                }
-                // Only keep IDs from the current poll (they may reappear due to overlap)
-                seen.retain(|id| current_ids.contains(id));
-                // Next poll overlaps by 5 seconds to catch stragglers
-                start_from = now - chrono::Duration::seconds(5);
-            }
-            Err(e) => {
-                eprintln!("Error fetching logs: {:#}", e);
-            }
-        }
-
-        thread::sleep(Duration::from_secs(2));
-    }
 }
 
 #[cfg(test)]
