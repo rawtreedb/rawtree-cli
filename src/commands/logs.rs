@@ -44,6 +44,10 @@ fn parse_duration(s: &str) -> Result<chrono::Duration> {
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s))?;
 
+    if num <= 0 {
+        bail!("invalid duration '{}'. Duration must be a positive number (e.g., 1h, 30m)", s);
+    }
+
     match unit {
         "m" => Ok(chrono::Duration::minutes(num)),
         "h" => Ok(chrono::Duration::hours(num)),
@@ -167,7 +171,7 @@ fn format_log_line(entry: &LogEntry) -> String {
     } else {
         &entry.time
     };
-    let status_str = if entry.status == "OK" { "OK" } else { "ERR" };
+    let status_str = if entry.status.eq_ignore_ascii_case("OK") { "OK" } else { "ERR" };
     let query = truncate_query(&entry.query, 80);
     let bytes = format_bytes(entry.bytes);
 

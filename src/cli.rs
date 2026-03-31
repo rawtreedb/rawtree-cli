@@ -85,7 +85,7 @@ pub enum Command {
         #[arg(long)]
         status: Option<String>,
         /// Maximum number of log entries to return (default: 50, max: 200)
-        #[arg(long, default_value = "50")]
+        #[arg(long, default_value = "50", value_parser = clap::value_parser!(u64).range(1..=200))]
         limit: u64,
         /// Offset for pagination
         #[arg(long, default_value = "0")]
