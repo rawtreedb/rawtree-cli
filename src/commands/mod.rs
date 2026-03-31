@@ -3,6 +3,7 @@ pub mod docs;
 pub mod export;
 pub mod insert;
 pub mod keys;
+pub mod logs;
 pub mod open;
 pub mod organization;
 pub mod ping;

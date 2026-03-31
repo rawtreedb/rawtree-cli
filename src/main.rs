@@ -379,6 +379,38 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Logs {
+            project,
+            r#type,
+            table,
+            status,
+            limit,
+            offset,
+            since,
+            until,
+            start_time,
+            end_time,
+            follow,
+        } => {
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            let project = resolve_project(project)?;
+            commands::logs::logs(
+                &client,
+                &project,
+                effective_org.as_deref(),
+                r#type.as_deref(),
+                table.as_deref(),
+                status.as_deref(),
+                limit,
+                offset,
+                since.as_deref(),
+                until.as_deref(),
+                start_time.as_deref(),
+                end_time.as_deref(),
+                follow,
+                json,
+            )
+        }
         Command::Query {
             project,
             sql,

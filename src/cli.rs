@@ -71,6 +71,41 @@ pub enum Command {
         #[command(subcommand)]
         action: TableCommand,
     },
+    /// View query logs for a project
+    Logs {
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by query type: select or insert
+        #[arg(long)]
+        r#type: Option<String>,
+        /// Filter by table name
+        #[arg(long)]
+        table: Option<String>,
+        /// Filter by status: success or error
+        #[arg(long)]
+        status: Option<String>,
+        /// Maximum number of log entries to return (default: 50, max: 200)
+        #[arg(long, default_value = "50")]
+        limit: u64,
+        /// Offset for pagination
+        #[arg(long, default_value = "0", conflicts_with = "follow")]
+        offset: u64,
+        /// Show logs from the last duration (e.g., 1h, 30m, 7d, 2w)
+        #[arg(long, conflicts_with_all = ["start_time", "end_time", "follow"])]
+        since: Option<String>,
+        /// Show logs until this duration ago (e.g., 30m)
+        #[arg(long, conflicts_with_all = ["start_time", "end_time", "follow"])]
+        until: Option<String>,
+        /// Start time (e.g., "2026-03-28 18:00:00")
+        #[arg(long, conflicts_with_all = ["since", "until", "follow"])]
+        start_time: Option<String>,
+        /// End time (e.g., "2026-03-28 19:00:00")
+        #[arg(long, conflicts_with_all = ["since", "until", "follow"])]
+        end_time: Option<String>,
+        /// Continuously poll for new logs every 2 seconds
+        #[arg(long, short = 'f', conflicts_with_all = ["offset", "start_time", "end_time", "since", "until"])]
+        follow: bool,
+    },
     /// Execute a SQL query against a project
     Query {
         #[arg(long)]
