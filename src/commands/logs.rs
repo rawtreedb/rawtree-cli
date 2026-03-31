@@ -40,7 +40,10 @@ fn parse_duration(s: &str) -> Result<chrono::Duration> {
         bail!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s);
     }
 
-    let (num_str, unit) = s.split_at(s.len() - 1);
+    let (num_str, unit) = match s.char_indices().next_back() {
+        Some((i, _)) => s.split_at(i),
+        None => bail!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s),
+    };
     let num: i64 = num_str
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s))?;
@@ -132,7 +135,11 @@ fn truncate_query(query: &str, max_len: usize) -> String {
     if normalized.len() <= max_len {
         normalized
     } else {
-        format!("{}...", &normalized[..max_len - 3])
+        let mut end = max_len - 3;
+        while !normalized.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &normalized[..end])
     }
 }
 
@@ -292,7 +299,9 @@ fn follow_logs(
             0,
         ) {
             Ok(resp) => {
+                let mut current_ids: HashSet<String> = HashSet::new();
                 for entry in &resp.logs {
+                    current_ids.insert(entry.query_id.clone());
                     if seen.insert(entry.query_id.clone()) {
                         if json_mode {
                             println!("{}", serde_json::to_string(entry).unwrap());
@@ -301,6 +310,8 @@ fn follow_logs(
                         }
                     }
                 }
+                // Only keep IDs from the current poll (they may reappear due to overlap)
+                seen.retain(|id| current_ids.contains(id));
                 // Next poll overlaps by 5 seconds to catch stragglers
                 start_from = now - chrono::Duration::seconds(5);
             }
