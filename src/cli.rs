@@ -71,6 +71,38 @@ pub enum Command {
         #[command(subcommand)]
         action: TableCommand,
     },
+    /// View query logs for a project
+    Logs {
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by query type: select or insert
+        #[arg(long)]
+        r#type: Option<String>,
+        /// Filter by table name
+        #[arg(long)]
+        table: Option<String>,
+        /// Filter by status: success or error
+        #[arg(long)]
+        status: Option<String>,
+        /// Maximum number of log entries to return (default: 50, max: 200)
+        #[arg(long, default_value = "50", value_parser = clap::value_parser!(u64).range(1..=200))]
+        limit: u64,
+        /// Offset for pagination
+        #[arg(long, default_value = "0")]
+        offset: u64,
+        /// Show logs from the last duration (e.g., 1h, 30m, 7d, 2w)
+        #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
+        since: Option<String>,
+        /// Show logs until this duration ago (e.g., 30m)
+        #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
+        until: Option<String>,
+        /// Start time in UTC (e.g., "2026-03-28T18:00:00Z")
+        #[arg(long, conflicts_with_all = ["since", "until"])]
+        start_time: Option<String>,
+        /// End time in UTC (e.g., "2026-03-28T19:00:00Z")
+        #[arg(long, conflicts_with_all = ["since", "until"])]
+        end_time: Option<String>,
+    },
     /// Execute a SQL query against a project
     Query {
         #[arg(long)]
