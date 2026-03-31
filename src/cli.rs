@@ -85,7 +85,7 @@ pub enum Command {
         #[arg(long)]
         status: Option<String>,
         /// Maximum number of log entries to return (default: 50, max: 200)
-        #[arg(long, default_value = "50")]
+        #[arg(long, default_value = "50", conflicts_with = "follow")]
         limit: u64,
         /// Offset for pagination
         #[arg(long, default_value = "0", conflicts_with = "follow")]
@@ -103,7 +103,7 @@ pub enum Command {
         #[arg(long, conflicts_with_all = ["since", "until", "follow"])]
         end_time: Option<String>,
         /// Continuously poll for new logs every 2 seconds
-        #[arg(long, short = 'f', conflicts_with_all = ["offset", "start_time", "end_time", "since", "until"])]
+        #[arg(long, short = 'f', conflicts_with_all = ["limit", "offset", "start_time", "end_time", "since", "until"])]
         follow: bool,
     },
     /// Execute a SQL query against a project
