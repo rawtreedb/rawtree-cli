@@ -242,10 +242,6 @@ pub fn logs(
         if resp.logs.is_empty() {
             println!("No logs found for the specified time range.");
         } else {
-            println!(
-                "{:<19}  {:<6}  {:<3}  {:>7}  {:>10}  {:>8}  {}",
-                "TIME", "TYPE", "ST", "DUR", "ROWS", "SIZE", "QUERY"
-            );
             for entry in &resp.logs {
                 println!("{}", format_log_line(entry));
             }
