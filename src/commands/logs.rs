@@ -171,12 +171,12 @@ fn format_log_line(entry: &LogEntry) -> String {
     } else {
         &entry.time
     };
-    let status_str = if entry.status.eq_ignore_ascii_case("OK") { "OK" } else { "ERR" };
+    let status_str = if entry.status.eq_ignore_ascii_case("OK") { "OK" } else { "ERROR" };
     let query = truncate_query(&entry.query, 80);
     let bytes = format_bytes(entry.bytes);
 
     let mut line = format!(
-        "{}  {:<6}  {:<3}  {:>7}  {:>10}  {:>8}  {}",
+        "{}  {:<6}  {:<5}  {:>7}  {:>10}  {:>8}  {}",
         time,
         entry.log_type,
         status_str,
@@ -438,7 +438,7 @@ mod tests {
             hints: vec![],
         };
         let line = format_log_line(&entry);
-        assert!(line.contains("ERR"));
+        assert!(line.contains("ERROR"));
         assert!(line.contains("[Table nonexistent doesn't exist]"));
     }
 }
