@@ -96,10 +96,10 @@ pub enum Command {
         /// Show logs until this duration ago (e.g., 30m)
         #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
         until: Option<String>,
-        /// Start time (e.g., "2026-03-28 18:00:00")
+        /// Start time in UTC (e.g., "2026-03-28T18:00:00Z")
         #[arg(long, conflicts_with_all = ["since", "until"])]
         start_time: Option<String>,
-        /// End time (e.g., "2026-03-28 19:00:00")
+        /// End time in UTC (e.g., "2026-03-28T19:00:00Z")
         #[arg(long, conflicts_with_all = ["since", "until"])]
         end_time: Option<String>,
     },
