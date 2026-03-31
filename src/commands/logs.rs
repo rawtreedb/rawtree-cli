@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use chrono::Local;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::client::ApiClient;
@@ -62,18 +62,18 @@ fn resolve_time_range(
     start_time: Option<&str>,
     end_time: Option<&str>,
 ) -> Result<(String, String)> {
-    let now = Local::now();
+    let now = Utc::now();
 
-    // Absolute timestamps mode
+    // Absolute timestamps mode (pass through as-is, user is responsible for format)
     if start_time.is_some() || end_time.is_some() {
         let start = start_time.map(|s| s.to_string()).unwrap_or_else(|| {
             (now - chrono::Duration::hours(24))
-                .format("%Y-%m-%d %H:%M:%S")
+                .format("%Y-%m-%dT%H:%M:%SZ")
                 .to_string()
         });
         let end = end_time
             .map(|s| s.to_string())
-            .unwrap_or_else(|| now.format("%Y-%m-%d %H:%M:%S").to_string());
+            .unwrap_or_else(|| now.format("%Y-%m-%dT%H:%M:%SZ").to_string());
         return Ok((start, end));
     }
 
@@ -96,10 +96,10 @@ fn resolve_time_range(
     }
 
     let start = (now - since_delta)
-        .format("%Y-%m-%d %H:%M:%S")
+        .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
     let end = (now - until_delta)
-        .format("%Y-%m-%d %H:%M:%S")
+        .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
     Ok((start, end))
@@ -366,9 +366,9 @@ mod tests {
     #[test]
     fn resolve_time_range_defaults_to_24h() {
         let (start, end) = resolve_time_range(None, None, None, None).unwrap();
-        // Both should be valid timestamps
-        assert_eq!(start.len(), 19);
-        assert_eq!(end.len(), 19);
+        // Both should be valid UTC timestamps ending with Z
+        assert!(start.ends_with('Z'));
+        assert!(end.ends_with('Z'));
         // Start should be before end
         assert!(start < end);
     }
@@ -385,8 +385,8 @@ mod tests {
     #[test]
     fn resolve_time_range_since_only() {
         let (start, end) = resolve_time_range(Some("1h"), None, None, None).unwrap();
-        assert_eq!(start.len(), 19);
-        assert_eq!(end.len(), 19);
+        assert!(start.ends_with('Z'));
+        assert!(end.ends_with('Z'));
         assert!(start < end);
     }
 
