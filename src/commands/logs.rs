@@ -27,7 +27,7 @@ pub struct LogEntry {
 pub struct LogsResponse {
     pub logs: Vec<LogEntry>,
     pub has_more: bool,
-    pub next_offset: u64,
+    pub next_offset: Option<u64>,
 }
 
 fn parse_duration(s: &str) -> Result<chrono::Duration> {
@@ -260,7 +260,7 @@ pub fn logs(
             if resp.has_more {
                 println!(
                     "\n... more logs available (use --offset {} to continue)",
-                    resp.next_offset
+                    resp.next_offset.unwrap_or(0)
                 );
             }
         }
