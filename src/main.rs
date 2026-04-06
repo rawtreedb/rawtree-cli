@@ -254,7 +254,6 @@ fn run(cli: Cli) -> Result<()> {
         json,
         org: cli_org,
         command,
-        ..
     } = cli;
 
     let url = resolve_url(cli_url.as_deref());
