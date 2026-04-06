@@ -1,7 +1,19 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[command(name = "rtree", about = "CLI for the RawTree analytics platform")]
+#[command(
+    name = "rtree",
+    version,
+    disable_version_flag = true,
+    arg(
+        clap::Arg::new("version")
+            .short('v')
+            .long("version")
+            .help("Output the current version")
+            .action(clap::ArgAction::Version)
+    ),
+    about = "CLI for the RawTree analytics platform"
+)]
 pub struct Cli {
     /// API URL (overrides RAWTREE_URL env and config file)
     #[arg(long, global = true)]
@@ -300,7 +312,23 @@ pub enum TableCommand {
 #[cfg(test)]
 mod tests {
     use super::{Cli, Command};
-    use clap::Parser;
+    use clap::{error::ErrorKind, CommandFactory, Parser};
+
+    #[test]
+    fn root_command_exposes_version_flag() {
+        let command = Cli::command();
+        assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn lowercase_v_triggers_version_output() {
+        let err = match Cli::try_parse_from(["rtree", "-v"]) {
+            Ok(_) => panic!("-v should print version"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
+        assert!(err.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
 
     #[test]
     fn login_without_email_is_allowed_for_browser_flow() {
