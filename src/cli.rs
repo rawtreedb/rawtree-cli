@@ -5,13 +5,16 @@ use clap::{Parser, Subcommand, ValueEnum};
     name = "rtree",
     version,
     disable_version_flag = true,
+    arg(
+        clap::Arg::new("version")
+            .short('v')
+            .long("version")
+            .help("Output the current version")
+            .action(clap::ArgAction::Version)
+    ),
     about = "CLI for the RawTree analytics platform"
 )]
 pub struct Cli {
-    /// Output the current version
-    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version, global = true)]
-    pub version: bool,
-
     /// API URL (overrides RAWTREE_URL env and config file)
     #[arg(long, global = true)]
     pub api_url: Option<String>,
