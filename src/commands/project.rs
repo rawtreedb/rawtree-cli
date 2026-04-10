@@ -9,8 +9,12 @@ use crate::output;
 
 #[derive(Deserialize)]
 struct ProjectItem {
-    project_name: String,
-    organization_id: String,
+    #[serde(alias = "project_name")]
+    name: String,
+    #[serde(default)]
+    organization_name: Option<String>,
+    #[serde(default)]
+    organization_id: Option<String>,
     created_at: String,
 }
 
@@ -21,7 +25,8 @@ struct ListProjectsResponse {
 
 #[derive(Deserialize)]
 struct CreateProjectResponse {
-    project: String,
+    #[serde(alias = "project")]
+    name: String,
     api_key: String,
     organization_name: Option<String>,
     #[serde(default)]
@@ -55,7 +60,7 @@ fn is_temporary_project(resp: &CreateProjectResponse) -> bool {
 
 fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
     let is_temporary = is_temporary_project(resp);
-    cfg.default_project = Some(resp.project.clone());
+    cfg.default_project = Some(resp.name.clone());
     cfg.last_claim_token = resp.claim_token.clone();
 
     if is_temporary {
@@ -119,7 +124,8 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
     output::print_result(
         &json!({
             "projects": resp.projects.iter().map(|p| json!({
-                "project_name": p.project_name,
+                "name": p.name,
+                "organization_name": p.organization_name,
                 "organization_id": p.organization_id,
                 "created_at": p.created_at,
             })).collect::<Vec<_>>()
@@ -130,9 +136,14 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                 println!("No projects yet. Create one with `rtree project create <name>`.");
             } else {
                 for p in &resp.projects {
+                    let organization = p
+                        .organization_name
+                        .as_deref()
+                        .or(p.organization_id.as_deref())
+                        .unwrap_or("unknown");
                     println!(
                         "{:<20} org={} created={}",
-                        p.project_name, p.organization_id, p.created_at
+                        p.name, organization, p.created_at
                     );
                 }
             }
@@ -153,7 +164,7 @@ pub fn create(
 
     output::print_result(
         &json!({
-            "project": resp.project,
+            "name": resp.name,
             "organization_name": resp.organization_name,
             "claim_token": claim_token,
             "claim_url": claim_url,
@@ -163,7 +174,7 @@ pub fn create(
             let organization_name = resp.organization_name.as_deref().unwrap_or("unknown");
             println!(
                 "Project '{}' created in organization '{}'.",
-                resp.project, organization_name
+                resp.name, organization_name
             );
             if let Some(ref claim_url) = claim_url {
                 println!("Use '{}' to claim your project.", claim_url);
@@ -176,7 +187,7 @@ pub fn create(
 pub fn create_for_insert(client: &ApiClient, name: Option<&str>) -> Result<CreatedProjectInfo> {
     let resp = create_and_persist(client, name, None)?;
     Ok(CreatedProjectInfo {
-        project: resp.project,
+        project: resp.name,
         api_key: resp.api_key,
         claim_token: resp.claim_token,
     })
@@ -195,7 +206,8 @@ pub fn use_project(name: &str, json_mode: bool) -> Result<()> {
 
 #[derive(Deserialize)]
 struct RenameProjectResponse {
-    project: String,
+    #[serde(alias = "project")]
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -216,9 +228,9 @@ pub fn rename(
     };
     let resp: RenameProjectResponse = client.patch(&path, &json!({"project": new_name}))?;
     output::print_result(
-        &json!({"old_name": old, "project": resp.project}),
+        &json!({"old_name": old, "name": resp.name}),
         json_mode,
-        |_| println!("Project '{}' renamed to '{}'.", old, resp.project),
+        |_| println!("Project '{}' renamed to '{}'.", old, resp.name),
     );
     Ok(())
 }
@@ -235,7 +247,7 @@ pub fn delete(
     };
     let resp: DeleteProjectResponse = client.delete(&path)?;
     output::print_result(
-        &json!({"deleted": resp.deleted, "project": name}),
+        &json!({"deleted": resp.deleted, "name": name}),
         json_mode,
         |_| {
             if resp.deleted {
@@ -248,8 +260,9 @@ pub fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_project_create_config, CreateProjectResponse};
+    use super::{apply_project_create_config, CreateProjectResponse, ProjectItem};
     use crate::config::Config;
+    use serde_json::json;
 
     #[test]
     fn apply_project_create_config_overwrites_auth_for_temporary_projects() {
@@ -260,7 +273,7 @@ mod tests {
             ..Config::default()
         };
         let resp = CreateProjectResponse {
-            project: "tmp_project".to_string(),
+            name: "tmp_project".to_string(),
             api_key: "rw_temporary".to_string(),
             organization_name: Some("temp_org".to_string()),
             temporary: true,
@@ -285,7 +298,7 @@ mod tests {
             ..Config::default()
         };
         let resp = CreateProjectResponse {
-            project: "analytics".to_string(),
+            name: "analytics".to_string(),
             api_key: "rw_regular".to_string(),
             organization_name: None,
             temporary: false,
@@ -308,7 +321,7 @@ mod tests {
             ..Config::default()
         };
         let resp = CreateProjectResponse {
-            project: "tmp_project".to_string(),
+            name: "tmp_project".to_string(),
             api_key: "rw_temp".to_string(),
             organization_name: None,
             temporary: true,
@@ -327,7 +340,7 @@ mod tests {
             ..Config::default()
         };
         let resp = CreateProjectResponse {
-            project: "analytics".to_string(),
+            name: "analytics".to_string(),
             api_key: "rw_regular".to_string(),
             organization_name: Some("new_team".to_string()),
             temporary: false,
@@ -348,7 +361,7 @@ mod tests {
             ..Config::default()
         };
         let resp = CreateProjectResponse {
-            project: "tmp_project".to_string(),
+            name: "tmp_project".to_string(),
             api_key: "rw_temporary".to_string(),
             organization_name: None,
             temporary: false,
@@ -362,5 +375,33 @@ mod tests {
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
         assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn project_item_deserializes_legacy_organization_id_without_renaming_it() {
+        let item: ProjectItem = serde_json::from_value(json!({
+            "project_name": "analytics",
+            "organization_id": "org_123",
+            "created_at": "2026-04-10T00:00:00Z"
+        }))
+        .expect("legacy project item should deserialize");
+
+        assert_eq!(item.name, "analytics");
+        assert_eq!(item.organization_name, None);
+        assert_eq!(item.organization_id.as_deref(), Some("org_123"));
+    }
+
+    #[test]
+    fn project_item_deserializes_name_based_organization_field() {
+        let item: ProjectItem = serde_json::from_value(json!({
+            "name": "analytics",
+            "organization_name": "team_alpha",
+            "created_at": "2026-04-10T00:00:00Z"
+        }))
+        .expect("name-based project item should deserialize");
+
+        assert_eq!(item.name, "analytics");
+        assert_eq!(item.organization_name.as_deref(), Some("team_alpha"));
+        assert_eq!(item.organization_id, None);
     }
 }
