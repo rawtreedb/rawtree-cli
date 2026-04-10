@@ -11,8 +11,10 @@ use crate::output;
 struct ProjectItem {
     #[serde(alias = "project_name")]
     name: String,
-    #[serde(default, alias = "organization_id")]
+    #[serde(default)]
     organization_name: Option<String>,
+    #[serde(default)]
+    organization_id: Option<String>,
     created_at: String,
 }
 
@@ -124,6 +126,7 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
             "projects": resp.projects.iter().map(|p| json!({
                 "name": p.name,
                 "organization_name": p.organization_name,
+                "organization_id": p.organization_id,
                 "created_at": p.created_at,
             })).collect::<Vec<_>>()
         }),
@@ -133,10 +136,14 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                 println!("No projects yet. Create one with `rtree project create <name>`.");
             } else {
                 for p in &resp.projects {
-                    let organization_name = p.organization_name.as_deref().unwrap_or("unknown");
+                    let organization = p
+                        .organization_name
+                        .as_deref()
+                        .or(p.organization_id.as_deref())
+                        .unwrap_or("unknown");
                     println!(
                         "{:<20} org={} created={}",
-                        p.name, organization_name, p.created_at
+                        p.name, organization, p.created_at
                     );
                 }
             }
@@ -240,7 +247,7 @@ pub fn delete(
     };
     let resp: DeleteProjectResponse = client.delete(&path)?;
     output::print_result(
-        &json!({"deleted": resp.deleted, "project": name}),
+        &json!({"deleted": resp.deleted, "name": name}),
         json_mode,
         |_| {
             if resp.deleted {
@@ -253,8 +260,9 @@ pub fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_project_create_config, CreateProjectResponse};
+    use super::{apply_project_create_config, CreateProjectResponse, ProjectItem};
     use crate::config::Config;
+    use serde_json::json;
 
     #[test]
     fn apply_project_create_config_overwrites_auth_for_temporary_projects() {
@@ -367,5 +375,33 @@ mod tests {
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_project.as_deref(), Some("tmp_project"));
         assert_eq!(cfg.last_claim_token.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn project_item_deserializes_legacy_organization_id_without_renaming_it() {
+        let item: ProjectItem = serde_json::from_value(json!({
+            "project_name": "analytics",
+            "organization_id": "org_123",
+            "created_at": "2026-04-10T00:00:00Z"
+        }))
+        .expect("legacy project item should deserialize");
+
+        assert_eq!(item.name, "analytics");
+        assert_eq!(item.organization_name, None);
+        assert_eq!(item.organization_id.as_deref(), Some("org_123"));
+    }
+
+    #[test]
+    fn project_item_deserializes_name_based_organization_field() {
+        let item: ProjectItem = serde_json::from_value(json!({
+            "name": "analytics",
+            "organization_name": "team_alpha",
+            "created_at": "2026-04-10T00:00:00Z"
+        }))
+        .expect("name-based project item should deserialize");
+
+        assert_eq!(item.name, "analytics");
+        assert_eq!(item.organization_name.as_deref(), Some("team_alpha"));
+        assert_eq!(item.organization_id, None);
     }
 }
