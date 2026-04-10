@@ -55,7 +55,8 @@ struct AuthSelection {
 
 #[derive(Deserialize)]
 struct ProjectItem {
-    project_name: String,
+    #[serde(alias = "project_name")]
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -159,11 +160,7 @@ fn list_projects_for_organization(
         urlencoding::encode(organization_id)
     );
     let resp: ListProjectsResponse = client.get(&path)?;
-    Ok(resp
-        .projects
-        .into_iter()
-        .map(|item| item.project_name)
-        .collect())
+    Ok(resp.projects.into_iter().map(|item| item.name).collect())
 }
 
 fn resolve_auth_selection(
@@ -529,12 +526,7 @@ mod tests {
         let mut cfg = Config::default();
         let resp = sample_auth_response();
         let selection = AuthSelection::default();
-        apply_auth_config(
-            &mut cfg,
-            "https://staging.rawtree.dev",
-            &resp,
-            &selection,
-        );
+        apply_auth_config(&mut cfg, "https://staging.rawtree.dev", &resp, &selection);
 
         assert_eq!(cfg.url.as_deref(), Some("https://staging.rawtree.dev"));
     }
