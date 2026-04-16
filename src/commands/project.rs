@@ -80,17 +80,19 @@ fn create_project_response(
     name: Option<&str>,
     organization: Option<&str>,
 ) -> Result<CreateProjectResponse> {
-    let path = projects_collection_path(client, organization)?;
+    let (path, include_auth) = project_create_path(client, organization)?;
 
     let mut payload = serde_json::Map::new();
     if let Some(project_name) = name {
-        payload.insert(
-            "name".to_string(),
-            Value::String(project_name.to_string()),
-        );
+        payload.insert("name".to_string(), Value::String(project_name.to_string()));
     }
 
-    client.post(&path, &Value::Object(payload))
+    if include_auth {
+        client.post(&path, &Value::Object(payload))
+    } else {
+        let anonymous_client = ApiClient::new(client.base_url.clone(), None);
+        anonymous_client.post(&path, &Value::Object(payload))
+    }
 }
 
 fn create_and_persist(
@@ -115,6 +117,41 @@ fn projects_collection_path(client: &ApiClient, organization: Option<&str>) -> R
             ))
         }
         None => Ok("/v1/projects".to_string()),
+    }
+}
+
+fn token_looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_some()
+        && parts.next().is_none()
+}
+
+fn project_create_path(client: &ApiClient, organization: Option<&str>) -> Result<(String, bool)> {
+    match organization {
+        Some(org_name) => {
+            let org_id = org::resolve_organization_id(client, org_name)?;
+            Ok((
+                format!(
+                    "/v1/projects?organization_id={}",
+                    urlencoding::encode(&org_id)
+                ),
+                true,
+            ))
+        }
+        None => {
+            if client
+                .token
+                .as_deref()
+                .map(token_looks_like_jwt)
+                .unwrap_or(false)
+            {
+                Ok(("/v1/projects".to_string(), true))
+            } else {
+                Ok(("/v1/temporary-projects".to_string(), false))
+            }
+        }
     }
 }
 
