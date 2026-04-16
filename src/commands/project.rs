@@ -85,7 +85,7 @@ fn create_project_response(
     let mut payload = serde_json::Map::new();
     if let Some(project_name) = name {
         payload.insert(
-            "project".to_string(),
+            "name".to_string(),
             Value::String(project_name.to_string()),
         );
     }
@@ -226,7 +226,7 @@ pub fn rename(
         Some(org_name) => format!("/v1/{org_name}/{old}"),
         None => format!("/v1/projects/{old}"),
     };
-    let resp: RenameProjectResponse = client.patch(&path, &json!({"project": new_name}))?;
+    let resp: RenameProjectResponse = client.patch(&path, &json!({"name": new_name}))?;
     output::print_result(
         &json!({"old_name": old, "name": resp.name}),
         json_mode,
