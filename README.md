@@ -92,8 +92,8 @@ Top-level commands:
 
 - `register`, `login`, `logout`
 - `project`, `organization`, `keys`, `table`
-- `query`, `insert`, `sample`, `export`
-- `ping`, `docs`, `whoami`, `status`, `open`, `completions`
+- `query`, `insert`
+- `ping`, `docs`, `status`, `open`, `completions`
 
 Global flags:
 
@@ -115,7 +115,7 @@ rtree project create analytics
 rtree project use analytics
 ```
 
-### Querying and export
+### Querying
 
 ```sh
 # Positional SQL
@@ -127,8 +127,6 @@ cat query.sql | rtree query -
 # CSV output
 rtree query --query "SELECT * FROM events" --format csv
 
-# Export to file
-rtree export --query "SELECT * FROM events" --format csv --output events.csv
 ```
 
 ### Data ingestion
