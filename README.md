@@ -124,9 +124,8 @@ rtree query "SELECT * FROM events LIMIT 10"
 # SQL from stdin
 cat query.sql | rtree query -
 
-# CSV output
-rtree query --query "SELECT * FROM events" --format csv
-
+# JSON output
+rtree query --json --query "SELECT * FROM events LIMIT 10"
 ```
 
 ### Data ingestion

@@ -125,9 +125,6 @@ pub enum Command {
         /// SQL query to execute
         #[arg(long)]
         query: Option<String>,
-        /// Output format: json (default) or csv
-        #[arg(long)]
-        format: Option<String>,
         /// Append LIMIT N to the query
         #[arg(long)]
         limit: Option<u64>,
@@ -433,5 +430,20 @@ mod tests {
             cli.api_url.as_deref(),
             Some("https://api.us-east-1.aws.rawtree.com")
         );
+    }
+
+    #[test]
+    fn query_format_flag_is_rejected() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "query",
+            "--project",
+            "analytics",
+            "--query",
+            "SELECT 1",
+            "--format",
+            "csv",
+        ]);
+        assert!(result.is_err(), "query --format should not be supported");
     }
 }

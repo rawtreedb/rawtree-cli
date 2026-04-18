@@ -23,7 +23,6 @@ pub fn query(
     project: &str,
     organization: Option<&str>,
     sql: &str,
-    format: Option<&str>,
     limit: Option<u64>,
     json_mode: bool,
 ) -> Result<()> {
@@ -32,10 +31,7 @@ pub fn query(
         None => sql.to_string(),
     };
 
-    let mut body = json!({ "sql": sql });
-    if let Some(fmt) = format {
-        body["format"] = json!(fmt);
-    }
+    let body = json!({ "sql": sql });
 
     let path = org::project_scoped_path(project, "/query", organization);
     let raw = client.post_raw(&path, &body)?;
