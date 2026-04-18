@@ -1,6 +1,5 @@
 pub mod auth;
 pub mod docs;
-pub mod export;
 pub mod insert;
 pub mod keys;
 pub mod logs;
@@ -9,7 +8,5 @@ pub mod organization;
 pub mod ping;
 pub mod project;
 pub mod query;
-pub mod sample;
 pub mod status;
 pub mod table;
-pub mod whoami;

@@ -151,42 +151,10 @@ pub enum Command {
         #[arg(long)]
         transform: Option<String>,
     },
-    /// Preview rows from a table
-    Sample {
-        #[arg(long)]
-        project: Option<String>,
-        #[arg(long)]
-        table: String,
-        /// Number of rows to return (default: 10)
-        #[arg(long, default_value = "10")]
-        limit: u64,
-        /// Output format: json (default) or csv
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Export query results to a file
-    Export {
-        #[arg(long)]
-        project: Option<String>,
-        /// SQL query to execute (positional or --query)
-        #[arg(conflicts_with = "query")]
-        sql: Option<String>,
-        /// SQL query to execute
-        #[arg(long)]
-        query: Option<String>,
-        /// Output file path
-        #[arg(long, short)]
-        output: String,
-        /// Output format: json (default) or csv
-        #[arg(long)]
-        format: Option<String>,
-    },
     /// Check server connectivity
     Ping,
     /// Fetch and display API documentation from the server
     Docs,
-    /// Show current authenticated user and server
-    Whoami,
     /// Show current auth state and server URL
     Status,
     /// Open Rawtree UI in your browser

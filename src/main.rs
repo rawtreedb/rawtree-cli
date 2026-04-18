@@ -490,45 +490,8 @@ fn run(cli: Cli) -> Result<()> {
                 json,
             )
         }
-        Command::Sample {
-            project,
-            table,
-            limit,
-            format,
-        } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let project = resolve_project(project)?;
-            commands::sample::sample(
-                &client,
-                &project,
-                effective_org.as_deref(),
-                &table,
-                limit,
-                format.as_deref(),
-            )
-        }
-        Command::Export {
-            project,
-            sql,
-            query,
-            output,
-            format,
-        } => {
-            let effective_org = resolve_effective_org(&client, cli_org);
-            let project = resolve_project(project)?;
-            let sql = resolve_sql(sql, query)?;
-            commands::export::export(
-                &client,
-                &project,
-                effective_org.as_deref(),
-                &sql,
-                &output,
-                format.as_deref(),
-            )
-        }
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
-        Command::Whoami => commands::whoami::whoami(&url, json),
         Command::Status => commands::status::status(&url, json),
         Command::Open { project } => {
             let ui_base_url = commands::open::resolve_ui_base_url();
