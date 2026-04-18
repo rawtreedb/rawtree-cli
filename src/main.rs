@@ -207,7 +207,7 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
             if !io::stdin().is_terminal() {
                 read_stdin()
             } else {
-                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --query, or pipe via stdin")
+                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --sql, or pipe via stdin")
             }
         }
     }
@@ -398,13 +398,13 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Query {
             project,
+            sql_positional,
             sql,
-            query,
             limit,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             let project = resolve_project(project)?;
-            let sql = resolve_sql(sql, query)?;
+            let sql = resolve_sql(sql_positional, sql)?;
             commands::query::query(
                 &client,
                 &project,

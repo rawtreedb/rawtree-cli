@@ -46,7 +46,7 @@ rtree project use analytics
 rtree insert --table events --data '{"event":"signup","user_id":1}'
 
 # Run a query
-rtree query --query "SELECT count(*) FROM events"
+rtree query --sql "SELECT count(*) FROM events"
 
 # Open the UI for the current project
 rtree open
@@ -125,7 +125,7 @@ rtree query "SELECT * FROM events LIMIT 10"
 cat query.sql | rtree query -
 
 # JSON output
-rtree query --json --query "SELECT * FROM events LIMIT 10"
+rtree query --json --sql "SELECT * FROM events LIMIT 10"
 ```
 
 ### Data ingestion
