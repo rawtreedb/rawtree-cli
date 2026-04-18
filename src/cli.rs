@@ -119,15 +119,12 @@ pub enum Command {
     Query {
         #[arg(long)]
         project: Option<String>,
-        /// SQL query to execute (positional or --query). Use "-" to read from stdin.
-        #[arg(conflicts_with = "query")]
-        sql: Option<String>,
+        /// SQL query to execute (positional or --sql). Use "-" to read from stdin.
+        #[arg(value_name = "SQL", conflicts_with = "sql")]
+        sql_positional: Option<String>,
         /// SQL query to execute
         #[arg(long)]
-        query: Option<String>,
-        /// Output format: json (default) or csv
-        #[arg(long)]
-        format: Option<String>,
+        sql: Option<String>,
         /// Append LIMIT N to the query
         #[arg(long)]
         limit: Option<u64>,
@@ -424,7 +421,7 @@ mod tests {
             "query",
             "--project",
             "analytics",
-            "--query",
+            "--sql",
             "SELECT 1",
         ])
         .expect("--api-url should parse before subcommand");
@@ -433,5 +430,33 @@ mod tests {
             cli.api_url.as_deref(),
             Some("https://api.us-east-1.aws.rawtree.com")
         );
+    }
+
+    #[test]
+    fn query_format_flag_is_rejected() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "query",
+            "--project",
+            "analytics",
+            "--sql",
+            "SELECT 1",
+            "--format",
+            "csv",
+        ]);
+        assert!(result.is_err(), "query --format should not be supported");
+    }
+
+    #[test]
+    fn query_named_query_flag_is_rejected() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "query",
+            "--project",
+            "analytics",
+            "--query",
+            "SELECT 1",
+        ]);
+        assert!(result.is_err(), "query --query should not be supported");
     }
 }

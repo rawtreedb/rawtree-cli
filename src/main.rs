@@ -207,23 +207,10 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
             if !io::stdin().is_terminal() {
                 read_stdin()
             } else {
-                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --query, or pipe via stdin")
+                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --sql, or pipe via stdin")
             }
         }
     }
-}
-
-fn is_csv_format(format: Option<&str>) -> bool {
-    format
-        .map(|f| f.trim().eq_ignore_ascii_case("csv"))
-        .unwrap_or(false)
-}
-
-fn validate_query_output_mode(json_mode: bool, format: Option<&str>) -> Result<()> {
-    if json_mode && is_csv_format(format) {
-        anyhow::bail!("`--json` cannot be combined with `query --format csv`");
-    }
-    Ok(())
 }
 
 fn main() {
@@ -411,21 +398,18 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Query {
             project,
+            sql_positional,
             sql,
-            query,
-            format,
             limit,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             let project = resolve_project(project)?;
-            let sql = resolve_sql(sql, query)?;
-            validate_query_output_mode(json, format.as_deref())?;
+            let sql = resolve_sql(sql_positional, sql)?;
             commands::query::query(
                 &client,
                 &project,
                 effective_org.as_deref(),
                 &sql,
-                format.as_deref(),
                 limit,
                 json,
             )
@@ -706,18 +690,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn query_output_mode_validation_rejects_json_with_csv_format() {
-        let err = super::validate_query_output_mode(true, Some("csv"))
-            .expect_err("expected conflict for --json with --format csv");
-        assert!(format!("{err:#}").contains("cannot be combined"));
-    }
-
-    #[test]
-    fn query_output_mode_validation_allows_non_conflicting_combinations() {
-        assert!(super::validate_query_output_mode(false, Some("csv")).is_ok());
-        assert!(super::validate_query_output_mode(true, Some("json")).is_ok());
-        assert!(super::validate_query_output_mode(true, None).is_ok());
-        assert!(super::validate_query_output_mode(true, Some(" CSV ")).is_err());
-    }
 }
