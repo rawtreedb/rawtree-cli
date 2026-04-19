@@ -26,6 +26,10 @@ fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
     )
 }
 
+fn build_login_url(base_url: &str) -> String {
+    format!("{}/login", base_url.trim_end_matches('/'))
+}
+
 fn resolve_dashboard_url(
     base_url: &str,
     authenticated: bool,
@@ -36,7 +40,10 @@ fn resolve_dashboard_url(
     if authenticated {
         return Some(build_dashboard_url(base_url, organization, project));
     }
-    claim_token.map(|token| build_claim_dashboard_url(base_url, token))
+    match claim_token {
+        Some(token) => Some(build_claim_dashboard_url(base_url, token)),
+        None => Some(build_login_url(base_url)),
+    }
 }
 
 pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
@@ -81,7 +88,7 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_claim_dashboard_url, build_dashboard_url, resolve_dashboard_url};
+    use super::{build_claim_dashboard_url, build_dashboard_url, build_login_url, resolve_dashboard_url};
 
     #[test]
     fn build_claim_dashboard_url_appends_dashboard_route() {
@@ -120,5 +127,17 @@ mod tests {
             url.as_deref(),
             Some("https://rawtree.com/claim/claim_abc/dashboard")
         );
+    }
+
+    #[test]
+    fn resolve_dashboard_url_uses_login_when_not_authenticated_and_no_claim_token() {
+        let url = resolve_dashboard_url("https://rawtree.com", false, None, None, None);
+        assert_eq!(url.as_deref(), Some("https://rawtree.com/login"));
+    }
+
+    #[test]
+    fn build_login_url_appends_login_path() {
+        let url = build_login_url("https://rawtree.com/");
+        assert_eq!(url, "https://rawtree.com/login");
     }
 }
