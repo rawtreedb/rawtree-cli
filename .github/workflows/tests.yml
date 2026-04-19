@@ -41,12 +41,10 @@ jobs:
       - name: Checkout rawtree-cli
         uses: actions/checkout@v6
 
-      - name: Checkout rawtree-platform
-        uses: actions/checkout@v6
+      - name: Set up QEMU for arm64 container runtime
+        uses: docker/setup-qemu-action@v3
         with:
-          repository: rawtreedb/rawtree-platform
-          path: rawtree-platform
-          token: ${{ github.token }}
+          platforms: arm64
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -79,4 +77,4 @@ jobs:
         shell: bash
         run: |
           chmod +x tests/integration/run.sh
-          ./tests/integration/run.sh --platform-path "$GITHUB_WORKSPACE/rawtree-platform"
+          ./tests/integration/run.sh

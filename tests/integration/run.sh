@@ -4,8 +4,8 @@
 #
 # Usage:
 #   ./tests/integration/run.sh
-#   ./tests/integration/run.sh --platform-path ../rawtree-platform
-#   ./tests/integration/run.sh --no-compose --no-build-backend
+#   ./tests/integration/run.sh --compose-file ./tests/integration/docker-compose.integration.yml
+#   ./tests/integration/run.sh --no-compose
 #   ./tests/integration/run.sh --keep
 #
 
@@ -16,9 +16,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VENV_DIR="$PROJECT_ROOT/.venv-tests"
 KEEP=false
 NO_COMPOSE=false
-NO_BUILD_BACKEND=false
 NO_BUILD_CLI=false
-PLATFORM_PATH="${RAWTREE_PLATFORM_PATH:-$PROJECT_ROOT/../rawtree-platform}"
+COMPOSE_FILE="${RAWTREE_COMPOSE_FILE:-$PROJECT_ROOT/tests/integration/docker-compose.integration.yml}"
 PYTEST_ARGS=()
 PYTHON_BIN="${PYTHON_BIN:-}"
 
@@ -43,20 +42,16 @@ while [ "$#" -gt 0 ]; do
             NO_COMPOSE=true
             shift
             ;;
-        --no-build-backend)
-            NO_BUILD_BACKEND=true
-            shift
-            ;;
         --no-build-cli)
             NO_BUILD_CLI=true
             shift
             ;;
-        --platform-path)
+        --compose-file)
             if [ "$#" -lt 2 ]; then
-                echo "ERROR: --platform-path requires a path argument"
+                echo "ERROR: --compose-file requires a path argument"
                 exit 1
             fi
-            PLATFORM_PATH="$2"
+            COMPOSE_FILE="$2"
             shift 2
             ;;
         *)
@@ -66,13 +61,13 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ "${PLATFORM_PATH#/}" = "$PLATFORM_PATH" ]; then
-    PLATFORM_PATH="$PROJECT_ROOT/$PLATFORM_PATH"
+if [ "${COMPOSE_FILE#/}" = "$COMPOSE_FILE" ]; then
+    COMPOSE_FILE="$PROJECT_ROOT/$COMPOSE_FILE"
 fi
 
 if [ "$NO_COMPOSE" = false ]; then
-    if [ ! -f "$PLATFORM_PATH/docker-compose.yml" ]; then
-        echo "ERROR: docker-compose.yml not found in platform path: $PLATFORM_PATH"
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        echo "ERROR: compose file not found: $COMPOSE_FILE"
         exit 1
     fi
 
@@ -87,7 +82,7 @@ if [ "$NO_COMPOSE" = false ]; then
 fi
 
 compose() {
-    "${COMPOSE_CMD[@]}" -f "$PLATFORM_PATH/docker-compose.yml" "$@"
+    "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" "$@"
 }
 
 cleanup() {
@@ -148,15 +143,11 @@ export RAWTREE_GOOGLE_CLIENT_SECRET="${RAWTREE_GOOGLE_CLIENT_SECRET:-ci-google-c
 if [ "$NO_COMPOSE" = false ]; then
     export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-rawtree-cli-it-$$}"
 
-    if [ "$NO_BUILD_BACKEND" = false ]; then
-        echo "==> Building backend image..."
-        compose build backend
-    else
-        echo "==> Skipping backend build (--no-build-backend)."
-    fi
+    echo "==> Pulling deterministic backend stack images..."
+    compose pull
 
     echo "==> Starting backend stack..."
-    compose up -d --wait --no-build backend
+    compose up -d --wait backend
 else
     echo "==> Skipping backend startup (--no-compose)."
 fi

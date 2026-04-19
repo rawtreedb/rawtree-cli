@@ -187,18 +187,20 @@ Run locally:
 cargo run -- --help
 ```
 
-Run CLI integration tests against a local `rawtree-platform` backend:
+Run CLI integration tests against the deterministic local backend stack:
 
 ```sh
-# assumes sibling checkout at ../rawtree-platform
-./tests/integration/run.sh --platform-path ../rawtree-platform
+./tests/integration/run.sh
 ```
 
 Useful flags:
 
 ```sh
-# use an already-running backend (no docker compose startup)
-./tests/integration/run.sh --no-compose --no-build-backend
+# use an already-running backend
+./tests/integration/run.sh --no-compose
+
+# use a custom compose file
+./tests/integration/run.sh --compose-file ./tests/integration/docker-compose.integration.yml
 ```
 
 ## Release Notes
