@@ -27,7 +27,11 @@ fn resolve_dashboard_url(
 
 pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
     let cfg = config::load()?;
-    let authenticated = cfg.token.is_some();
+    let authenticated = cfg
+        .token
+        .as_deref()
+        .map(crate::token_looks_like_jwt)
+        .unwrap_or(false);
     let user = cfg.email.clone();
     let project = cfg.default_project.clone();
     let organization = cfg.default_organization.clone();
@@ -106,5 +110,10 @@ mod tests {
     fn build_login_url_appends_login_path() {
         let url = build_login_url("https://rawtree.com/");
         assert_eq!(url, "https://rawtree.com/login");
+    }
+
+    #[test]
+    fn temporary_token_is_treated_as_not_authenticated() {
+        assert!(!crate::token_looks_like_jwt("rw_temporary"));
     }
 }

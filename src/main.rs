@@ -91,7 +91,7 @@ fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<
     resolve_effective_org_with(explicit_org, || org::first_organization_name(client))
 }
 
-fn token_looks_like_jwt(token: &str) -> bool {
+pub(crate) fn token_looks_like_jwt(token: &str) -> bool {
     let mut parts = token.split('.');
     parts.next().is_some()
         && parts.next().is_some()
