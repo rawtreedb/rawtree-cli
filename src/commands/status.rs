@@ -5,6 +5,19 @@ use crate::config;
 use crate::commands::open;
 use crate::output;
 
+fn build_dashboard_url(base_url: &str, organization: Option<&str>, project: Option<&str>) -> String {
+    let trimmed_base = base_url.trim_end_matches('/');
+    match (organization, project) {
+        (Some(org), Some(project_name)) => format!(
+            "{}/{}/{}",
+            trimmed_base,
+            urlencoding::encode(org),
+            urlencoding::encode(project_name)
+        ),
+        _ => trimmed_base.to_string(),
+    }
+}
+
 fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
     format!(
         "{}/claim/{}/dashboard",
@@ -13,11 +26,17 @@ fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
     )
 }
 
-fn resolve_dashboard_url(claim_token: Option<&str>) -> Option<String> {
-    claim_token.map(|token| {
-        let ui_base_url = open::resolve_ui_base_url();
-        build_claim_dashboard_url(&ui_base_url, token)
-    })
+fn resolve_dashboard_url(
+    base_url: &str,
+    authenticated: bool,
+    organization: Option<&str>,
+    project: Option<&str>,
+    claim_token: Option<&str>,
+) -> Option<String> {
+    if authenticated {
+        return Some(build_dashboard_url(base_url, organization, project));
+    }
+    claim_token.map(|token| build_claim_dashboard_url(base_url, token))
 }
 
 pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
@@ -26,7 +45,14 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
     let user = cfg.email.clone();
     let project = cfg.default_project.clone();
     let organization = cfg.default_organization.clone();
-    let dashboard_url = resolve_dashboard_url(cfg.last_claim_token.as_deref());
+    let ui_base_url = open::resolve_ui_base_url();
+    let dashboard_url = resolve_dashboard_url(
+        &ui_base_url,
+        authenticated,
+        organization.as_deref(),
+        project.as_deref(),
+        cfg.last_claim_token.as_deref(),
+    );
 
     output::print_result(
         &json!({
@@ -55,11 +81,44 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_claim_dashboard_url;
+    use super::{build_claim_dashboard_url, build_dashboard_url, resolve_dashboard_url};
 
     #[test]
     fn build_claim_dashboard_url_appends_dashboard_route() {
         let url = build_claim_dashboard_url("https://rawtree.com/", "a/b");
         assert_eq!(url, "https://rawtree.com/claim/a%2Fb/dashboard");
+    }
+
+    #[test]
+    fn build_dashboard_url_appends_org_and_project_path() {
+        let url = build_dashboard_url("https://rawtree.com/", Some("team alpha"), Some("p/1"));
+        assert_eq!(url, "https://rawtree.com/team%20alpha/p%2F1");
+    }
+
+    #[test]
+    fn resolve_dashboard_url_prefers_normal_dashboard_when_authenticated() {
+        let url = resolve_dashboard_url(
+            "https://rawtree.com",
+            true,
+            Some("team"),
+            Some("analytics"),
+            Some("claim_abc"),
+        );
+        assert_eq!(url.as_deref(), Some("https://rawtree.com/team/analytics"));
+    }
+
+    #[test]
+    fn resolve_dashboard_url_uses_claim_dashboard_when_not_authenticated() {
+        let url = resolve_dashboard_url(
+            "https://rawtree.com",
+            false,
+            Some("team"),
+            Some("analytics"),
+            Some("claim_abc"),
+        );
+        assert_eq!(
+            url.as_deref(),
+            Some("https://rawtree.com/claim/claim_abc/dashboard")
+        );
     }
 }
