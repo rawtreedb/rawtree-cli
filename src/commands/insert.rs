@@ -736,7 +736,7 @@ mod tests {
 
         assert_eq!(
             path,
-            "/v1/events_2/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson"
+            "/v1/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson"
         );
     }
 
