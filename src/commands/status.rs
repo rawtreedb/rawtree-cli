@@ -5,19 +5,6 @@ use crate::config;
 use crate::commands::open;
 use crate::output;
 
-fn build_dashboard_url(base_url: &str, organization: Option<&str>, project: Option<&str>) -> String {
-    let trimmed_base = base_url.trim_end_matches('/');
-    match (organization, project) {
-        (Some(org), Some(project_name)) => format!(
-            "{}/{}/{}",
-            trimmed_base,
-            urlencoding::encode(org),
-            urlencoding::encode(project_name)
-        ),
-        _ => trimmed_base.to_string(),
-    }
-}
-
 fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
     format!(
         "{}/claim/{}/dashboard",
@@ -38,7 +25,7 @@ fn resolve_dashboard_url(
     claim_token: Option<&str>,
 ) -> Option<String> {
     if authenticated {
-        return Some(build_dashboard_url(base_url, organization, project));
+        return Some(open::build_open_url(base_url, organization, project));
     }
     match claim_token {
         Some(token) => Some(build_claim_dashboard_url(base_url, token)),
@@ -88,18 +75,12 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_claim_dashboard_url, build_dashboard_url, build_login_url, resolve_dashboard_url};
+    use super::{build_claim_dashboard_url, build_login_url, resolve_dashboard_url};
 
     #[test]
     fn build_claim_dashboard_url_appends_dashboard_route() {
         let url = build_claim_dashboard_url("https://rawtree.com/", "a/b");
         assert_eq!(url, "https://rawtree.com/claim/a%2Fb/dashboard");
-    }
-
-    #[test]
-    fn build_dashboard_url_appends_org_and_project_path() {
-        let url = build_dashboard_url("https://rawtree.com/", Some("team alpha"), Some("p/1"));
-        assert_eq!(url, "https://rawtree.com/team%20alpha/p%2F1");
     }
 
     #[test]

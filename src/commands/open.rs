@@ -9,7 +9,11 @@ pub fn resolve_ui_base_url() -> String {
     std::env::var("RAWTREE_UI_URL").unwrap_or_else(|_| DEFAULT_UI_BASE_URL.to_string())
 }
 
-fn build_open_url(base_url: &str, organization: Option<&str>, project: Option<&str>) -> String {
+pub(crate) fn build_open_url(
+    base_url: &str,
+    organization: Option<&str>,
+    project: Option<&str>,
+) -> String {
     let trimmed_base = base_url.trim_end_matches('/');
     match (organization, project) {
         (Some(org), Some(project_name)) => format!(
