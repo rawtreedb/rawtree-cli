@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-alpine@sha256:52098013b4b64a746626437d38afc03cabff6cdeb4d3d92e2342aa95f0ce56ea
+    image: postgres:18-alpine
     ports:
       - "5432:5432"
     environment:
@@ -16,7 +16,7 @@ services:
       retries: 30
 
   rawtree-keeper:
-    image: rawtree/rawtree-keeper:26.3@sha256:f50cffcf0f5a9c538be366e73180071cb4f385418b3ae9a8706f58bae8900497
+    image: rawtree/rawtree-keeper:26.3
     volumes:
       - keeper_data:/var/lib/rawtree-keeper
       - ./rawtree-config/config.d/keeper.xml:/etc/rawtree-keeper/keeper_config.xml:ro
@@ -32,7 +32,7 @@ services:
       retries: 30
 
   rawtree:
-    image: rawtree/rawtree-server:26.3@sha256:2199de1d3fe34558721de3a08a5bdea05cf86ccdc5dc84c857901befabf290eb
+    image: rawtree/rawtree-server:26.3
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -61,7 +61,7 @@ services:
         condition: service_healthy
 
   backend-migrate:
-    image: rawtree/backend@sha256:22883178b2e3712be35c4fff6723fa431339be0a094724dabca0c05d67e02f13
+    image: rawtree/backend:latest
     environment:
       RAWTREE_POSTGRES_URL: postgres://default:random_password@postgres:5432/rawtree
     command:
@@ -75,7 +75,7 @@ services:
         condition: service_healthy
 
   backend:
-    image: rawtree/backend@sha256:22883178b2e3712be35c4fff6723fa431339be0a094724dabca0c05d67e02f13
+    image: rawtree/backend:latest
     ports:
       - "3000:3000"
       - "9090:9090"
