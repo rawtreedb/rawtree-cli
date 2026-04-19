@@ -41,17 +41,11 @@ pub struct CreatedProjectInfo {
     pub claim_token: Option<String>,
 }
 
-fn build_claim_dashboard_url(claim_token: &str) -> String {
-    let ui_base_url = crate::commands::open::resolve_ui_base_url();
-    format!(
-        "{}/claim/{}/dashboard",
-        ui_base_url.trim_end_matches('/'),
-        urlencoding::encode(claim_token)
-    )
-}
-
 fn claim_url_from_response(resp: &CreateProjectResponse) -> Option<String> {
-    resp.claim_token.as_deref().map(build_claim_dashboard_url)
+    let ui_base_url = crate::commands::open::resolve_ui_base_url();
+    resp.claim_token
+        .as_deref()
+        .map(|claim_token| crate::commands::open::build_claim_dashboard_url(&ui_base_url, claim_token))
 }
 
 fn is_temporary_project(resp: &CreateProjectResponse) -> bool {

@@ -123,14 +123,6 @@ fn resolve_saved_claim_token(cfg: &config::Config) -> Result<String> {
     ))
 }
 
-fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
-    format!(
-        "{}/claim/{}/dashboard",
-        base_url.trim_end_matches('/'),
-        urlencoding::encode(claim_token)
-    )
-}
-
 fn should_open_claim_dashboard_by_default(token: Option<&str>, claim_token: Option<&str>) -> bool {
     token.map(|t| !token_looks_like_jwt(t)).unwrap_or(false) && claim_token.is_some()
 }
@@ -179,8 +171,10 @@ fn create_anonymous_project_for_insert(
     if !json_mode {
         println!("Using anonymous project '{}'.", created.project);
         if let Some(ref claim_token) = created.claim_token {
-            let claim_url =
-                build_claim_dashboard_url(&commands::open::resolve_ui_base_url(), claim_token);
+            let claim_url = commands::open::build_claim_dashboard_url(
+                &commands::open::resolve_ui_base_url(),
+                claim_token,
+            );
             println!("Claim URL: {}", claim_url);
         }
     }
@@ -486,7 +480,8 @@ fn run(cli: Cli) -> Result<()> {
                 cfg.last_claim_token.as_deref(),
             ) {
                 if let Ok(claim_token) = resolve_saved_claim_token(&cfg) {
-                    let claim_dashboard_url = build_claim_dashboard_url(&ui_base_url, &claim_token);
+                    let claim_dashboard_url =
+                        commands::open::build_claim_dashboard_url(&ui_base_url, &claim_token);
                     return commands::open::open_url(&claim_dashboard_url, json);
                 }
             }
@@ -517,8 +512,8 @@ mod tests {
     use crate::config::Config;
 
     use super::{
-        build_claim_dashboard_url, resolve_effective_org_with, resolve_org_from_sources,
-        resolve_project_from_sources, resolve_saved_claim_token,
+        resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
+        resolve_saved_claim_token,
         should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
         should_resolve_org_for_project_create, token_looks_like_jwt,
     };
@@ -666,7 +661,7 @@ mod tests {
 
     #[test]
     fn build_claim_dashboard_url_appends_dashboard_route() {
-        let url = build_claim_dashboard_url("https://rawtree.com/", "a/b");
+        let url = crate::commands::open::build_claim_dashboard_url("https://rawtree.com/", "a/b");
         assert_eq!(url, "https://rawtree.com/claim/a%2Fb/dashboard");
     }
 

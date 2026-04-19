@@ -5,14 +5,6 @@ use crate::config;
 use crate::commands::open;
 use crate::output;
 
-fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
-    format!(
-        "{}/claim/{}/dashboard",
-        base_url.trim_end_matches('/'),
-        urlencoding::encode(claim_token)
-    )
-}
-
 fn build_login_url(base_url: &str) -> String {
     format!("{}/login", base_url.trim_end_matches('/'))
 }
@@ -28,7 +20,7 @@ fn resolve_dashboard_url(
         return Some(open::build_open_url(base_url, organization, project));
     }
     match claim_token {
-        Some(token) => Some(build_claim_dashboard_url(base_url, token)),
+        Some(token) => Some(open::build_claim_dashboard_url(base_url, token)),
         None => Some(build_login_url(base_url)),
     }
 }
@@ -75,13 +67,7 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_claim_dashboard_url, build_login_url, resolve_dashboard_url};
-
-    #[test]
-    fn build_claim_dashboard_url_appends_dashboard_route() {
-        let url = build_claim_dashboard_url("https://rawtree.com/", "a/b");
-        assert_eq!(url, "https://rawtree.com/claim/a%2Fb/dashboard");
-    }
+    use super::{build_login_url, resolve_dashboard_url};
 
     #[test]
     fn resolve_dashboard_url_prefers_normal_dashboard_when_authenticated() {
