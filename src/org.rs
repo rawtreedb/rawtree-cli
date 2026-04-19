@@ -54,7 +54,7 @@ pub fn project_scoped_path(project: &str, suffix: &str, organization: Option<&st
 
     match organization {
         Some(org) => format!("/v1/{org}/{project}{normalized_suffix}"),
-        None => format!("/v1/{project}{normalized_suffix}"),
+        None => format!("/v1{normalized_suffix}"),
     }
 }
 
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn project_scoped_path_builds_unscoped_route() {
         let path = project_scoped_path("analytics", "/query", None);
-        assert_eq!(path, "/v1/analytics/query");
+        assert_eq!(path, "/v1/query");
     }
 
     #[test]
