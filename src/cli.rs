@@ -152,7 +152,7 @@ pub enum Command {
     Ping,
     /// Fetch and display API documentation from the server
     Docs,
-    /// Show current auth state and server URL
+    /// Show current auth state and API URL
     Status,
     /// Open Rawtree UI in your browser
     Open {
