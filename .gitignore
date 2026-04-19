@@ -1,3 +1,5 @@
 target/
 
 tasks/
+.venv-tests/
+.pytest_cache/

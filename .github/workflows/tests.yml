@@ -5,9 +5,11 @@ on:
   push:
 
 jobs:
-  test:
+  unit-tests:
     name: cargo test
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -20,3 +22,61 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
+
+  integration-tests:
+    name: python cli integration tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      RAWTREE_URL: http://localhost:3000
+      RAWTREE_FRONTEND_URL: http://localhost:8080
+      RAWTREE_GITHUB_CLIENT_ID: ci-github-client-id
+      RAWTREE_GITHUB_CLIENT_SECRET: ci-github-client-secret
+      RAWTREE_GOOGLE_CLIENT_ID: ci-google-client-id
+      RAWTREE_GOOGLE_CLIENT_SECRET: ci-google-client-secret
+      COMPOSE_PROJECT_NAME: cli-it-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout rawtree-cli
+        uses: actions/checkout@v6
+
+      - name: Checkout rawtree-platform
+        uses: actions/checkout@v6
+        with:
+          repository: rawtreedb/rawtree-platform
+          path: rawtree-platform
+          token: ${{ github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Ensure Rust native build deps
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - name: Ensure Docker Compose v2 is available
+        shell: bash
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            echo "Docker Compose v2 already available."
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y docker-compose-plugin
+
+      - name: Run CLI integration tests
+        shell: bash
+        run: |
+          chmod +x tests/integration/run.sh
+          ./tests/integration/run.sh --platform-path "$GITHUB_WORKSPACE/rawtree-platform"

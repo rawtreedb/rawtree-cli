@@ -187,6 +187,20 @@ Run locally:
 cargo run -- --help
 ```
 
+Run CLI integration tests against a local `rawtree-platform` backend:
+
+```sh
+# assumes sibling checkout at ../rawtree-platform
+./tests/integration/run.sh --platform-path ../rawtree-platform
+```
+
+Useful flags:
+
+```sh
+# use an already-running backend (no docker compose startup)
+./tests/integration/run.sh --no-compose --no-build-backend
+```
+
 ## Release Notes
 
 - Repository/package name: `rawtree-cli`
