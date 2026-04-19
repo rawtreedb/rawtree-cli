@@ -9,7 +9,19 @@ pub fn resolve_ui_base_url() -> String {
     std::env::var("RAWTREE_UI_URL").unwrap_or_else(|_| DEFAULT_UI_BASE_URL.to_string())
 }
 
-fn build_open_url(base_url: &str, organization: Option<&str>, project: Option<&str>) -> String {
+pub(crate) fn build_claim_dashboard_url(base_url: &str, claim_token: &str) -> String {
+    format!(
+        "{}/claim/{}/dashboard",
+        base_url.trim_end_matches('/'),
+        urlencoding::encode(claim_token)
+    )
+}
+
+pub(crate) fn build_open_url(
+    base_url: &str,
+    organization: Option<&str>,
+    project: Option<&str>,
+) -> String {
     let trimmed_base = base_url.trim_end_matches('/');
     match (organization, project) {
         (Some(org), Some(project_name)) => format!(
@@ -42,7 +54,7 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::build_open_url;
+    use super::{build_claim_dashboard_url, build_open_url};
 
     #[test]
     fn build_open_url_uses_base_url_when_project_context_missing() {
@@ -60,5 +72,11 @@ mod tests {
     fn build_open_url_encodes_path_segments() {
         let url = build_open_url("https://rawtree.com", Some("team alpha"), Some("p/1"));
         assert_eq!(url, "https://rawtree.com/team%20alpha/p%2F1");
+    }
+
+    #[test]
+    fn build_claim_dashboard_url_appends_dashboard_route() {
+        let url = build_claim_dashboard_url("https://rawtree.com/", "a/b");
+        assert_eq!(url, "https://rawtree.com/claim/a%2Fb/dashboard");
     }
 }
