@@ -314,7 +314,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 KeyCommand::Create {
                     project,
-                    label,
+                    name,
                     permission,
                 } => {
                     let project = resolve_project(project)?;
@@ -322,18 +322,21 @@ fn run(cli: Cli) -> Result<()> {
                         &client,
                         &project,
                         effective_org.as_deref(),
-                        &label,
+                        &name,
                         &permission,
                         json,
                     )
                 }
-                KeyCommand::Delete { project, key_id } => {
+                KeyCommand::Delete {
+                    project,
+                    id_or_token,
+                } => {
                     let project = resolve_project(project)?;
                     commands::keys::delete(
                         &client,
                         &project,
                         effective_org.as_deref(),
-                        &key_id,
+                        &id_or_token,
                         json,
                     )
                 }
