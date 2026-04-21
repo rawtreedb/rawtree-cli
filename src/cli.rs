@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
@@ -91,11 +91,11 @@ pub enum Command {
         /// Filter by query type: select or insert
         #[arg(long)]
         r#type: Option<String>,
-        /// Filter by table name
-        #[arg(long)]
-        table: Option<String>,
+        /// Filter by table name. Repeat to include multiple tables.
+        #[arg(long, action = ArgAction::Append)]
+        table: Vec<String>,
         /// Filter by status: success or error
-        #[arg(long)]
+        #[arg(long, value_parser = ["success", "error"])]
         status: Option<String>,
         /// Maximum number of log entries to return (default: 50, max: 200)
         #[arg(long, default_value = "50", value_parser = clap::value_parser!(u64).range(1..=200))]
@@ -523,5 +523,36 @@ mod tests {
             "read_write",
         ]);
         assert!(result.is_err(), "key create should use --name, not --label");
+    }
+
+    #[test]
+    fn logs_table_filter_can_be_repeated() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "logs",
+            "--project",
+            "analytics",
+            "--table",
+            "events",
+            "--table",
+            "audit",
+        ])
+        .expect("repeated --table should parse");
+
+        match cli.command {
+            Command::Logs { table, .. } => {
+                assert_eq!(table, vec!["events".to_string(), "audit".to_string()]);
+            }
+            _ => panic!("expected logs command"),
+        }
+    }
+
+    #[test]
+    fn logs_status_only_accepts_success_or_error() {
+        let ok = Cli::try_parse_from(["rtree", "logs", "--status", "success"]);
+        assert!(ok.is_ok(), "success should parse");
+
+        let err = Cli::try_parse_from(["rtree", "logs", "--status", "ok"]);
+        assert!(err.is_err(), "ok should not be accepted as a logs status");
     }
 }

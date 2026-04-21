@@ -380,7 +380,7 @@ fn run(cli: Cli) -> Result<()> {
                 &project,
                 effective_org.as_deref(),
                 r#type.as_deref(),
-                table.as_deref(),
+                &table,
                 status.as_deref(),
                 limit,
                 offset,
