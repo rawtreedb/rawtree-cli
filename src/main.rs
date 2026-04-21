@@ -12,9 +12,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
-use cli::{
-    Cli, Command, KeysCommand, OrganizationCommand, ProjectCommand, ShellType, TableCommand,
-};
+use cli::{Cli, Command, KeyCommand, OrganizationCommand, ProjectCommand, ShellType, TableCommand};
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
 
@@ -307,14 +305,14 @@ fn run(cli: Cli) -> Result<()> {
                 commands::organization::delete(&client, &name, json)
             }
         },
-        Command::Keys { action } => {
+        Command::Key { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
-                KeysCommand::List { project } => {
+                KeyCommand::List { project } => {
                     let project = resolve_project(project)?;
                     commands::keys::list(&client, &project, effective_org.as_deref(), json)
                 }
-                KeysCommand::Create {
+                KeyCommand::Create {
                     project,
                     label,
                     permission,
@@ -329,7 +327,7 @@ fn run(cli: Cli) -> Result<()> {
                         json,
                     )
                 }
-                KeysCommand::Delete { project, key_id } => {
+                KeyCommand::Delete { project, key_id } => {
                     let project = resolve_project(project)?;
                     commands::keys::delete(
                         &client,
