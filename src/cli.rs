@@ -69,9 +69,10 @@ pub enum Command {
         action: ProjectCommand,
     },
     /// Manage API keys
-    Keys {
+    #[command(name = "key")]
+    Key {
         #[command(subcommand)]
-        action: KeysCommand,
+        action: KeyCommand,
     },
     /// Manage organizations
     Organization {
@@ -232,7 +233,7 @@ pub enum OrganizationCommand {
 }
 
 #[derive(Subcommand)]
-pub enum KeysCommand {
+pub enum KeyCommand {
     /// List API keys for a project
     List {
         #[arg(long)]
@@ -276,7 +277,7 @@ pub enum TableCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command};
+    use super::{Cli, Command, KeyCommand};
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
@@ -458,5 +459,27 @@ mod tests {
             "SELECT 1",
         ]);
         assert!(result.is_err(), "query --query should not be supported");
+    }
+
+    #[test]
+    fn key_command_is_singular() {
+        let cli =
+            Cli::try_parse_from(["rtree", "key", "list", "--project", "analytics"]).unwrap();
+
+        match cli.command {
+            Command::Key { action } => match action {
+                KeyCommand::List { project } => {
+                    assert_eq!(project.as_deref(), Some("analytics"));
+                }
+                _ => panic!("expected key list command"),
+            },
+            _ => panic!("expected key command"),
+        }
+    }
+
+    #[test]
+    fn keys_command_is_rejected() {
+        let result = Cli::try_parse_from(["rtree", "keys", "list", "--project", "analytics"]);
+        assert!(result.is_err(), "keys should not be accepted as a command");
     }
 }

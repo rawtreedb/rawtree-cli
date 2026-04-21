@@ -91,7 +91,7 @@ Resolution priority by setting:
 Top-level commands:
 
 - `register`, `login`, `logout`
-- `project`, `organization`, `keys`, `table`
+- `project`, `organization`, `key`, `table`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -146,8 +146,8 @@ If you are not logged in with a JWT, `rtree insert` can bootstrap an anonymous i
 ### Keys and tables
 
 ```sh
-rtree keys list --project analytics
-rtree keys create --project analytics --label ci --permission read_write
+rtree key list --project analytics
+rtree key create --project analytics --label ci --permission read_write
 
 rtree table list --project analytics
 rtree table describe --project analytics events
