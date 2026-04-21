@@ -8,7 +8,6 @@ use crate::output;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LogEntry {
-    pub query_id: String,
     pub time: String,
     #[serde(rename = "type")]
     pub log_type: String,
@@ -121,7 +120,7 @@ fn build_query_string(
     start_time: &str,
     end_time: &str,
     log_type: Option<&str>,
-    table: Option<&str>,
+    tables: &[String],
     status: Option<&str>,
     limit: u64,
     offset: u64,
@@ -133,17 +132,37 @@ fn build_query_string(
         format!("offset={}", offset),
     ];
 
-    if let Some(t) = log_type {
-        params.push(format!("type={}", urlencoding::encode(t)));
-    }
-    if let Some(t) = table {
-        params.push(format!("table={}", urlencoding::encode(t)));
-    }
-    if let Some(s) = status {
-        params.push(format!("status={}", urlencoding::encode(s)));
+    let search = build_search_filter(log_type, tables, status);
+    if let Some(search) = search {
+        params.push(format!("search={}", urlencoding::encode(&search)));
     }
 
     params.join("&")
+}
+
+fn build_search_filter(
+    log_type: Option<&str>,
+    tables: &[String],
+    status: Option<&str>,
+) -> Option<String> {
+    let mut filters = Vec::new();
+
+    if let Some(log_type) = log_type.map(str::trim).filter(|value| !value.is_empty()) {
+        filters.push(format!("type:{log_type}"));
+    }
+    if let Some(status) = status.map(str::trim).filter(|value| !value.is_empty()) {
+        filters.push(format!("status:{status}"));
+    }
+    let tables: Vec<&str> = tables
+        .iter()
+        .map(|table| table.trim())
+        .filter(|table| !table.is_empty())
+        .collect();
+    if !tables.is_empty() {
+        filters.push(format!("table:{}", tables.join(",")));
+    }
+
+    (!filters.is_empty()).then(|| filters.join(" "))
 }
 
 fn truncate_query(query: &str, max_len: usize) -> String {
@@ -208,13 +227,13 @@ fn fetch_logs(
     start_time: &str,
     end_time: &str,
     log_type: Option<&str>,
-    table: Option<&str>,
+    tables: &[String],
     status: Option<&str>,
     limit: u64,
     offset: u64,
 ) -> Result<LogsResponse> {
     let query_string =
-        build_query_string(start_time, end_time, log_type, table, status, limit, offset);
+        build_query_string(start_time, end_time, log_type, tables, status, limit, offset);
     let path = org::project_scoped_path(project, &format!("/logs?{}", query_string), organization);
     client.get(&path)
 }
@@ -225,7 +244,7 @@ pub fn logs(
     project: &str,
     organization: Option<&str>,
     log_type: Option<&str>,
-    table: Option<&str>,
+    tables: &[String],
     status: Option<&str>,
     limit: u64,
     offset: u64,
@@ -244,7 +263,7 @@ pub fn logs(
         &resolved_start,
         &resolved_end,
         log_type,
-        table,
+        tables,
         status,
         limit,
         offset,
@@ -349,12 +368,21 @@ mod tests {
 
     #[test]
     fn build_query_string_minimal() {
-        let qs = build_query_string("2026-03-28 00:00:00", "2026-03-29 00:00:00", None, None, None, 50, 0);
+        let qs = build_query_string(
+            "2026-03-28 00:00:00",
+            "2026-03-29 00:00:00",
+            None,
+            &[],
+            None,
+            50,
+            0,
+        );
         assert!(qs.contains("start_time="));
         assert!(qs.contains("end_time="));
         assert!(qs.contains("limit=50"));
         assert!(qs.contains("offset=0"));
         assert!(!qs.contains("type="));
+        assert!(!qs.contains("search="));
     }
 
     #[test]
@@ -363,16 +391,41 @@ mod tests {
             "2026-03-28 00:00:00",
             "2026-03-29 00:00:00",
             Some("select"),
-            Some("events"),
+            &[String::from("events")],
             Some("error"),
             100,
             50,
         );
-        assert!(qs.contains("type=select"));
-        assert!(qs.contains("table=events"));
-        assert!(qs.contains("status=error"));
+        assert!(qs.contains("search=type%3Aselect%20status%3Aerror%20table%3Aevents"));
+        assert!(!qs.contains("&type=select"));
+        assert!(!qs.contains("&table=events"));
+        assert!(!qs.contains("&status=error"));
         assert!(qs.contains("limit=100"));
         assert!(qs.contains("offset=50"));
+    }
+
+    #[test]
+    fn build_query_string_supports_multiple_tables() {
+        let qs = build_query_string(
+            "2026-03-28 00:00:00",
+            "2026-03-29 00:00:00",
+            Some("insert"),
+            &[String::from("events"), String::from("audit")],
+            None,
+            50,
+            0,
+        );
+
+        assert!(qs.contains("search=type%3Ainsert%20table%3Aevents%2Caudit"));
+    }
+
+    #[test]
+    fn build_search_filter_ignores_empty_filters() {
+        assert_eq!(
+            build_search_filter(Some("select"), &[String::from(" ")], Some("")),
+            Some("type:select".to_string())
+        );
+        assert_eq!(build_search_filter(None, &[], None), None);
     }
 
     #[test]
@@ -405,7 +458,6 @@ mod tests {
     #[test]
     fn format_log_line_success() {
         let entry = LogEntry {
-            query_id: "abc".to_string(),
             time: "2026-03-28 18:51:19.401393".to_string(),
             log_type: "select".to_string(),
             status: "OK".to_string(),
@@ -432,7 +484,6 @@ mod tests {
     #[test]
     fn format_log_line_error() {
         let entry = LogEntry {
-            query_id: "def".to_string(),
             time: "2026-03-28 18:53:44.000000".to_string(),
             log_type: "select".to_string(),
             status: "ExceptionBeforeStart".to_string(),
