@@ -18,8 +18,10 @@ struct TablesResponse {
 struct TableInfo {
     name: String,
     created_at: String,
-    rows: u64,
-    size: u64,
+    #[serde(alias = "rows")]
+    total_rows: u64,
+    #[serde(alias = "size")]
+    total_bytes: u64,
 }
 
 #[derive(Deserialize)]
@@ -33,8 +35,10 @@ struct ColumnInfo {
 struct DescribeTableResponse {
     name: String,
     created_at: String,
-    rows: u64,
-    size: u64,
+    #[serde(alias = "rows")]
+    total_rows: u64,
+    #[serde(alias = "size")]
+    total_bytes: u64,
     columns: Vec<ColumnInfo>,
 }
 
@@ -51,8 +55,8 @@ pub fn list(
             "tables": resp.tables.iter().map(|t| json!({
                 "name": t.name,
                 "created_at": t.created_at,
-                "rows": t.rows,
-                "size": t.size,
+                "total_rows": t.total_rows,
+                "total_bytes": t.total_bytes,
             })).collect::<Vec<_>>()
         }),
         json_mode,
@@ -65,8 +69,8 @@ pub fn list(
             for t in &resp.tables {
                 table.add_row(vec![
                     Cell::new(&t.name),
-                    Cell::new(t.rows.to_string()).set_alignment(CellAlignment::Right),
-                    Cell::new(format_bytes(t.size)).set_alignment(CellAlignment::Right),
+                    Cell::new(t.total_rows.to_string()).set_alignment(CellAlignment::Right),
+                    Cell::new(format_bytes(t.total_bytes)).set_alignment(CellAlignment::Right),
                 ]);
             }
             println!("{table}");
@@ -90,8 +94,8 @@ pub fn describe(
         &json!({
             "table": resp.name,
             "created_at": resp.created_at,
-            "rows": resp.rows,
-            "size": resp.size,
+            "total_rows": resp.total_rows,
+            "total_bytes": resp.total_bytes,
             "columns": resp.columns.iter().map(|c| json!({
                 "name": c.name,
                 "type": c.col_type,
@@ -100,8 +104,8 @@ pub fn describe(
         json_mode,
         |_| {
             println!("Table: {}", resp.name);
-            println!("Rows: {}", resp.rows);
-            println!("Size: {}", format_bytes(resp.size));
+            println!("Rows: {}", resp.total_rows);
+            println!("Size: {}", format_bytes(resp.total_bytes));
             println!("Created at: {}", resp.created_at);
             println!();
 
@@ -140,4 +144,42 @@ fn new_cli_table() -> Table {
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_content_arrangement(ContentArrangement::Dynamic);
     table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DescribeTableResponse, TablesResponse};
+
+    #[test]
+    fn tables_response_accepts_new_field_names() {
+        let payload = r#"{
+            "tables": [{
+                "name": "events",
+                "created_at": "2026-01-01 10:00:00",
+                "total_rows": 1200,
+                "total_bytes": 98304
+            }]
+        }"#;
+
+        let resp: TablesResponse = serde_json::from_str(payload).expect("valid payload");
+        assert_eq!(resp.tables.len(), 1);
+        assert_eq!(resp.tables[0].total_rows, 1200);
+        assert_eq!(resp.tables[0].total_bytes, 98304);
+    }
+
+    #[test]
+    fn describe_response_accepts_legacy_field_names() {
+        let payload = r#"{
+            "name": "events",
+            "created_at": "2026-01-01 10:00:00",
+            "rows": 1200,
+            "size": 98304,
+            "columns": [{"name": "event", "type": "String"}]
+        }"#;
+
+        let resp: DescribeTableResponse = serde_json::from_str(payload).expect("valid payload");
+        assert_eq!(resp.total_rows, 1200);
+        assert_eq!(resp.total_bytes, 98304);
+        assert_eq!(resp.columns.len(), 1);
+    }
 }
