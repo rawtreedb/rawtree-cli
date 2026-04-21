@@ -243,9 +243,9 @@ pub enum KeyCommand {
     Create {
         #[arg(long)]
         project: Option<String>,
-        /// Label for the key
+        /// Name for the key
         #[arg(long)]
-        label: String,
+        name: String,
         /// Permission level: admin, read_write, write_only, read_only
         #[arg(long)]
         permission: String,
@@ -254,8 +254,8 @@ pub enum KeyCommand {
     Delete {
         #[arg(long)]
         project: Option<String>,
-        /// Key ID to delete
-        key_id: String,
+        /// Key ID or full API key token to delete
+        id_or_token: String,
     },
 }
 
@@ -481,5 +481,47 @@ mod tests {
     fn keys_command_is_rejected() {
         let result = Cli::try_parse_from(["rtree", "keys", "list", "--project", "analytics"]);
         assert!(result.is_err(), "keys should not be accepted as a command");
+    }
+
+    #[test]
+    fn key_create_uses_name_flag() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "key",
+            "create",
+            "--project",
+            "analytics",
+            "--name",
+            "ci",
+            "--permission",
+            "read_write",
+        ])
+        .expect("key create with --name should parse");
+
+        match cli.command {
+            Command::Key { action } => match action {
+                KeyCommand::Create { name, .. } => {
+                    assert_eq!(name, "ci");
+                }
+                _ => panic!("expected key create command"),
+            },
+            _ => panic!("expected key command"),
+        }
+    }
+
+    #[test]
+    fn key_create_label_flag_is_rejected() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "key",
+            "create",
+            "--project",
+            "analytics",
+            "--label",
+            "ci",
+            "--permission",
+            "read_write",
+        ]);
+        assert!(result.is_err(), "key create should use --name, not --label");
     }
 }

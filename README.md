@@ -147,7 +147,7 @@ If you are not logged in with a JWT, `rtree insert` can bootstrap an anonymous i
 
 ```sh
 rtree key list --project analytics
-rtree key create --project analytics --label ci --permission read_write
+rtree key create --project analytics --name ci --permission read_write
 
 rtree table list --project analytics
 rtree table describe --project analytics events
