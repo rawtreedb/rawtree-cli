@@ -55,7 +55,6 @@ struct AuthSelection {
 
 #[derive(Deserialize)]
 struct ProjectItem {
-    #[serde(alias = "project_name")]
     name: String,
 }
 
@@ -83,9 +82,7 @@ fn organization_by_name<'a>(
     organizations: &'a [org::OrganizationItem],
     name: &str,
 ) -> Option<&'a org::OrganizationItem> {
-    organizations
-        .iter()
-        .find(|item| item.organization_name == name)
+    organizations.iter().find(|item| item.name == name)
 }
 
 fn select_organization(
@@ -153,12 +150,9 @@ fn resolve_selected_project(
 
 fn list_projects_for_organization(
     client: &ApiClient,
-    organization_id: &str,
+    organization_name: &str,
 ) -> Result<Vec<String>> {
-    let path = format!(
-        "/v1/projects?organization_id={}",
-        urlencoding::encode(organization_id)
-    );
+    let path = org::projects_collection_path(Some(organization_name));
     let resp: ListProjectsResponse = client.get(&path)?;
     Ok(resp.projects.into_iter().map(|item| item.name).collect())
 }
@@ -197,20 +191,19 @@ fn resolve_auth_selection(
     };
 
     let selected_project = resolve_selected_project(
-        list_projects_for_organization(&authed_client, &selected_org.organization_id).with_context(
-            || {
+        list_projects_for_organization(&authed_client, &selected_org.name)
+            .with_context(|| {
                 format!(
                     "failed to list projects for organization '{}'",
-                    selected_org.organization_name
+                    selected_org.name
                 )
-            },
-        ),
-        &selected_org.organization_name,
+            }),
+        &selected_org.name,
         cli_project,
     )?;
 
     Ok(AuthSelection {
-        organization: Some(selected_org.organization_name),
+        organization: Some(selected_org.name),
         project: selected_project,
     })
 }
@@ -488,12 +481,10 @@ mod tests {
         }
     }
 
-    fn sample_org(organization_id: &str, organization_name: &str) -> OrganizationItem {
+    fn sample_org(name: &str) -> OrganizationItem {
         OrganizationItem {
-            organization_id: organization_id.to_string(),
-            organization_name: organization_name.to_string(),
+            name: name.to_string(),
             role: "owner".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }
 
@@ -505,12 +496,7 @@ mod tests {
             organization: Some("team_alpha".to_string()),
             project: Some("analytics".to_string()),
         };
-        apply_auth_config(
-            &mut cfg,
-            "https://api.rawtree.com",
-            &resp,
-            &selection,
-        );
+        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
 
         assert_eq!(cfg.token.as_deref(), Some("jwt"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
@@ -538,12 +524,7 @@ mod tests {
         };
         let resp = sample_auth_response();
         let selection = AuthSelection::default();
-        apply_auth_config(
-            &mut cfg,
-            "https://api.rawtree.com",
-            &resp,
-            &selection,
-        );
+        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
 
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_project, None);
@@ -551,7 +532,7 @@ mod tests {
 
     #[test]
     fn select_organization_uses_cli_when_present() {
-        let organizations = vec![sample_org("1", "team_alpha"), sample_org("2", "team_beta")];
+        let organizations = vec![sample_org("team_alpha"), sample_org("team_beta")];
         let selected = select_organization(
             &organizations,
             Some("team_beta"),
@@ -561,36 +542,36 @@ mod tests {
         .expect("selection should succeed")
         .expect("organization should be selected");
 
-        assert_eq!(selected.organization_name, "team_beta");
+        assert_eq!(selected.name, "team_beta");
     }
 
     #[test]
     fn select_organization_errors_for_unknown_cli_org() {
-        let organizations = vec![sample_org("1", "team_alpha")];
+        let organizations = vec![sample_org("team_alpha")];
         let result = select_organization(&organizations, Some("missing"), None, None);
         assert!(result.is_err(), "unknown CLI org should fail");
     }
 
     #[test]
     fn select_organization_uses_env_then_cfg_then_first() {
-        let organizations = vec![sample_org("1", "team_alpha"), sample_org("2", "team_beta")];
+        let organizations = vec![sample_org("team_alpha"), sample_org("team_beta")];
 
         let env_selected = select_organization(&organizations, None, Some("team_beta"), None)
             .expect("env selection should succeed")
             .expect("organization should exist");
-        assert_eq!(env_selected.organization_name, "team_beta");
+        assert_eq!(env_selected.name, "team_beta");
 
         let cfg_selected =
             select_organization(&organizations, None, Some("missing"), Some("team_beta"))
                 .expect("cfg selection should succeed")
                 .expect("organization should exist");
-        assert_eq!(cfg_selected.organization_name, "team_beta");
+        assert_eq!(cfg_selected.name, "team_beta");
 
         let first_selected =
             select_organization(&organizations, None, Some("missing"), Some("also_missing"))
                 .expect("fallback selection should succeed")
                 .expect("organization should exist");
-        assert_eq!(first_selected.organization_name, "team_alpha");
+        assert_eq!(first_selected.name, "team_alpha");
     }
 
     #[test]
