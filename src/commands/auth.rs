@@ -509,7 +509,7 @@ mod tests {
         };
         apply_auth_config(
             &mut cfg,
-            "https://api.us-east-1.aws.rawtree.com",
+            "https://api.rawtree.com",
             &resp,
             &selection,
         );
@@ -542,7 +542,7 @@ mod tests {
         let selection = AuthSelection::default();
         apply_auth_config(
             &mut cfg,
-            "https://api.us-east-1.aws.rawtree.com",
+            "https://api.rawtree.com",
             &resp,
             &selection,
         );
@@ -643,7 +643,7 @@ mod tests {
         let mut cfg = Config {
             token: Some("rw_temp".to_string()),
             email: Some("user@example.com".to_string()),
-            url: Some("https://api.us-east-1.aws.rawtree.com".to_string()),
+            url: Some("https://api.rawtree.com".to_string()),
             default_project: Some("analytics".to_string()),
             default_organization: Some("team_alpha".to_string()),
             last_claim_token: Some("claim_abc".to_string()),
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(cfg.email, None);
         assert_eq!(
             cfg.url.as_deref(),
-            Some("https://api.us-east-1.aws.rawtree.com")
+            Some("https://api.rawtree.com")
         );
         assert_eq!(cfg.default_project, None);
         assert_eq!(cfg.default_organization, None);
