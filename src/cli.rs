@@ -390,7 +390,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "--api-url",
-            "https://api.us-east-1.aws.rawtree.com",
+            "https://api.rawtree.com",
             "insert",
             "--project",
             "analytics",
@@ -403,7 +403,7 @@ mod tests {
 
         assert_eq!(
             cli.api_url.as_deref(),
-            Some("https://api.us-east-1.aws.rawtree.com")
+            Some("https://api.rawtree.com")
         );
         match cli.command {
             Command::Insert { url, .. } => {
@@ -418,7 +418,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "--api-url",
-            "https://api.us-east-1.aws.rawtree.com",
+            "https://api.rawtree.com",
             "query",
             "--project",
             "analytics",
@@ -429,7 +429,7 @@ mod tests {
 
         assert_eq!(
             cli.api_url.as_deref(),
-            Some("https://api.us-east-1.aws.rawtree.com")
+            Some("https://api.rawtree.com")
         );
     }
 
