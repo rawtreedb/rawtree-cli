@@ -1,14 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::client::ApiClient;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrganizationItem {
-    pub organization_id: String,
-    pub organization_name: String,
+    pub name: String,
     pub role: String,
-    pub created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,21 +24,17 @@ pub fn first_organization_name(client: &ApiClient) -> Option<String> {
         .ok()?
         .into_iter()
         .next()
-        .map(|org| org.organization_name)
+        .map(|org| org.name)
 }
 
-pub fn resolve_organization_id(client: &ApiClient, organization_name: &str) -> Result<String> {
-    let organizations = list_organizations(client)?;
-    organizations
-        .into_iter()
-        .find(|org| org.organization_name == organization_name)
-        .map(|org| org.organization_id)
-        .ok_or_else(|| {
-            anyhow!(
-                "Organization '{}' not found for current user.",
-                organization_name
-            )
-        })
+pub fn projects_collection_path(organization: Option<&str>) -> String {
+    match organization {
+        Some(org_name) => format!(
+            "/v1/projects?organization_name={}",
+            urlencoding::encode(org_name)
+        ),
+        None => "/v1/projects".to_string(),
+    }
 }
 
 pub fn project_scoped_path(project: &str, suffix: &str, organization: Option<&str>) -> String {
@@ -60,7 +54,16 @@ pub fn project_scoped_path(project: &str, suffix: &str, organization: Option<&st
 
 #[cfg(test)]
 mod tests {
-    use super::project_scoped_path;
+    use super::{project_scoped_path, projects_collection_path};
+
+    #[test]
+    fn projects_collection_path_uses_organization_name_filter() {
+        assert_eq!(
+            projects_collection_path(Some("team alpha")),
+            "/v1/projects?organization_name=team%20alpha"
+        );
+        assert_eq!(projects_collection_path(None), "/v1/projects");
+    }
 
     #[test]
     fn project_scoped_path_builds_unscoped_route() {

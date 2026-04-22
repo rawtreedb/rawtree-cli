@@ -9,13 +9,12 @@ use crate::output;
 
 #[derive(Deserialize)]
 struct CreateOrganizationResponse {
-    organization_id: String,
-    organization_name: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
 struct RenameOrganizationResponse {
-    organization_name: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -61,10 +60,7 @@ pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
                 );
             } else {
                 for item in &organizations {
-                    println!(
-                        "{:<20} {:<8} id={} created={}",
-                        item.organization_name, item.role, item.organization_id, item.created_at
-                    );
+                    println!("{:<20} {:<8}", item.name, item.role);
                 }
             }
         },
@@ -77,15 +73,11 @@ pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
         client.post("/v1/organizations", &json!({"organization_name": name}))?;
     output::print_result(
         &json!({
-            "organization_id": resp.organization_id,
-            "organization_name": resp.organization_name,
+            "name": resp.name,
         }),
         json_mode,
         |_| {
-            println!(
-                "Organization '{}' created (id={}).",
-                resp.organization_name, resp.organization_id
-            );
+            println!("Organization '{}' created.", resp.name);
         },
     );
     Ok(())
@@ -111,18 +103,15 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
     cfg.default_organization = renamed_default_org(
         cfg.default_organization.as_deref(),
         old,
-        &resp.organization_name,
+        &resp.name,
     );
     config::save(&cfg)?;
 
     output::print_result(
-        &json!({"old_name": old, "organization_name": resp.organization_name}),
+        &json!({"old_name": old, "name": resp.name}),
         json_mode,
         |_| {
-            println!(
-                "Organization '{}' renamed to '{}'.",
-                old, resp.organization_name
-            );
+            println!("Organization '{}' renamed to '{}'.", old, resp.name);
         },
     );
     Ok(())
@@ -136,7 +125,7 @@ pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
             let next = org::list_organizations(client)?
                 .into_iter()
                 .next()
-                .map(|item| item.organization_name);
+                .map(|item| item.name);
             cfg.default_organization =
                 default_org_after_delete(cfg.default_organization.as_deref(), name, next);
             config::save(&cfg)?;
