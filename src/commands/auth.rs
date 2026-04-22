@@ -253,9 +253,7 @@ fn print_selected_context(selection: &AuthSelection) {
 }
 
 fn clear_auth_config(cfg: &mut config::Config) {
-    let preserved_url = cfg.url.clone();
     *cfg = config::Config::default();
-    cfg.url = preserved_url;
 }
 
 pub fn register(
@@ -469,7 +467,7 @@ pub fn logout(json_mode: bool) -> Result<()> {
     config::save(&cfg)?;
 
     output::print_result(&json!({"status": "logged_out"}), json_mode, |_| {
-        println!("Logged out. Credentials removed from local config.");
+        println!("Logged out. Local config reset to defaults.");
     });
     Ok(())
 }
@@ -639,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_auth_config_removes_auth_state_but_preserves_url() {
+    fn clear_auth_config_resets_auth_state_and_saved_url() {
         let mut cfg = Config {
             token: Some("rw_temp".to_string()),
             email: Some("user@example.com".to_string()),
@@ -654,10 +652,7 @@ mod tests {
 
         assert_eq!(cfg.token, None);
         assert_eq!(cfg.email, None);
-        assert_eq!(
-            cfg.url.as_deref(),
-            Some("https://api.rawtree.com")
-        );
+        assert_eq!(cfg.url, None);
         assert_eq!(cfg.default_project, None);
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.last_claim_token, None);

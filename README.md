@@ -74,6 +74,9 @@ If `--project` is omitted, it selects the first project in the selected organiza
 rtree logout
 ```
 
+Logout clears the local config, including any saved API URL, so the next run uses
+the default `https://api.rawtree.com` endpoint unless an override is provided.
+
 ## Configuration
 
 Config file location:
