@@ -75,7 +75,16 @@ pub fn print_error(err: &anyhow::Error, json_mode: bool) -> i32 {
     let code = exit_code_for(&msg);
 
     if json_mode {
-        eprintln!("{}", json!({"error": msg, "exit_code": code}));
+        eprintln!(
+            "{}",
+            json!({
+                "error": {
+                    "message": msg,
+                    "code": error_code_for(code),
+                },
+                "exit_code": code
+            })
+        );
     } else {
         eprintln!("Error: {}", msg);
     }
@@ -100,5 +109,15 @@ fn exit_code_for(msg: &str) -> i32 {
         3
     } else {
         5
+    }
+}
+
+fn error_code_for(exit_code: i32) -> &'static str {
+    match exit_code {
+        1 => "auth_error",
+        2 => "validation_error",
+        3 => "server_error",
+        4 => "not_found",
+        _ => "general_error",
     }
 }

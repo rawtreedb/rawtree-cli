@@ -158,23 +158,32 @@ fn list_projects_for_organization(
     Ok(resp.projects.into_iter().map(|item| item.name).collect())
 }
 
-fn resolve_auth_selection(
+enum AuthSelectionMode {
+    Lenient,
+    Strict,
+}
+
+fn resolve_auth_selection_with_mode(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
     cli_project: Option<&str>,
     env_org: Option<&str>,
     cfg_org: Option<&str>,
+    mode: AuthSelectionMode,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
         Ok(items) => items,
-        Err(err) => {
-            if cli_org.is_some() || cli_project.is_some() {
+        Err(err) => match mode {
+            AuthSelectionMode::Strict => {
+                return Err(err.context("failed to validate token"));
+            }
+            AuthSelectionMode::Lenient if cli_org.is_some() || cli_project.is_some() => {
                 return Err(err.context("failed to list organizations for auth-time selection"));
             }
-            return Ok(AuthSelection::default());
-        }
+            AuthSelectionMode::Lenient => return Ok(AuthSelection::default()),
+        },
     };
 
     let selected_org = select_organization(&organizations, cli_org, env_org, cfg_org)?;
@@ -206,6 +215,25 @@ fn resolve_auth_selection(
         organization: Some(selected_org.name),
         project: selected_project,
     })
+}
+
+fn resolve_auth_selection(
+    base_url: &str,
+    token: &str,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+    env_org: Option<&str>,
+    cfg_org: Option<&str>,
+) -> Result<AuthSelection> {
+    resolve_auth_selection_with_mode(
+        base_url,
+        token,
+        cli_org,
+        cli_project,
+        env_org,
+        cfg_org,
+        AuthSelectionMode::Lenient,
+    )
 }
 
 fn resolve_auth_selection_strict(
@@ -216,39 +244,15 @@ fn resolve_auth_selection_strict(
     env_org: Option<&str>,
     cfg_org: Option<&str>,
 ) -> Result<AuthSelection> {
-    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
-    let organizations =
-        org::list_organizations(&authed_client).context("failed to validate token")?;
-
-    let selected_org = select_organization(&organizations, cli_org, env_org, cfg_org)?;
-    let selected_org = match selected_org {
-        Some(item) => item,
-        None => {
-            if let Some(project_name) = cli_project {
-                anyhow::bail!(
-                    "Cannot select project '{}' because no organization is available.",
-                    project_name
-                );
-            }
-            return Ok(AuthSelection::default());
-        }
-    };
-
-    let selected_project = resolve_selected_project(
-        list_projects_for_organization(&authed_client, &selected_org.name).with_context(|| {
-            format!(
-                "failed to list projects for organization '{}'",
-                selected_org.name
-            )
-        }),
-        &selected_org.name,
+    resolve_auth_selection_with_mode(
+        base_url,
+        token,
+        cli_org,
         cli_project,
-    )?;
-
-    Ok(AuthSelection {
-        organization: Some(selected_org.name),
-        project: selected_project,
-    })
+        env_org,
+        cfg_org,
+        AuthSelectionMode::Strict,
+    )
 }
 
 fn map_validation_error(err: anyhow::Error) -> anyhow::Error {
@@ -257,6 +261,10 @@ fn map_validation_error(err: anyhow::Error) -> anyhow::Error {
 
 fn map_write_error(err: anyhow::Error) -> anyhow::Error {
     output::coded_error("write_failed", format!("{:#}", err), 1)
+}
+
+fn map_config_read_error(err: anyhow::Error) -> anyhow::Error {
+    output::coded_error("config_read_failed", format!("{:#}", err), 1)
 }
 
 fn update_and_save_config(
@@ -391,7 +399,7 @@ pub fn login_with_token(
         ));
     }
 
-    let mut cfg = config::load().map_err(map_write_error)?;
+    let mut cfg = config::load().map_err(map_config_read_error)?;
     let env_org = std::env::var("RAWTREE_ORG").ok();
     let selection = resolve_auth_selection_strict(
         &client.base_url,
