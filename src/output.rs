@@ -1,5 +1,51 @@
 use serde::Serialize;
 use serde_json::json;
+use std::fmt;
+
+#[derive(Debug)]
+pub struct CliError {
+    code: &'static str,
+    message: String,
+    exit_code: i32,
+}
+
+impl CliError {
+    pub fn new(code: &'static str, message: impl Into<String>, exit_code: i32) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            exit_code,
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CliError {}
+
+pub fn coded_error(
+    code: &'static str,
+    message: impl Into<String>,
+    exit_code: i32,
+) -> anyhow::Error {
+    CliError::new(code, message, exit_code).into()
+}
 
 /// Print a value: as JSON when json_mode is true, otherwise run the human formatter.
 pub fn print_result<T: Serialize, F: FnOnce(&T)>(value: &T, json_mode: bool, human: F) {
@@ -13,6 +59,18 @@ pub fn print_result<T: Serialize, F: FnOnce(&T)>(value: &T, json_mode: bool, hum
 /// Print an error. In JSON mode, outputs structured JSON to stderr.
 /// Returns an appropriate exit code based on the error message.
 pub fn print_error(err: &anyhow::Error, json_mode: bool) -> i32 {
+    if let Some(cli_err) = err.downcast_ref::<CliError>() {
+        if json_mode {
+            eprintln!(
+                "{}",
+                json!({"error": {"message": cli_err.message(), "code": cli_err.code()}})
+            );
+        } else {
+            eprintln!("Error: {}", cli_err.message());
+        }
+        return cli_err.exit_code();
+    }
+
     let msg = format!("{:#}", err);
     let code = exit_code_for(&msg);
 

@@ -32,19 +32,31 @@ pub struct LogsResponse {
 fn parse_duration(s: &str) -> Result<chrono::Duration> {
     let s = s.trim();
     if s.len() < 2 {
-        bail!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s);
+        bail!(
+            "invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)",
+            s
+        );
     }
 
     let (num_str, unit) = match s.char_indices().next_back() {
         Some((i, _)) => s.split_at(i),
-        None => bail!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s),
+        None => bail!(
+            "invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)",
+            s
+        ),
     };
-    let num: i64 = num_str
-        .parse()
-        .map_err(|_| anyhow::anyhow!("invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)", s))?;
+    let num: i64 = num_str.parse().map_err(|_| {
+        anyhow::anyhow!(
+            "invalid duration '{}'. Use a number followed by m, h, d, or w (e.g., 1h, 30m)",
+            s
+        )
+    })?;
 
     if num <= 0 {
-        bail!("invalid duration '{}'. Duration must be a positive number (e.g., 1h, 30m)", s);
+        bail!(
+            "invalid duration '{}'. Duration must be a positive number (e.g., 1h, 30m)",
+            s
+        );
     }
 
     match unit {
@@ -75,7 +87,11 @@ fn resolve_time_range(
         let start = start_time.map(|s| s.to_string()).unwrap_or_else(|| {
             // Default to 24h before end_time, not 24h before now
             chrono::DateTime::parse_from_rfc3339(&end)
-                .map(|dt| (dt - chrono::Duration::hours(24)).format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .map(|dt| {
+                    (dt - chrono::Duration::hours(24))
+                        .format("%Y-%m-%dT%H:%M:%SZ")
+                        .to_string()
+                })
                 .unwrap_or_else(|_| {
                     (now - chrono::Duration::hours(24))
                         .format("%Y-%m-%dT%H:%M:%SZ")
@@ -83,7 +99,11 @@ fn resolve_time_range(
                 })
         });
         if start > end {
-            bail!("invalid time range: --start-time ({}) is after --end-time ({})", start, end);
+            bail!(
+                "invalid time range: --start-time ({}) is after --end-time ({})",
+                start,
+                end
+            );
         }
         return Ok((start, end));
     }
@@ -106,12 +126,8 @@ fn resolve_time_range(
         );
     }
 
-    let start = (now - since_delta)
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let end = (now - until_delta)
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let start = (now - since_delta).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let end = (now - until_delta).format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     Ok((start, end))
 }
@@ -198,7 +214,11 @@ fn format_log_line(entry: &LogEntry) -> String {
     } else {
         &entry.time
     };
-    let status_str = if entry.status.eq_ignore_ascii_case("OK") { "OK" } else { "ERROR" };
+    let status_str = if entry.status.eq_ignore_ascii_case("OK") {
+        "OK"
+    } else {
+        "ERROR"
+    };
     let query = truncate_query(&entry.query, 80);
     let bytes = format_bytes(entry.bytes);
 
@@ -232,8 +252,9 @@ fn fetch_logs(
     limit: u64,
     offset: u64,
 ) -> Result<LogsResponse> {
-    let query_string =
-        build_query_string(start_time, end_time, log_type, tables, status, limit, offset);
+    let query_string = build_query_string(
+        start_time, end_time, log_type, tables, status, limit, offset,
+    );
     let path = org::project_scoped_path(project, &format!("/logs?{}", query_string), organization);
     client.get(&path)
 }
@@ -440,9 +461,13 @@ mod tests {
 
     #[test]
     fn resolve_time_range_absolute() {
-        let (start, end) =
-            resolve_time_range(None, None, Some("2026-03-28 00:00:00"), Some("2026-03-29 00:00:00"))
-                .unwrap();
+        let (start, end) = resolve_time_range(
+            None,
+            None,
+            Some("2026-03-28 00:00:00"),
+            Some("2026-03-29 00:00:00"),
+        )
+        .unwrap();
         assert_eq!(start, "2026-03-28 00:00:00");
         assert_eq!(end, "2026-03-29 00:00:00");
     }

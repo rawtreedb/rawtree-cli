@@ -61,20 +61,20 @@ pub fn list(
         }),
         json_mode,
         |_| {
-        if resp.tables.is_empty() {
-            println!("No tables yet. Insert data to auto-create a table.");
-        } else {
-            let mut table = new_cli_table();
-            table.set_header(vec!["table", "rows", "size"]);
-            for t in &resp.tables {
-                table.add_row(vec![
-                    Cell::new(&t.name),
-                    Cell::new(t.total_rows.to_string()).set_alignment(CellAlignment::Right),
-                    Cell::new(format_bytes(t.total_bytes)).set_alignment(CellAlignment::Right),
-                ]);
+            if resp.tables.is_empty() {
+                println!("No tables yet. Insert data to auto-create a table.");
+            } else {
+                let mut table = new_cli_table();
+                table.set_header(vec!["table", "rows", "size"]);
+                for t in &resp.tables {
+                    table.add_row(vec![
+                        Cell::new(&t.name),
+                        Cell::new(t.total_rows.to_string()).set_alignment(CellAlignment::Right),
+                        Cell::new(format_bytes(t.total_bytes)).set_alignment(CellAlignment::Right),
+                    ]);
+                }
+                println!("{table}");
             }
-            println!("{table}");
-        }
         },
     );
     Ok(())

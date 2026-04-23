@@ -25,6 +25,10 @@ fn config_path() -> Result<PathBuf> {
     Ok(dir.join("config.json"))
 }
 
+pub fn path() -> Result<PathBuf> {
+    config_path()
+}
+
 /// Returns ~/.config/rtree on Unix, or an equivalent on other platforms.
 fn dirs_fallback() -> Option<PathBuf> {
     if let Ok(home) = std::env::var("HOME") {

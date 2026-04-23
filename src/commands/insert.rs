@@ -337,14 +337,30 @@ pub fn insert(
     }
 
     if let Some(raw_url) = url {
-        return insert_from_url(client, project, organization, table, raw_url, transform, json_mode);
+        return insert_from_url(
+            client,
+            project,
+            organization,
+            table,
+            raw_url,
+            transform,
+            json_mode,
+        );
     }
 
     let path =
         file.ok_or_else(|| anyhow::anyhow!("provide exactly one of --data, --file, or --url"))?;
 
     if is_jsonl(path) {
-        insert_jsonl_streaming(client, project, organization, table, path, transform, json_mode)?;
+        insert_jsonl_streaming(
+            client,
+            project,
+            organization,
+            table,
+            path,
+            transform,
+            json_mode,
+        )?;
     } else {
         // Non-JSONL files: parse entire file (assumed to be a JSON array or object)
         let contents =
