@@ -38,7 +38,7 @@ pub enum Command {
         #[arg(long)]
         email: String,
         /// Password (prompted interactively if omitted)
-        #[arg(long)]
+        #[arg(long, hide = true)]
         password: Option<String>,
         /// Project name to set as default after authentication
         #[arg(long)]
@@ -55,7 +55,7 @@ pub enum Command {
         #[arg(long)]
         email: Option<String>,
         /// Password (prompted interactively if omitted)
-        #[arg(long, requires = "email")]
+        #[arg(long, requires = "email", hide = true)]
         password: Option<String>,
         /// Do not try to open the browser automatically
         #[arg(long, default_value_t = false)]
