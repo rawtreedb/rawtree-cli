@@ -44,14 +44,25 @@ pub enum Command {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Save a RawTree token
+    /// Log in and save token
     #[command(
-        after_help = "Non-interactive: --token is required (no prompts when stdin/stdout is not a TTY).\n\nOutput (--json or piped):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
+        after_help = "Token mode:\n  --token saves a token directly without browser/email flows.\n\nToken output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
     )]
     Login {
-        /// API token to store (required in non-interactive mode)
-        #[arg(long)]
+        /// API token to store directly
+        #[arg(long, conflicts_with_all = ["email", "password", "no_browser", "timeout_seconds"])]
         token: Option<String>,
+        #[arg(long)]
+        email: Option<String>,
+        /// Password (prompted interactively if omitted)
+        #[arg(long, requires = "email")]
+        password: Option<String>,
+        /// Do not try to open the browser automatically
+        #[arg(long, default_value_t = false)]
+        no_browser: bool,
+        /// Max seconds to wait for browser login approval
+        #[arg(long, default_value_t = 300)]
+        timeout_seconds: u64,
         /// Project name to set as default after authentication
         #[arg(long)]
         project: Option<String>,
@@ -292,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn login_without_token_parses() {
+    fn login_without_token_is_allowed_for_browser_flow() {
         let cli = Cli::try_parse_from(["rtree", "login"]).expect("login should parse");
         match cli.command {
             Command::Login { token, .. } => assert!(token.is_none()),
@@ -311,12 +322,40 @@ mod tests {
     }
 
     #[test]
-    fn login_with_project_without_token_parses() {
+    fn login_with_password_requires_email() {
+        let result = Cli::try_parse_from(["rtree", "login", "--password", "secret123"]);
+        assert!(result.is_err(), "password without email should fail");
+    }
+
+    #[test]
+    fn login_with_token_conflicts_with_email() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "login",
+            "--token",
+            "rw_abc123",
+            "--email",
+            "user@example.com",
+        ]);
+        assert!(
+            result.is_err(),
+            "token mode should conflict with email/password login"
+        );
+    }
+
+    #[test]
+    fn login_with_project_without_email_is_allowed_for_browser_flow() {
         let cli = Cli::try_parse_from(["rtree", "login", "--project", "analytics"])
             .expect("login with --project should parse");
         match cli.command {
-            Command::Login { token, project, .. } => {
+            Command::Login {
+                token,
+                email,
+                project,
+                ..
+            } => {
                 assert!(token.is_none());
+                assert!(email.is_none());
                 assert_eq!(project.as_deref(), Some("analytics"));
             }
             _ => panic!("expected login command"),

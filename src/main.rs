@@ -207,9 +207,7 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
 
 fn main() {
     let cli = Cli::parse();
-    let login_non_interactive =
-        matches!(&cli.command, Command::Login { .. }) && is_login_non_interactive();
-    let json_mode = cli.json || login_non_interactive;
+    let json_mode = cli.json;
     if let Err(e) = run(cli) {
         let code = output::print_error(&e, json_mode);
         std::process::exit(code);
@@ -227,48 +225,6 @@ fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
             Ok(p)
         }
     }
-}
-
-fn is_login_non_interactive() -> bool {
-    !io::stdin().is_terminal() || !io::stdout().is_terminal()
-}
-
-fn validate_token_format(token: &str) -> Result<()> {
-    if token.is_empty() {
-        return Err(output::coded_error(
-            "missing_token",
-            "Token is required. Use --token in non-interactive mode.",
-            1,
-        ));
-    }
-    if token.chars().any(char::is_whitespace) {
-        return Err(output::coded_error(
-            "invalid_token_format",
-            "Invalid token format. Token must not contain whitespace.",
-            1,
-        ));
-    }
-    Ok(())
-}
-
-fn resolve_login_token(token: Option<String>, non_interactive: bool) -> Result<String> {
-    let resolved = match token {
-        Some(token) => token.trim().to_string(),
-        None => {
-            if non_interactive {
-                return Err(output::coded_error(
-                    "missing_token",
-                    "Token is required in non-interactive mode. Use --token.",
-                    1,
-                ));
-            }
-            rpassword::prompt_password("RawTree token: ")?
-                .trim()
-                .to_string()
-        }
-    };
-    validate_token_format(&resolved)?;
-    Ok(resolved)
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -292,17 +248,29 @@ fn run(cli: Cli) -> Result<()> {
             let password = prompt_password_if_missing(password)?;
             commands::auth::register(&client, &email, &password, cli_org.clone(), project, json)
         }
-        Command::Login { token, project } => {
-            let non_interactive = is_login_non_interactive();
-            let token = resolve_login_token(token, non_interactive)?;
-            let login_json_mode = json || non_interactive;
-            commands::auth::login_with_token(
-                &client,
-                &token,
-                cli_org.clone(),
-                project,
-                login_json_mode,
-            )
+        Command::Login {
+            token,
+            email,
+            password,
+            no_browser,
+            timeout_seconds,
+            project,
+        } => {
+            if let Some(token) = token {
+                commands::auth::login_with_token(&client, &token, cli_org.clone(), project, json)
+            } else if let Some(email) = email {
+                let password = prompt_password_if_missing(password)?;
+                commands::auth::login(&client, &email, &password, cli_org.clone(), project, json)
+            } else {
+                commands::auth::login_with_browser(
+                    &client,
+                    no_browser,
+                    timeout_seconds,
+                    cli_org.clone(),
+                    project,
+                    json,
+                )
+            }
         }
         Command::Logout => commands::auth::logout(json),
         Command::Project { action } => match action {
@@ -548,10 +516,10 @@ mod tests {
     use crate::config::Config;
 
     use super::{
-        resolve_effective_org_with, resolve_login_token, resolve_org_from_sources,
-        resolve_project_from_sources, resolve_saved_claim_token,
-        should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
-        should_resolve_org_for_project_create, token_looks_like_jwt, validate_token_format,
+        resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
+        resolve_saved_claim_token, should_bootstrap_anonymous_project_for_insert,
+        should_open_claim_dashboard_by_default, should_resolve_org_for_project_create,
+        token_looks_like_jwt,
     };
 
     #[test]
@@ -719,30 +687,5 @@ mod tests {
             None,
             Some("claim_abc")
         ));
-    }
-
-    #[test]
-    fn validate_token_format_rejects_whitespace() {
-        let err = validate_token_format("rw token").expect_err("whitespace token should fail");
-        let cli_err = err
-            .downcast_ref::<crate::output::CliError>()
-            .expect("should return coded CLI error");
-        assert_eq!(cli_err.code(), "invalid_token_format");
-    }
-
-    #[test]
-    fn resolve_login_token_requires_token_in_non_interactive_mode() {
-        let err = resolve_login_token(None, true).expect_err("token should be required");
-        let cli_err = err
-            .downcast_ref::<crate::output::CliError>()
-            .expect("should return coded CLI error");
-        assert_eq!(cli_err.code(), "missing_token");
-    }
-
-    #[test]
-    fn resolve_login_token_uses_flag_value() {
-        let token = resolve_login_token(Some(" rw_abc ".to_string()), true)
-            .expect("token flag should be accepted");
-        assert_eq!(token, "rw_abc");
     }
 }

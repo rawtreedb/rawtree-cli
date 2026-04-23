@@ -35,7 +35,7 @@ cargo build --release
 ## Quick Start
 
 ```sh
-# Authenticate (prompts for token)
+# Authenticate (browser flow by default)
 rtree login
 
 # Create and select a project
@@ -56,13 +56,13 @@ rtree open
 
 ### Login modes
 
-- Interactive token prompt: `rtree login`
-- Non-interactive token login: `rtree login --token rw_123`
-- Select defaults during auth: `rtree login --token rw_123 --org team-alpha --project analytics`
+- Browser-based (default): `rtree login`
+- Email/password: `rtree login --email you@example.com --password '***'`
+- Direct token save: `rtree login --token rw_123`
+- Select defaults during auth: `rtree login --org team-alpha --project analytics`
 
-`rtree login` saves the token to local config and selects organization/project defaults.
-In non-interactive mode (stdin/stdout not TTY), `--token` is required.
-With `--json` or piped output, login returns:
+When using `--token`, the CLI stores the token directly and resolves organization/project defaults from that token.
+With `--json`, token login returns:
 
 ```json
 {"success":true,"config_path":"<path>","project":"<name>","organization":"<name>"}
