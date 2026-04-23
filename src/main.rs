@@ -16,19 +16,10 @@ use cli::{
 };
 use client::ApiClient;
 
-fn resolve_url(cli_url: Option<&str>) -> String {
-    if let Some(url) = cli_url {
-        return url.to_string();
-    }
-    if let Ok(url) = std::env::var("RAWTREE_URL") {
-        return url;
-    }
-    if let Ok(cfg) = config::load() {
-        if let Some(url) = cfg.url {
-            return url;
-        }
-    }
-    "https://api.us-east-1.aws.rawtree.com".to_string()
+const DEFAULT_API_URL: &str = "https://api.rawtree.com";
+
+fn resolve_url() -> String {
+    DEFAULT_API_URL.to_string()
 }
 
 fn resolve_token() -> Option<String> {
@@ -248,13 +239,12 @@ fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
 
 fn run(cli: Cli) -> Result<()> {
     let Cli {
-        api_url: cli_url,
         json,
         org: cli_org,
         command,
     } = cli;
 
-    let url = resolve_url(cli_url.as_deref());
+    let url = resolve_url();
     let token = resolve_token();
     let client = ApiClient::new(url.clone(), token);
 

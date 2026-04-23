@@ -3,10 +3,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(name = "rtree", about = "CLI for the RawTree analytics platform")]
 pub struct Cli {
-    /// API URL (overrides RAWTREE_URL env and config file)
-    #[arg(long, global = true)]
-    pub api_url: Option<String>,
-
     /// Output results as JSON (for scripting and agents)
     #[arg(long, global = true)]
     pub json: bool,
@@ -319,11 +315,10 @@ mod tests {
     }
 
     #[test]
-    fn api_url_and_insert_url_can_both_be_provided() {
+    fn json_flag_can_be_passed_before_subcommand() {
         let cli = Cli::try_parse_from([
             "rtree",
-            "--api-url",
-            "https://api.us-east-1.aws.rawtree.com",
+            "--json",
             "insert",
             "--project",
             "analytics",
@@ -332,31 +327,14 @@ mod tests {
             "--url",
             "https://example.com/events.jsonl",
         ])
-        .expect("--api-url and insert --url should parse");
+        .expect("--json should parse before subcommand");
 
-        assert_eq!(cli.api_url.as_deref(), Some("https://api.us-east-1.aws.rawtree.com"));
+        assert!(cli.json);
         match cli.command {
             Command::Insert { url, .. } => {
                 assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
             }
             _ => panic!("expected insert command"),
         }
-    }
-
-    #[test]
-    fn api_url_can_be_passed_before_subcommand() {
-        let cli = Cli::try_parse_from([
-            "rtree",
-            "--api-url",
-            "https://api.us-east-1.aws.rawtree.com",
-            "query",
-            "--project",
-            "analytics",
-            "--query",
-            "SELECT 1",
-        ])
-        .expect("--api-url should parse before subcommand");
-
-        assert_eq!(cli.api_url.as_deref(), Some("https://api.us-east-1.aws.rawtree.com"));
     }
 }

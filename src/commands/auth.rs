@@ -48,16 +48,12 @@ enum CliDeviceTokenPoll {
 
 fn apply_auth_config(
     cfg: &mut config::Config,
-    base_url: &str,
     resp: &AuthResponse,
     default_organization: Option<String>,
 ) {
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
     cfg.default_organization = default_organization;
-    if cfg.url.is_none() && base_url != "https://app.rawtree.dev" {
-        cfg.url = Some(base_url.to_string());
-    }
 }
 
 fn resolve_default_organization(base_url: &str, token: &str) -> Option<String> {
@@ -68,7 +64,7 @@ fn resolve_default_organization(base_url: &str, token: &str) -> Option<String> {
 fn update_and_save_config(client: &ApiClient, resp: &AuthResponse) -> Result<()> {
     let mut cfg = config::load()?;
     let default_organization = resolve_default_organization(&client.base_url, &resp.token);
-    apply_auth_config(&mut cfg, &client.base_url, resp, default_organization);
+    apply_auth_config(&mut cfg, resp, default_organization);
     config::save(&cfg)?;
     Ok(())
 }
@@ -259,7 +255,6 @@ mod tests {
         let resp = sample_auth_response();
         apply_auth_config(
             &mut cfg,
-            "https://api.us-east-1.aws.rawtree.com",
             &resp,
             Some("team_alpha".to_string()),
         );
@@ -276,7 +271,7 @@ mod tests {
             ..Config::default()
         };
         let resp = sample_auth_response();
-        apply_auth_config(&mut cfg, "https://api.us-east-1.aws.rawtree.com", &resp, None);
+        apply_auth_config(&mut cfg, &resp, None);
 
         assert_eq!(cfg.default_organization, None);
     }
