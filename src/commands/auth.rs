@@ -71,6 +71,7 @@ fn apply_auth_config(
 ) {
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
+    cfg.last_claim_token = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_project = selection.project.clone();
     if cfg.url.is_none() && base_url != DEFAULT_API_URL {
@@ -404,6 +405,7 @@ pub fn login_with_token(
 
     cfg.token = Some(token.to_string());
     cfg.email = None;
+    cfg.last_claim_token = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_project = selection.project.clone();
     if cfg.url.is_none() && client.base_url != DEFAULT_API_URL {
@@ -643,6 +645,19 @@ mod tests {
 
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_project, None);
+    }
+
+    #[test]
+    fn apply_auth_config_clears_last_claim_token() {
+        let mut cfg = Config {
+            last_claim_token: Some("stale_claim".to_string()),
+            ..Config::default()
+        };
+        let resp = sample_auth_response();
+        let selection = AuthSelection::default();
+        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
+
+        assert_eq!(cfg.last_claim_token, None);
     }
 
     #[test]
