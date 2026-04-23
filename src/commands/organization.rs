@@ -100,11 +100,8 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
         &json!({"organization_name": new_name}),
     )?;
     let mut cfg = config::load()?;
-    cfg.default_organization = renamed_default_org(
-        cfg.default_organization.as_deref(),
-        old,
-        &resp.name,
-    );
+    cfg.default_organization =
+        renamed_default_org(cfg.default_organization.as_deref(), old, &resp.name);
     config::save(&cfg)?;
 
     output::print_result(

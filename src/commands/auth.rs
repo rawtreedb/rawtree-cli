@@ -71,6 +71,7 @@ fn apply_auth_config(
 ) {
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
+    cfg.last_claim_token = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_project = selection.project.clone();
     if cfg.url.is_none() && base_url != DEFAULT_API_URL {
@@ -157,23 +158,32 @@ fn list_projects_for_organization(
     Ok(resp.projects.into_iter().map(|item| item.name).collect())
 }
 
-fn resolve_auth_selection(
+enum AuthSelectionMode {
+    Lenient,
+    Strict,
+}
+
+fn resolve_auth_selection_with_mode(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
     cli_project: Option<&str>,
     env_org: Option<&str>,
     cfg_org: Option<&str>,
+    mode: AuthSelectionMode,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
         Ok(items) => items,
-        Err(err) => {
-            if cli_org.is_some() || cli_project.is_some() {
+        Err(err) => match mode {
+            AuthSelectionMode::Strict => {
+                return Err(err.context("failed to validate token"));
+            }
+            AuthSelectionMode::Lenient if cli_org.is_some() || cli_project.is_some() => {
                 return Err(err.context("failed to list organizations for auth-time selection"));
             }
-            return Ok(AuthSelection::default());
-        }
+            AuthSelectionMode::Lenient => return Ok(AuthSelection::default()),
+        },
     };
 
     let selected_org = select_organization(&organizations, cli_org, env_org, cfg_org)?;
@@ -191,13 +201,12 @@ fn resolve_auth_selection(
     };
 
     let selected_project = resolve_selected_project(
-        list_projects_for_organization(&authed_client, &selected_org.name)
-            .with_context(|| {
-                format!(
-                    "failed to list projects for organization '{}'",
-                    selected_org.name
-                )
-            }),
+        list_projects_for_organization(&authed_client, &selected_org.name).with_context(|| {
+            format!(
+                "failed to list projects for organization '{}'",
+                selected_org.name
+            )
+        }),
         &selected_org.name,
         cli_project,
     )?;
@@ -206,6 +215,56 @@ fn resolve_auth_selection(
         organization: Some(selected_org.name),
         project: selected_project,
     })
+}
+
+fn resolve_auth_selection(
+    base_url: &str,
+    token: &str,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+    env_org: Option<&str>,
+    cfg_org: Option<&str>,
+) -> Result<AuthSelection> {
+    resolve_auth_selection_with_mode(
+        base_url,
+        token,
+        cli_org,
+        cli_project,
+        env_org,
+        cfg_org,
+        AuthSelectionMode::Lenient,
+    )
+}
+
+fn resolve_auth_selection_strict(
+    base_url: &str,
+    token: &str,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+    env_org: Option<&str>,
+    cfg_org: Option<&str>,
+) -> Result<AuthSelection> {
+    resolve_auth_selection_with_mode(
+        base_url,
+        token,
+        cli_org,
+        cli_project,
+        env_org,
+        cfg_org,
+        AuthSelectionMode::Strict,
+    )
+}
+
+fn map_validation_error(err: anyhow::Error) -> anyhow::Error {
+    output::coded_error("validation_failed", format!("{:#}", err), 1)
+}
+
+fn map_write_error(err: anyhow::Error) -> anyhow::Error {
+    output::coded_error("write_failed", format!("{:#}", err), 1)
+}
+
+fn map_config_read_error(err: anyhow::Error) -> anyhow::Error {
+    output::coded_error("config_read_failed", format!("{:#}", err), 1)
 }
 
 fn update_and_save_config(
@@ -311,6 +370,72 @@ pub fn login(
         json_mode,
         |_| {
             println!("Logged in as {}.", resp.email);
+            print_selected_context(&selection);
+        },
+    );
+    Ok(())
+}
+
+pub fn login_with_token(
+    client: &ApiClient,
+    token: &str,
+    organization: Option<String>,
+    project: Option<String>,
+    json_mode: bool,
+) -> Result<()> {
+    if token.is_empty() {
+        return Err(output::coded_error(
+            "missing_token",
+            "Token is required. Pass --token or provide it interactively.",
+            1,
+        ));
+    }
+
+    if token.chars().any(char::is_whitespace) {
+        return Err(output::coded_error(
+            "invalid_token_format",
+            "Invalid token format. Token must not contain whitespace.",
+            1,
+        ));
+    }
+
+    let mut cfg = config::load().map_err(map_config_read_error)?;
+    let env_org = std::env::var("RAWTREE_ORG").ok();
+    let selection = resolve_auth_selection_strict(
+        &client.base_url,
+        token,
+        organization.as_deref(),
+        project.as_deref(),
+        env_org.as_deref(),
+        cfg.default_organization.as_deref(),
+    )
+    .map_err(map_validation_error)?;
+
+    cfg.token = Some(token.to_string());
+    cfg.email = None;
+    cfg.last_claim_token = None;
+    cfg.default_organization = selection.organization.clone();
+    cfg.default_project = selection.project.clone();
+    if cfg.url.is_none() && client.base_url != DEFAULT_API_URL {
+        cfg.url = Some(client.base_url.clone());
+    }
+
+    config::save(&cfg).map_err(map_write_error)?;
+    let config_path = config::path().map_err(map_write_error)?;
+    let config_path = config_path.display().to_string();
+    let selected_organization = selection.organization.clone();
+    let selected_project = selection.project.clone();
+
+    output::print_result(
+        &json!({
+            "success": true,
+            "config_path": config_path,
+            "project": selected_project,
+            "organization": selected_organization,
+        }),
+        json_mode,
+        |_| {
+            println!("Token saved to {}.", config_path);
             print_selected_context(&selection);
         },
     );
@@ -528,6 +653,19 @@ mod tests {
 
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_project, None);
+    }
+
+    #[test]
+    fn apply_auth_config_clears_last_claim_token() {
+        let mut cfg = Config {
+            last_claim_token: Some("stale_claim".to_string()),
+            ..Config::default()
+        };
+        let resp = sample_auth_response();
+        let selection = AuthSelection::default();
+        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
+
+        assert_eq!(cfg.last_claim_token, None);
     }
 
     #[test]

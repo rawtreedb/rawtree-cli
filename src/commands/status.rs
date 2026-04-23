@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde_json::json;
 
-use crate::config;
 use crate::commands::open;
+use crate::config;
 use crate::output;
 
 fn build_login_url(base_url: &str) -> String {
@@ -60,10 +60,7 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
             println!("User: {}", user.as_deref().unwrap_or("-"));
             println!("Project: {}", project.as_deref().unwrap_or("-"));
             println!("Organization: {}", organization.as_deref().unwrap_or("-"));
-            println!(
-                "Dashboard URL: {}",
-                dashboard_url.as_deref().unwrap_or("-")
-            );
+            println!("Dashboard URL: {}", dashboard_url.as_deref().unwrap_or("-"));
         },
     );
     Ok(())

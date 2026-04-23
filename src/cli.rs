@@ -38,18 +38,24 @@ pub enum Command {
         #[arg(long)]
         email: String,
         /// Password (prompted interactively if omitted)
-        #[arg(long)]
+        #[arg(long, hide = true)]
         password: Option<String>,
         /// Project name to set as default after authentication
         #[arg(long)]
         project: Option<String>,
     },
     /// Log in and save token
+    #[command(
+        after_help = "Token mode:\n  --token saves a token directly without browser/email flows.\n\nToken output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
+    )]
     Login {
+        /// API token to store directly
+        #[arg(long, conflicts_with_all = ["email", "password", "no_browser", "timeout_seconds"])]
+        token: Option<String>,
         #[arg(long)]
         email: Option<String>,
         /// Password (prompted interactively if omitted)
-        #[arg(long, requires = "email")]
+        #[arg(long, requires = "email", hide = true)]
         password: Option<String>,
         /// Do not try to open the browser automatically
         #[arg(long, default_value_t = false)]
@@ -297,10 +303,20 @@ mod tests {
     }
 
     #[test]
-    fn login_without_email_is_allowed_for_browser_flow() {
+    fn login_without_token_is_allowed_for_browser_flow() {
         let cli = Cli::try_parse_from(["rtree", "login"]).expect("login should parse");
         match cli.command {
-            Command::Login { email, .. } => assert!(email.is_none()),
+            Command::Login { token, .. } => assert!(token.is_none()),
+            _ => panic!("expected login command"),
+        }
+    }
+
+    #[test]
+    fn login_with_token_parses() {
+        let cli = Cli::try_parse_from(["rtree", "login", "--token", "rw_abc123"])
+            .expect("login with --token should parse");
+        match cli.command {
+            Command::Login { token, .. } => assert_eq!(token.as_deref(), Some("rw_abc123")),
             _ => panic!("expected login command"),
         }
     }
@@ -312,11 +328,33 @@ mod tests {
     }
 
     #[test]
+    fn login_with_token_conflicts_with_email() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "login",
+            "--token",
+            "rw_abc123",
+            "--email",
+            "user@example.com",
+        ]);
+        assert!(
+            result.is_err(),
+            "token mode should conflict with email/password login"
+        );
+    }
+
+    #[test]
     fn login_with_project_without_email_is_allowed_for_browser_flow() {
         let cli = Cli::try_parse_from(["rtree", "login", "--project", "analytics"])
             .expect("login with --project should parse");
         match cli.command {
-            Command::Login { email, project, .. } => {
+            Command::Login {
+                token,
+                email,
+                project,
+                ..
+            } => {
+                assert!(token.is_none());
                 assert!(email.is_none());
                 assert_eq!(project.as_deref(), Some("analytics"));
             }
@@ -401,10 +439,7 @@ mod tests {
         ])
         .expect("--api-url and insert --url should parse");
 
-        assert_eq!(
-            cli.api_url.as_deref(),
-            Some("https://api.rawtree.com")
-        );
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.com"));
         match cli.command {
             Command::Insert { url, .. } => {
                 assert_eq!(url.as_deref(), Some("https://example.com/events.jsonl"))
@@ -427,10 +462,7 @@ mod tests {
         ])
         .expect("--api-url should parse before subcommand");
 
-        assert_eq!(
-            cli.api_url.as_deref(),
-            Some("https://api.rawtree.com")
-        );
+        assert_eq!(cli.api_url.as_deref(), Some("https://api.rawtree.com"));
     }
 
     #[test]
@@ -463,8 +495,7 @@ mod tests {
 
     #[test]
     fn key_command_is_singular() {
-        let cli =
-            Cli::try_parse_from(["rtree", "key", "list", "--project", "analytics"]).unwrap();
+        let cli = Cli::try_parse_from(["rtree", "key", "list", "--project", "analytics"]).unwrap();
 
         match cli.command {
             Command::Key { action } => match action {

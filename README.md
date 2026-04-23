@@ -58,10 +58,15 @@ rtree open
 
 - Browser-based (default): `rtree login`
 - Email/password: `rtree login --email you@example.com --password '***'`
+- Direct token save: `rtree login --token rw_123`
 - Select defaults during auth: `rtree login --org team-alpha --project analytics`
 
-After `login` or `register`, the CLI prints the selected organization and project.
-If `--project` is omitted, it selects the first project in the selected organization.
+When using `--token`, the CLI stores the token directly and resolves organization/project defaults from that token.
+With `--json`, token login returns:
+
+```json
+{"success":true,"config_path":"<path>","project":"<name>","organization":"<name>"}
+```
 
 ### Token resolution
 

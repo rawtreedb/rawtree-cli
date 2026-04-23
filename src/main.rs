@@ -249,13 +249,16 @@ fn run(cli: Cli) -> Result<()> {
             commands::auth::register(&client, &email, &password, cli_org.clone(), project, json)
         }
         Command::Login {
+            token,
             email,
             password,
             no_browser,
             timeout_seconds,
             project,
         } => {
-            if let Some(email) = email {
+            if let Some(token) = token {
+                commands::auth::login_with_token(&client, &token, cli_org.clone(), project, json)
+            } else if let Some(email) = email {
                 let password = prompt_password_if_missing(password)?;
                 commands::auth::login(&client, &email, &password, cli_org.clone(), project, json)
             } else {
@@ -514,9 +517,9 @@ mod tests {
 
     use super::{
         resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
-        resolve_saved_claim_token,
-        should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
-        should_resolve_org_for_project_create, token_looks_like_jwt,
+        resolve_saved_claim_token, should_bootstrap_anonymous_project_for_insert,
+        should_open_claim_dashboard_by_default, should_resolve_org_for_project_create,
+        token_looks_like_jwt,
     };
 
     #[test]
@@ -685,5 +688,4 @@ mod tests {
             Some("claim_abc")
         ));
     }
-
 }

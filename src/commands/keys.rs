@@ -124,11 +124,7 @@ pub fn delete(
     json_mode: bool,
 ) -> Result<()> {
     let encoded_key = urlencoding::encode(id_or_token);
-    let path = org::project_scoped_path(
-        project,
-        &format!("/keys/{encoded_key}"),
-        organization,
-    );
+    let path = org::project_scoped_path(project, &format!("/keys/{encoded_key}"), organization);
     let resp: DeleteApiKeyResponse = client.delete(&path)?;
     output::print_result(
         &json!({"deleted": resp.deleted, "id_or_token": id_or_token}),
@@ -161,7 +157,10 @@ mod tests {
         }"#;
 
         let resp: ListApiKeysResponse = serde_json::from_str(payload).expect("valid payload");
-        assert_eq!(resp.project.as_ref().map(|p| p.name.as_str()), Some("analytics"));
+        assert_eq!(
+            resp.project.as_ref().map(|p| p.name.as_str()),
+            Some("analytics")
+        );
         assert_eq!(
             resp.organization.as_ref().map(|o| o.name.as_str()),
             Some("team_alpha")
@@ -187,7 +186,10 @@ mod tests {
         assert_eq!(resp.id, "key-1");
         assert_eq!(resp.token, "rw_abcd");
         assert_eq!(resp.name, "ci");
-        assert_eq!(resp.project.as_ref().map(|p| p.name.as_str()), Some("analytics"));
+        assert_eq!(
+            resp.project.as_ref().map(|p| p.name.as_str()),
+            Some("analytics")
+        );
         assert_eq!(
             resp.organization.as_ref().map(|o| o.name.as_str()),
             Some("team_alpha")

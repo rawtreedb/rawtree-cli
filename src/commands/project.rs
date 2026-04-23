@@ -244,9 +244,7 @@ pub fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_project_create_config, CreateProjectResponse, OrganizationRef, ProjectItem,
-    };
+    use super::{apply_project_create_config, CreateProjectResponse, OrganizationRef, ProjectItem};
     use crate::config::Config;
     use serde_json::json;
 
