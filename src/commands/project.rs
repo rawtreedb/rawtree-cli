@@ -30,7 +30,10 @@ struct OrganizationRef {
 #[derive(Deserialize)]
 struct CreateProjectResponse {
     name: String,
-    organization: OrganizationRef,
+    #[serde(default)]
+    organization: Option<OrganizationRef>,
+    #[serde(default)]
+    organization_name: Option<String>,
     token: String,
     #[serde(default)]
     claim_token: Option<String>,
@@ -42,6 +45,15 @@ pub struct CreatedProjectInfo {
     pub claim_token: Option<String>,
 }
 
+impl CreateProjectResponse {
+    fn resolved_organization_name(&self) -> Option<&str> {
+        self.organization
+            .as_ref()
+            .map(|organization| organization.name.as_str())
+            .or(self.organization_name.as_deref())
+    }
+}
+
 fn claim_url_from_response(resp: &CreateProjectResponse) -> Option<String> {
     let ui_base_url = crate::commands::open::resolve_ui_base_url();
     resp.claim_token.as_deref().map(|claim_token| {
@@ -51,7 +63,7 @@ fn claim_url_from_response(resp: &CreateProjectResponse) -> Option<String> {
 
 fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
     cfg.default_project = Some(resp.name.clone());
-    cfg.default_organization = Some(resp.organization.name.clone());
+    cfg.default_organization = resp.resolved_organization_name().map(ToString::to_string);
     cfg.last_claim_token = resp.claim_token.clone();
 
     if resp.claim_token.is_some() {
@@ -60,12 +72,24 @@ fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectRes
     }
 }
 
+fn project_create_collection_path(client: &ApiClient, organization: Option<&str>) -> String {
+    match organization {
+        Some(_) => org::projects_collection_path(organization),
+        None => match client.token.as_deref() {
+            Some(token) if crate::token_looks_like_jwt(token) => {
+                org::projects_collection_path(None)
+            }
+            _ => "/v1/temporary-projects".to_string(),
+        },
+    }
+}
+
 fn create_project_response(
     client: &ApiClient,
     name: Option<&str>,
     organization: Option<&str>,
 ) -> Result<CreateProjectResponse> {
-    let path = org::projects_collection_path(organization);
+    let path = project_create_collection_path(client, organization);
 
     let mut payload = serde_json::Map::new();
     if let Some(project_name) = name {
@@ -141,15 +165,18 @@ pub fn create(
     output::print_result(
         &json!({
             "name": resp.name,
-            "organization": {"name": resp.organization.name},
+            "organization": resp
+                .resolved_organization_name()
+                .map(|name| json!({"name": name})),
             "claim_token": claim_token,
             "claim_url": claim_url,
         }),
         json_mode,
         |_| {
+            let organization_name = resp.resolved_organization_name().unwrap_or("unknown");
             println!(
                 "Project '{}' created in organization '{}'.",
-                resp.name, resp.organization.name
+                resp.name, organization_name
             );
             if let Some(ref claim_url) = claim_url {
                 println!("Use '{}' to claim your project.", claim_url);
@@ -244,7 +271,11 @@ pub fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_project_create_config, CreateProjectResponse, OrganizationRef, ProjectItem};
+    use super::{
+        apply_project_create_config, project_create_collection_path, CreateProjectResponse,
+        OrganizationRef, ProjectItem,
+    };
+    use crate::client::ApiClient;
     use crate::config::Config;
     use serde_json::json;
 
@@ -258,9 +289,10 @@ mod tests {
         };
         let resp = CreateProjectResponse {
             name: "analytics".to_string(),
-            organization: OrganizationRef {
+            organization: Some(OrganizationRef {
                 name: "new_team".to_string(),
-            },
+            }),
+            organization_name: None,
             token: "rw_regular".to_string(),
             claim_token: None,
         };
@@ -284,9 +316,8 @@ mod tests {
         };
         let resp = CreateProjectResponse {
             name: "tmp_project".to_string(),
-            organization: OrganizationRef {
-                name: "temp_org".to_string(),
-            },
+            organization: None,
+            organization_name: Some("temp_org".to_string()),
             token: "rw_temporary".to_string(),
             claim_token: Some("abc".to_string()),
         };
@@ -311,5 +342,52 @@ mod tests {
 
         assert_eq!(item.name, "analytics");
         assert_eq!(item.organization.expect("organization").name, "team_alpha");
+    }
+
+    #[test]
+    fn create_project_response_deserializes_temporary_project_shape() {
+        let resp: CreateProjectResponse = serde_json::from_value(json!({
+            "name": "tmp_project",
+            "organization_name": "tmp_org",
+            "token": "rw_temp",
+            "claim_token": "claim_123",
+        }))
+        .expect("temporary project response should deserialize");
+
+        assert_eq!(resp.resolved_organization_name(), Some("tmp_org"));
+        assert_eq!(resp.claim_token.as_deref(), Some("claim_123"));
+    }
+
+    #[test]
+    fn project_create_collection_path_uses_temporary_endpoint_without_jwt() {
+        let client_without_token = ApiClient::new("https://example.com".to_string(), None);
+        let client_with_api_key =
+            ApiClient::new("https://example.com".to_string(), Some("rw_token".to_string()));
+
+        assert_eq!(
+            project_create_collection_path(&client_without_token, None),
+            "/v1/temporary-projects"
+        );
+        assert_eq!(
+            project_create_collection_path(&client_with_api_key, None),
+            "/v1/temporary-projects"
+        );
+    }
+
+    #[test]
+    fn project_create_collection_path_uses_projects_endpoint_with_jwt_or_org() {
+        let client_with_jwt =
+            ApiClient::new("https://example.com".to_string(), Some("a.b.c".to_string()));
+        let client_without_jwt =
+            ApiClient::new("https://example.com".to_string(), Some("rw_token".to_string()));
+
+        assert_eq!(
+            project_create_collection_path(&client_with_jwt, None),
+            "/v1/projects"
+        );
+        assert_eq!(
+            project_create_collection_path(&client_without_jwt, Some("team alpha")),
+            "/v1/projects?organization_name=team%20alpha"
+        );
     }
 }
