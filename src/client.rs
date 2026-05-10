@@ -1,10 +1,16 @@
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use reqwest::blocking::RequestBuilder;
 use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::Write;
+
+const RAWTREE_CLIENT_HEADER: &str = "x-rawtree-client";
+const RAWTREE_CLIENT_VALUE: &str = "cli";
+const RAWTREE_CLIENT_VERSION_HEADER: &str = "x-rawtree-client-version";
+const RAWTREE_CLIENT_VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
 
 pub struct ApiClient {
     pub base_url: String,
@@ -23,7 +29,7 @@ impl ApiClient {
 
     pub fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.post(&url).json(body);
+        let mut req = with_client_header(self.client.post(&url)).json(body);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -38,6 +44,7 @@ impl ApiClient {
             .client
             .post(&url)
             .header("accept", "application/x-ndjson");
+        req = with_client_header(req);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -52,7 +59,7 @@ impl ApiClient {
 
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.patch(&url).json(body);
+        let mut req = with_client_header(self.client.patch(&url)).json(body);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -62,7 +69,7 @@ impl ApiClient {
 
     pub fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.delete(&url);
+        let mut req = with_client_header(self.client.delete(&url));
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -72,7 +79,7 @@ impl ApiClient {
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.get(&url);
+        let mut req = with_client_header(self.client.get(&url));
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -94,6 +101,7 @@ impl ApiClient {
             .header("content-type", "application/json")
             .header("content-encoding", "gzip")
             .body(compressed);
+        req = with_client_header(req);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -104,7 +112,7 @@ impl ApiClient {
     /// POST that returns raw text (for queries that return ClickHouse results directly).
     pub fn post_raw(&self, path: &str, body: &Value) -> Result<String> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.post(&url).json(body);
+        let mut req = with_client_header(self.client.post(&url)).json(body);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -120,7 +128,7 @@ impl ApiClient {
     /// GET that returns raw text.
     pub fn get_raw(&self, path: &str) -> Result<String> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = self.client.get(&url);
+        let mut req = with_client_header(self.client.get(&url));
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -132,6 +140,11 @@ impl ApiClient {
         }
         Ok(text)
     }
+}
+
+fn with_client_header(req: RequestBuilder) -> RequestBuilder {
+    req.header(RAWTREE_CLIENT_HEADER, RAWTREE_CLIENT_VALUE)
+        .header(RAWTREE_CLIENT_VERSION_HEADER, RAWTREE_CLIENT_VERSION_VALUE)
 }
 
 fn handle_response<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T> {
@@ -154,5 +167,33 @@ fn format_server_error(body: &str, status: u16) -> anyhow::Error {
         }
     } else {
         anyhow::anyhow!("Server error ({}): {}", status, body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marks_cli_requests_with_rawtree_client_header() {
+        let client = Client::new();
+        let request = with_client_header(client.get("https://api.rawtree.local/v1/projects"))
+            .build()
+            .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(RAWTREE_CLIENT_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(RAWTREE_CLIENT_VALUE)
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(RAWTREE_CLIENT_VERSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(RAWTREE_CLIENT_VERSION_VALUE)
+        );
     }
 }
