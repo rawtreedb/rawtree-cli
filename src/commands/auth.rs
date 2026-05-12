@@ -1,3 +1,4 @@
+use std::io::{self, IsTerminal, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -153,6 +154,107 @@ fn select_project(
     Ok(project_names.first().cloned())
 }
 
+fn prompt_for_selection(label: &str, names: &[String], json_mode: bool) -> Result<Option<String>> {
+    if names.is_empty() {
+        return Ok(None);
+    }
+
+    if json_mode || !io::stdin().is_terminal() {
+        let flag_name = if label == "organization" {
+            "org"
+        } else {
+            label
+        };
+        anyhow::bail!(
+            "No {} specified. Run this command interactively or pass --{} <name>.",
+            label,
+            flag_name
+        );
+    }
+
+    println!("Select {}:", label);
+    for (index, name) in names.iter().enumerate() {
+        println!("  {}. {}", index + 1, name);
+    }
+
+    loop {
+        print!("{}: ", label);
+        io::stdout().flush()?;
+
+        let input = read_selection_input(label)?;
+        if input.is_empty() {
+            eprintln!("Enter a {} name or number.", label);
+            continue;
+        }
+
+        if let Some(index) = parse_selection_number(&input, names.len()) {
+            if let Some(name) = names.get(index) {
+                return Ok(Some(name.clone()));
+            }
+        }
+
+        if let Some(name) = names.iter().find(|name| name.as_str() == input.as_str()) {
+            return Ok(Some(name.clone()));
+        }
+
+        eprintln!("{} '{}' was not found in the list.", label, input);
+    }
+}
+
+fn read_selection_input(label: &str) -> Result<String> {
+    let mut input = String::new();
+    let bytes_read = io::stdin().read_line(&mut input)?;
+    if bytes_read == 0 {
+        anyhow::bail!("No {} selected: input closed.", label);
+    }
+    Ok(input.trim().to_string())
+}
+
+fn parse_selection_number(input: &str, item_count: usize) -> Option<usize> {
+    let selected = input.parse::<usize>().ok()?;
+    if selected == 0 || selected > item_count {
+        return None;
+    }
+    Some(selected - 1)
+}
+
+fn prompt_for_organization(
+    organizations: &[org::OrganizationItem],
+    json_mode: bool,
+) -> Result<Option<org::OrganizationItem>> {
+    let names = organizations
+        .iter()
+        .map(|organization| organization.name.clone())
+        .collect::<Vec<_>>();
+    let selected_name = prompt_for_selection("organization", &names, json_mode)?;
+    Ok(selected_name.and_then(|name| organization_by_name(organizations, &name).cloned()))
+}
+
+fn select_or_prompt_organization(
+    organizations: &[org::OrganizationItem],
+    cli_org: Option<&str>,
+    json_mode: bool,
+) -> Result<Option<org::OrganizationItem>> {
+    if cli_org.is_some() {
+        return select_organization(organizations, cli_org, None, None);
+    }
+
+    prompt_for_organization(organizations, json_mode)
+}
+
+fn select_or_prompt_project(
+    project_names: &[String],
+    selected_org: &str,
+    cli_project: Option<&str>,
+    json_mode: bool,
+) -> Result<Option<String>> {
+    if cli_project.is_some() {
+        return select_project(project_names, selected_org, cli_project);
+    }
+
+    prompt_for_selection("project", project_names, json_mode)
+}
+
 fn resolve_selected_project(
     project_names_result: Result<Vec<String>>,
     selected_org: &str,
@@ -165,6 +267,21 @@ fn resolve_selected_project(
     }
 }
 
+fn resolve_selected_browser_project(
+    project_names_result: Result<Vec<String>>,
+    selected_org: &str,
+    cli_project: Option<&str>,
+    json_mode: bool,
+) -> Result<Option<String>> {
+    match project_names_result {
+        Ok(project_names) => {
+            select_or_prompt_project(&project_names, selected_org, cli_project, json_mode)
+        }
+        Err(err) if cli_project.is_some() => Err(err),
+        Err(_err) => Ok(None),
+    }
+}
+
 fn list_projects_for_organization(
     client: &ApiClient,
     organization_name: &str,
@@ -172,6 +289,54 @@ fn list_projects_for_organization(
     let path = org::projects_collection_path(Some(organization_name));
     let resp: ListProjectsResponse = client.get(&path)?;
     Ok(resp.projects.into_iter().map(|item| item.name).collect())
+}
+
+fn resolve_browser_auth_selection(
+    base_url: &str,
+    token: &str,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+    json_mode: bool,
+) -> Result<AuthSelection> {
+    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
+    let organizations = match org::list_organizations(&authed_client) {
+        Ok(items) => items,
+        Err(err) if cli_org.is_some() || cli_project.is_some() => {
+            return Err(err.context("failed to list organizations for auth-time selection"));
+        }
+        Err(_err) => return Ok(AuthSelection::default()),
+    };
+
+    let selected_org = select_or_prompt_organization(&organizations, cli_org, json_mode)?;
+    let selected_org = match selected_org {
+        Some(item) => item,
+        None => {
+            if let Some(project_name) = cli_project {
+                anyhow::bail!(
+                    "Cannot select project '{}' because no organization is available.",
+                    project_name
+                );
+            }
+            return Ok(AuthSelection::default());
+        }
+    };
+
+    let selected_project = resolve_selected_browser_project(
+        list_projects_for_organization(&authed_client, &selected_org.name).with_context(|| {
+            format!(
+                "failed to list projects for organization '{}'",
+                selected_org.name
+            )
+        }),
+        &selected_org.name,
+        cli_project,
+        json_mode,
+    )?;
+
+    Ok(AuthSelection {
+        organization: Some(selected_org.name),
+        project: selected_project,
+    })
 }
 
 fn resolve_auth_selection(
@@ -309,6 +474,26 @@ fn update_and_save_config(
         cli_project,
         env_org.as_deref(),
         cfg.default_organization.as_deref(),
+    )?;
+    apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
+    config::save(&cfg)?;
+    Ok(selection)
+}
+
+fn update_and_save_browser_config(
+    client: &ApiClient,
+    resp: &AuthResponse,
+    cli_org: Option<&str>,
+    cli_project: Option<&str>,
+    json_mode: bool,
+) -> Result<AuthSelection> {
+    let mut cfg = config::load()?;
+    let selection = resolve_browser_auth_selection(
+        &client.base_url,
+        &resp.token,
+        cli_org,
+        cli_project,
+        json_mode,
     )?;
     apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
     config::save(&cfg)?;
@@ -574,11 +759,12 @@ pub fn login_with_browser(
                     email,
                 } = resp;
                 let auth = AuthResponse { token, email };
-                let selection = update_and_save_config(
+                let selection = update_and_save_browser_config(
                     client,
                     &auth,
                     organization.as_deref(),
                     project.as_deref(),
+                    json_mode,
                 )?;
                 let selected_organization = selection.organization.clone();
                 let selected_project = selection.project.clone();
@@ -626,7 +812,8 @@ pub fn logout(json_mode: bool) -> Result<()> {
 mod tests {
     use super::{
         apply_auth_config, auth_selection_from_project_context, clear_auth_config,
-        effective_timeout_seconds, resolve_selected_project, select_organization, select_project,
+        effective_timeout_seconds, parse_selection_number, prompt_for_selection,
+        resolve_selected_project, select_or_prompt_project, select_organization, select_project,
         AuthResponse, AuthSelection, ProjectContextResponse,
     };
     use crate::config::Config;
@@ -765,6 +952,40 @@ mod tests {
             .expect("selection should succeed")
             .expect("first project should be selected");
         assert_eq!(selected, "analytics");
+    }
+
+    #[test]
+    fn browser_project_selection_prefers_cli_and_fails_when_unknown() {
+        let projects = vec!["analytics".to_string(), "billing".to_string()];
+
+        let selected = select_or_prompt_project(&projects, "team_alpha", Some("billing"), true)
+            .expect("selection should succeed")
+            .expect("project should exist");
+        assert_eq!(selected, "billing");
+
+        let err = select_or_prompt_project(&projects, "team_alpha", Some("missing"), true);
+        assert!(err.is_err(), "unknown CLI project should fail");
+    }
+
+    #[test]
+    fn browser_selection_requires_prompt_when_json_mode_and_missing() {
+        let projects = vec!["analytics".to_string(), "billing".to_string()];
+
+        let err = prompt_for_selection("project", &projects, true)
+            .expect_err("json browser login should require an explicit project");
+        assert!(
+            err.to_string().contains("No project specified"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn selection_number_is_one_based() {
+        assert_eq!(parse_selection_number("1", 2), Some(0));
+        assert_eq!(parse_selection_number("2", 2), Some(1));
+        assert_eq!(parse_selection_number("0", 2), None);
+        assert_eq!(parse_selection_number("3", 2), None);
+        assert_eq!(parse_selection_number("analytics", 2), None);
     }
 
     #[test]

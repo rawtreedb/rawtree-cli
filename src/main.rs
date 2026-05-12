@@ -20,6 +20,9 @@ fn resolve_url(cli_url: Option<&str>) -> String {
     if let Some(url) = cli_url {
         return url.to_string();
     }
+    if let Ok(url) = std::env::var("RAWTREE_API_URL") {
+        return url;
+    }
     if let Ok(url) = std::env::var("RAWTREE_URL") {
         return url;
     }
@@ -31,11 +34,23 @@ fn resolve_url(cli_url: Option<&str>) -> String {
     DEFAULT_API_URL.to_string()
 }
 
-fn resolve_token() -> Option<String> {
-    if let Ok(token) = std::env::var("RAWTREE_TOKEN") {
-        return Some(token);
-    }
-    config::load().ok().and_then(|c| c.token)
+fn resolve_token_from_sources(
+    cli_api_key: Option<String>,
+    env_api_key: Option<String>,
+    legacy_env_token: Option<String>,
+    cfg_token: Option<String>,
+) -> Option<String> {
+    cli_api_key
+        .or(env_api_key)
+        .or(legacy_env_token)
+        .or(cfg_token)
+}
+
+fn resolve_token(cli_api_key: Option<String>) -> Option<String> {
+    let env_api_key = std::env::var("RAWTREE_API_KEY").ok();
+    let legacy_env_token = std::env::var("RAWTREE_TOKEN").ok();
+    let cfg_token = config::load().ok().and_then(|c| c.token);
+    resolve_token_from_sources(cli_api_key, env_api_key, legacy_env_token, cfg_token)
 }
 
 fn resolve_project_from_sources(
@@ -229,6 +244,7 @@ fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
 
 fn run(cli: Cli) -> Result<()> {
     let Cli {
+        api_key: cli_api_key,
         api_url: cli_url,
         json,
         org: cli_org,
@@ -236,7 +252,7 @@ fn run(cli: Cli) -> Result<()> {
     } = cli;
 
     let url = resolve_url(cli_url.as_deref());
-    let token = resolve_token();
+    let token = resolve_token(cli_api_key.clone());
     let client = ApiClient::new(url.clone(), token);
 
     match command {
@@ -249,14 +265,18 @@ fn run(cli: Cli) -> Result<()> {
             commands::auth::register(&client, &email, &password, cli_org.clone(), project, json)
         }
         Command::Login {
-            api_key,
             email,
             password,
             no_browser,
             timeout_seconds,
             project,
         } => {
-            if let Some(api_key) = api_key {
+            if let Some(api_key) = cli_api_key {
+                if email.is_some() || password.is_some() {
+                    anyhow::bail!(
+                        "--api-key cannot be used with --email or --password during login"
+                    );
+                }
                 commands::auth::login_with_api_key(
                     &client,
                     &api_key,
@@ -523,10 +543,38 @@ mod tests {
 
     use super::{
         resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
-        resolve_saved_claim_token, should_bootstrap_anonymous_project_for_insert,
-        should_open_claim_dashboard_by_default, should_resolve_org_for_project_create,
-        token_looks_like_jwt,
+        resolve_saved_claim_token, resolve_token_from_sources, resolve_url,
+        should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
+        should_resolve_org_for_project_create, token_looks_like_jwt,
     };
+
+    struct EnvVarGuard {
+        name: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(name: &'static str, value: &str) -> Self {
+            let original = std::env::var(name).ok();
+            std::env::set_var(name, value);
+            Self { name, original }
+        }
+
+        fn remove(name: &'static str) -> Self {
+            let original = std::env::var(name).ok();
+            std::env::remove_var(name);
+            Self { name, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
 
     #[test]
     fn resolve_org_uses_cli_first() {
@@ -592,6 +640,61 @@ mod tests {
         assert!(should_resolve_org_for_project_create(Some("a.b.c")));
         assert!(!should_resolve_org_for_project_create(Some("rw_key")));
         assert!(!should_resolve_org_for_project_create(None));
+    }
+
+    #[test]
+    fn resolve_url_supports_legacy_rawtree_url_fallback() {
+        let _api_url_guard = EnvVarGuard::remove("RAWTREE_API_URL");
+        let _legacy_url_guard = EnvVarGuard::set("RAWTREE_URL", "https://legacy.example.com");
+
+        assert_eq!(resolve_url(None), "https://legacy.example.com");
+    }
+
+    #[test]
+    fn resolve_url_prefers_api_url_over_legacy_rawtree_url() {
+        let _api_url_guard = EnvVarGuard::set("RAWTREE_API_URL", "https://api.example.com");
+        let _legacy_url_guard = EnvVarGuard::set("RAWTREE_URL", "https://legacy.example.com");
+
+        assert_eq!(resolve_url(None), "https://api.example.com");
+    }
+
+    #[test]
+    fn resolve_token_uses_cli_first() {
+        let resolved = resolve_token_from_sources(
+            Some("cli-key".to_string()),
+            Some("env-key".to_string()),
+            Some("legacy-env-token".to_string()),
+            Some("cfg-token".to_string()),
+        );
+        assert_eq!(resolved.as_deref(), Some("cli-key"));
+    }
+
+    #[test]
+    fn resolve_token_uses_env_when_cli_missing() {
+        let resolved = resolve_token_from_sources(
+            None,
+            Some("env-key".to_string()),
+            Some("legacy-env-token".to_string()),
+            Some("cfg-token".to_string()),
+        );
+        assert_eq!(resolved.as_deref(), Some("env-key"));
+    }
+
+    #[test]
+    fn resolve_token_uses_legacy_env_when_api_key_env_missing() {
+        let resolved = resolve_token_from_sources(
+            None,
+            None,
+            Some("legacy-env-token".to_string()),
+            Some("cfg-token".to_string()),
+        );
+        assert_eq!(resolved.as_deref(), Some("legacy-env-token"));
+    }
+
+    #[test]
+    fn resolve_token_uses_config_when_cli_and_env_missing() {
+        let resolved = resolve_token_from_sources(None, None, None, Some("cfg-token".to_string()));
+        assert_eq!(resolved.as_deref(), Some("cfg-token"));
     }
 
     #[test]

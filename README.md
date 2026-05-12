@@ -70,8 +70,9 @@ With `--json`, API key login returns:
 
 ### Token resolution
 
-1. `RAWTREE_TOKEN` environment variable
-2. Local config file
+1. `--api-key` flag
+2. `RAWTREE_API_KEY` environment variable
+3. Local config file
 
 ### Logout
 
@@ -90,7 +91,8 @@ Config file location:
 
 Resolution priority by setting:
 
-- API URL: `--api-url` -> `RAWTREE_URL` -> config file -> `https://api.rawtree.com`
+- API KEY: `--api-key` -> `RAWTREE_API_KEY` -> config file token
+- API URL: `--api-url` -> `RAWTREE_API_URL` -> config file -> `https://api.rawtree.com`
 - Project: `--project` -> `RAWTREE_PROJECT` -> config file default project
 - Organization: `--org` -> `RAWTREE_ORG` -> config file default organization
 
