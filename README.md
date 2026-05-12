@@ -58,11 +58,11 @@ rtree open
 
 - Browser-based (default): `rtree login`
 - Email/password: `rtree login --email you@example.com --password '***'`
-- Direct token save: `rtree login --token rw_123`
+- Direct API key save: `rtree login --api-key rw_123`
 - Select defaults during auth: `rtree login --org team-alpha --project analytics`
 
-When using `--token`, the CLI stores the token directly and resolves organization/project defaults from that token.
-With `--json`, token login returns:
+When using `--api-key`, the CLI stores the API key directly and resolves organization/project defaults from that key.
+With `--json`, API key login returns:
 
 ```json
 {"success":true,"config_path":"<path>","project":"<name>","organization":"<name>"}
