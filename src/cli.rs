@@ -15,7 +15,11 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
     about = "CLI for the RawTree analytics platform"
 )]
 pub struct Cli {
-    /// API URL (overrides RAWTREE_URL env and config file)
+    /// API key (overrides RAWTREE_API_KEY env and config file token)
+    #[arg(long, global = true)]
+    pub api_key: Option<String>,
+
+    /// API URL (overrides RAWTREE_API_URL env and config file)
     #[arg(long, global = true)]
     pub api_url: Option<String>,
 
@@ -49,9 +53,6 @@ pub enum Command {
         after_help = "API key mode:\n  --api-key saves an API key directly without browser/email flows.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
     )]
     Login {
-        /// API key to store directly
-        #[arg(long, conflicts_with_all = ["email", "password", "no_browser", "timeout_seconds"])]
-        api_key: Option<String>,
         #[arg(long)]
         email: Option<String>,
         /// Password (prompted interactively if omitted)
@@ -305,20 +306,21 @@ mod tests {
     #[test]
     fn login_without_api_key_is_allowed_for_browser_flow() {
         let cli = Cli::try_parse_from(["rtree", "login"]).expect("login should parse");
-        match cli.command {
-            Command::Login { api_key, .. } => assert!(api_key.is_none()),
-            _ => panic!("expected login command"),
-        }
+        assert!(cli.api_key.is_none());
     }
 
     #[test]
     fn login_with_api_key_parses() {
         let cli = Cli::try_parse_from(["rtree", "login", "--api-key", "rw_abc123"])
             .expect("login with --api-key should parse");
-        match cli.command {
-            Command::Login { api_key, .. } => assert_eq!(api_key.as_deref(), Some("rw_abc123")),
-            _ => panic!("expected login command"),
-        }
+        assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
+    }
+
+    #[test]
+    fn global_api_key_parses_before_subcommand() {
+        let cli = Cli::try_parse_from(["rtree", "--api-key", "rw_abc123", "project", "list"])
+            .expect("global --api-key should parse before subcommand");
+        assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
     }
 
     #[test]
@@ -335,18 +337,16 @@ mod tests {
 
     #[test]
     fn login_with_api_key_conflicts_with_email() {
-        let result = Cli::try_parse_from([
+        let cli = Cli::try_parse_from([
             "rtree",
             "login",
             "--api-key",
             "rw_abc123",
             "--email",
             "user@example.com",
-        ]);
-        assert!(
-            result.is_err(),
-            "api-key mode should conflict with email/password login"
-        );
+        ])
+        .expect("global --api-key is parsed before runtime login validation");
+        assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
     }
 
     #[test]
@@ -354,13 +354,7 @@ mod tests {
         let cli = Cli::try_parse_from(["rtree", "login", "--project", "analytics"])
             .expect("login with --project should parse");
         match cli.command {
-            Command::Login {
-                api_key,
-                email,
-                project,
-                ..
-            } => {
-                assert!(api_key.is_none());
+            Command::Login { email, project, .. } => {
                 assert!(email.is_none());
                 assert_eq!(project.as_deref(), Some("analytics"));
             }
