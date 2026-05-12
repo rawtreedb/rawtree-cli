@@ -63,6 +63,22 @@ struct ListProjectsResponse {
     projects: Vec<ProjectItem>,
 }
 
+#[derive(Deserialize)]
+struct ProjectContextResponse {
+    project: Option<ProjectContextRef>,
+    organization: Option<OrganizationContextRef>,
+}
+
+#[derive(Deserialize)]
+struct ProjectContextRef {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct OrganizationContextRef {
+    name: String,
+}
+
 fn apply_auth_config(
     cfg: &mut config::Config,
     base_url: &str,
@@ -158,32 +174,21 @@ fn list_projects_for_organization(
     Ok(resp.projects.into_iter().map(|item| item.name).collect())
 }
 
-enum AuthSelectionMode {
-    Lenient,
-    Strict,
-}
-
-fn resolve_auth_selection_with_mode(
+fn resolve_auth_selection(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
     cli_project: Option<&str>,
     env_org: Option<&str>,
     cfg_org: Option<&str>,
-    mode: AuthSelectionMode,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
         Ok(items) => items,
-        Err(err) => match mode {
-            AuthSelectionMode::Strict => {
-                return Err(err.context("failed to validate token"));
-            }
-            AuthSelectionMode::Lenient if cli_org.is_some() || cli_project.is_some() => {
-                return Err(err.context("failed to list organizations for auth-time selection"));
-            }
-            AuthSelectionMode::Lenient => return Ok(AuthSelection::default()),
-        },
+        Err(err) if cli_org.is_some() || cli_project.is_some() => {
+            return Err(err.context("failed to list organizations for auth-time selection"));
+        }
+        Err(_err) => return Ok(AuthSelection::default()),
     };
 
     let selected_org = select_organization(&organizations, cli_org, env_org, cfg_org)?;
@@ -217,42 +222,64 @@ fn resolve_auth_selection_with_mode(
     })
 }
 
-fn resolve_auth_selection(
-    base_url: &str,
-    token: &str,
+fn auth_selection_from_project_context(
+    context: ProjectContextResponse,
     cli_org: Option<&str>,
     cli_project: Option<&str>,
-    env_org: Option<&str>,
-    cfg_org: Option<&str>,
 ) -> Result<AuthSelection> {
-    resolve_auth_selection_with_mode(
-        base_url,
-        token,
-        cli_org,
-        cli_project,
-        env_org,
-        cfg_org,
-        AuthSelectionMode::Lenient,
-    )
+    let organization = context
+        .organization
+        .map(|org| org.name)
+        .ok_or_else(|| anyhow::anyhow!("server response did not include an organization"))?;
+    let project = context
+        .project
+        .map(|project| project.name)
+        .ok_or_else(|| anyhow::anyhow!("server response did not include a project"))?;
+
+    if let Some(requested_org) = cli_org {
+        if requested_org != organization {
+            anyhow::bail!(
+                "API key belongs to organization '{}', not '{}'.",
+                organization,
+                requested_org
+            );
+        }
+    }
+    if let Some(requested_project) = cli_project {
+        if requested_project != project {
+            anyhow::bail!(
+                "API key belongs to project '{}', not '{}'.",
+                project,
+                requested_project
+            );
+        }
+    }
+
+    Ok(AuthSelection {
+        organization: Some(organization),
+        project: Some(project),
+    })
 }
 
-fn resolve_auth_selection_strict(
+fn resolve_api_key_auth_selection(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
     cli_project: Option<&str>,
-    env_org: Option<&str>,
-    cfg_org: Option<&str>,
 ) -> Result<AuthSelection> {
-    resolve_auth_selection_with_mode(
-        base_url,
-        token,
-        cli_org,
-        cli_project,
-        env_org,
-        cfg_org,
-        AuthSelectionMode::Strict,
-    )
+    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
+
+    match authed_client.get::<ProjectContextResponse>("/v1/keys") {
+        Ok(context) => return auth_selection_from_project_context(context, cli_org, cli_project),
+        Err(keys_err) => match authed_client.get::<ProjectContextResponse>("/v1/tables") {
+            Ok(context) => auth_selection_from_project_context(context, cli_org, cli_project),
+            Err(tables_err) => Err(anyhow::anyhow!(
+                "failed to resolve API key project context: {}; fallback /v1/tables failed: {}",
+                keys_err,
+                tables_err
+            )),
+        },
+    }
 }
 
 fn map_validation_error(err: anyhow::Error) -> anyhow::Error {
@@ -376,42 +403,47 @@ pub fn login(
     Ok(())
 }
 
-pub fn login_with_token(
+pub fn login_with_api_key(
     client: &ApiClient,
-    token: &str,
+    api_key: &str,
     organization: Option<String>,
     project: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
-    if token.is_empty() {
+    if api_key.is_empty() {
         return Err(output::coded_error(
-            "missing_token",
-            "Token is required. Pass --token or provide it interactively.",
+            "missing_api_key",
+            "API key is required. Pass --api-key or provide it interactively.",
             1,
         ));
     }
 
-    if token.chars().any(char::is_whitespace) {
+    if api_key.chars().any(char::is_whitespace) {
         return Err(output::coded_error(
-            "invalid_token_format",
-            "Invalid token format. Token must not contain whitespace.",
+            "invalid_api_key_format",
+            "Invalid API key format. API key must not contain whitespace.",
+            1,
+        ));
+    }
+
+    if !api_key.starts_with("rw_") {
+        return Err(output::coded_error(
+            "invalid_api_key_format",
+            "Invalid API key format. Expected an API key starting with 'rw_'.",
             1,
         ));
     }
 
     let mut cfg = config::load().map_err(map_config_read_error)?;
-    let env_org = std::env::var("RAWTREE_ORG").ok();
-    let selection = resolve_auth_selection_strict(
+    let selection = resolve_api_key_auth_selection(
         &client.base_url,
-        token,
+        api_key,
         organization.as_deref(),
         project.as_deref(),
-        env_org.as_deref(),
-        cfg.default_organization.as_deref(),
     )
     .map_err(map_validation_error)?;
 
-    cfg.token = Some(token.to_string());
+    cfg.token = Some(api_key.to_string());
     cfg.email = None;
     cfg.last_claim_token = None;
     cfg.default_organization = selection.organization.clone();
@@ -435,7 +467,7 @@ pub fn login_with_token(
         }),
         json_mode,
         |_| {
-            println!("Token saved to {}.", config_path);
+            println!("API key saved to {}.", config_path);
             print_selected_context(&selection);
         },
     );
@@ -593,8 +625,9 @@ pub fn logout(json_mode: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_auth_config, clear_auth_config, effective_timeout_seconds, resolve_selected_project,
-        select_organization, select_project, AuthResponse, AuthSelection,
+        apply_auth_config, auth_selection_from_project_context, clear_auth_config,
+        effective_timeout_seconds, resolve_selected_project, select_organization, select_project,
+        AuthResponse, AuthSelection, ProjectContextResponse,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -753,6 +786,40 @@ mod tests {
             Some("analytics"),
         );
         assert!(result.is_err(), "explicit project should remain strict");
+    }
+
+    #[test]
+    fn api_key_auth_selection_uses_server_project_context() {
+        let context: ProjectContextResponse = serde_json::from_str(
+            r#"{
+                "project": {"name": "analytics"},
+                "organization": {"name": "team_alpha"}
+            }"#,
+        )
+        .expect("valid context");
+        let selection = auth_selection_from_project_context(context, None, None)
+            .expect("context should select");
+
+        assert_eq!(selection.organization.as_deref(), Some("team_alpha"));
+        assert_eq!(selection.project.as_deref(), Some("analytics"));
+    }
+
+    #[test]
+    fn api_key_auth_selection_rejects_conflicting_project_context() {
+        let context: ProjectContextResponse = serde_json::from_str(
+            r#"{
+                "project": {"name": "analytics"},
+                "organization": {"name": "team_alpha"}
+            }"#,
+        )
+        .expect("valid context");
+        let err = auth_selection_from_project_context(context, Some("team_alpha"), Some("billing"))
+            .expect_err("conflicting project should fail");
+
+        assert!(
+            err.to_string().contains("API key belongs to project"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

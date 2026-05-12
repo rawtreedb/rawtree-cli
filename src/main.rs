@@ -249,15 +249,21 @@ fn run(cli: Cli) -> Result<()> {
             commands::auth::register(&client, &email, &password, cli_org.clone(), project, json)
         }
         Command::Login {
-            token,
+            api_key,
             email,
             password,
             no_browser,
             timeout_seconds,
             project,
         } => {
-            if let Some(token) = token {
-                commands::auth::login_with_token(&client, &token, cli_org.clone(), project, json)
+            if let Some(api_key) = api_key {
+                commands::auth::login_with_api_key(
+                    &client,
+                    &api_key,
+                    cli_org.clone(),
+                    project,
+                    json,
+                )
             } else if let Some(email) = email {
                 let password = prompt_password_if_missing(password)?;
                 commands::auth::login(&client, &email, &password, cli_org.clone(), project, json)

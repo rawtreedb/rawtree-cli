@@ -44,14 +44,14 @@ pub enum Command {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Log in and save token
+    /// Log in and save credentials
     #[command(
-        after_help = "Token mode:\n  --token saves a token directly without browser/email flows.\n\nToken output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
+        after_help = "API key mode:\n  --api-key saves an API key directly without browser/email flows.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
     )]
     Login {
-        /// API token to store directly
+        /// API key to store directly
         #[arg(long, conflicts_with_all = ["email", "password", "no_browser", "timeout_seconds"])]
-        token: Option<String>,
+        api_key: Option<String>,
         #[arg(long)]
         email: Option<String>,
         /// Password (prompted interactively if omitted)
@@ -303,22 +303,28 @@ mod tests {
     }
 
     #[test]
-    fn login_without_token_is_allowed_for_browser_flow() {
+    fn login_without_api_key_is_allowed_for_browser_flow() {
         let cli = Cli::try_parse_from(["rtree", "login"]).expect("login should parse");
         match cli.command {
-            Command::Login { token, .. } => assert!(token.is_none()),
+            Command::Login { api_key, .. } => assert!(api_key.is_none()),
             _ => panic!("expected login command"),
         }
     }
 
     #[test]
-    fn login_with_token_parses() {
-        let cli = Cli::try_parse_from(["rtree", "login", "--token", "rw_abc123"])
-            .expect("login with --token should parse");
+    fn login_with_api_key_parses() {
+        let cli = Cli::try_parse_from(["rtree", "login", "--api-key", "rw_abc123"])
+            .expect("login with --api-key should parse");
         match cli.command {
-            Command::Login { token, .. } => assert_eq!(token.as_deref(), Some("rw_abc123")),
+            Command::Login { api_key, .. } => assert_eq!(api_key.as_deref(), Some("rw_abc123")),
             _ => panic!("expected login command"),
         }
+    }
+
+    #[test]
+    fn login_with_token_flag_is_rejected() {
+        let result = Cli::try_parse_from(["rtree", "login", "--token", "rw_abc123"]);
+        assert!(result.is_err(), "--token should not be accepted");
     }
 
     #[test]
@@ -328,18 +334,18 @@ mod tests {
     }
 
     #[test]
-    fn login_with_token_conflicts_with_email() {
+    fn login_with_api_key_conflicts_with_email() {
         let result = Cli::try_parse_from([
             "rtree",
             "login",
-            "--token",
+            "--api-key",
             "rw_abc123",
             "--email",
             "user@example.com",
         ]);
         assert!(
             result.is_err(),
-            "token mode should conflict with email/password login"
+            "api-key mode should conflict with email/password login"
         );
     }
 
@@ -349,12 +355,12 @@ mod tests {
             .expect("login with --project should parse");
         match cli.command {
             Command::Login {
-                token,
+                api_key,
                 email,
                 project,
                 ..
             } => {
-                assert!(token.is_none());
+                assert!(api_key.is_none());
                 assert!(email.is_none());
                 assert_eq!(project.as_deref(), Some("analytics"));
             }
