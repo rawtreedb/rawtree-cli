@@ -155,10 +155,6 @@ fn select_project(
 }
 
 fn prompt_for_selection(label: &str, names: &[String], json_mode: bool) -> Result<Option<String>> {
-    if names.is_empty() {
-        return Ok(None);
-    }
-
     if json_mode || !io::stdin().is_terminal() {
         let flag_name = if label == "organization" {
             "org"
@@ -201,6 +197,18 @@ fn prompt_for_selection(label: &str, names: &[String], json_mode: bool) -> Resul
     }
 }
 
+fn select_single_or_prompt(
+    label: &str,
+    names: &[String],
+    json_mode: bool,
+) -> Result<Option<String>> {
+    match names {
+        [] => Ok(None),
+        [name] => Ok(Some(name.clone())),
+        _ => prompt_for_selection(label, names, json_mode),
+    }
+}
+
 fn read_selection_input(label: &str) -> Result<String> {
     let mut input = String::new();
     let bytes_read = io::stdin().read_line(&mut input)?;
@@ -226,7 +234,7 @@ fn prompt_for_organization(
         .iter()
         .map(|organization| organization.name.clone())
         .collect::<Vec<_>>();
-    let selected_name = prompt_for_selection("organization", &names, json_mode)?;
+    let selected_name = select_single_or_prompt("organization", &names, json_mode)?;
     Ok(selected_name.and_then(|name| organization_by_name(organizations, &name).cloned()))
 }
 
@@ -252,7 +260,7 @@ fn select_or_prompt_project(
         return select_project(project_names, selected_org, cli_project);
     }
 
-    prompt_for_selection("project", project_names, json_mode)
+    select_single_or_prompt("project", project_names, json_mode)
 }
 
 fn resolve_selected_project(
@@ -813,8 +821,8 @@ mod tests {
     use super::{
         apply_auth_config, auth_selection_from_project_context, clear_auth_config,
         effective_timeout_seconds, parse_selection_number, prompt_for_selection,
-        resolve_selected_project, select_or_prompt_project, select_organization, select_project,
-        AuthResponse, AuthSelection, ProjectContextResponse,
+        resolve_selected_project, select_or_prompt_organization, select_or_prompt_project,
+        select_organization, select_project, AuthResponse, AuthSelection, ProjectContextResponse,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -965,6 +973,26 @@ mod tests {
 
         let err = select_or_prompt_project(&projects, "team_alpha", Some("missing"), true);
         assert!(err.is_err(), "unknown CLI project should fail");
+    }
+
+    #[test]
+    fn browser_project_selection_uses_only_project_without_prompt() {
+        let projects = vec!["analytics".to_string()];
+
+        let selected = select_or_prompt_project(&projects, "team_alpha", None, true)
+            .expect("selection should succeed")
+            .expect("project should exist");
+        assert_eq!(selected, "analytics");
+    }
+
+    #[test]
+    fn browser_organization_selection_uses_only_org_without_prompt() {
+        let organizations = vec![sample_org("team_alpha")];
+
+        let selected = select_or_prompt_organization(&organizations, None, true)
+            .expect("selection should succeed")
+            .expect("organization should exist");
+        assert_eq!(selected.name, "team_alpha");
     }
 
     #[test]
