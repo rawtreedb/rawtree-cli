@@ -88,7 +88,6 @@ fn apply_auth_config(
 ) {
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
-    cfg.last_claim_token = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_project = selection.project.clone();
     if cfg.url.is_none() && base_url != DEFAULT_API_URL {
@@ -638,7 +637,6 @@ pub fn login_with_api_key(
 
     cfg.token = Some(api_key.to_string());
     cfg.email = None;
-    cfg.last_claim_token = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_project = selection.project.clone();
     if cfg.url.is_none() && client.base_url != DEFAULT_API_URL {
@@ -884,19 +882,6 @@ mod tests {
     }
 
     #[test]
-    fn apply_auth_config_clears_last_claim_token() {
-        let mut cfg = Config {
-            last_claim_token: Some("stale_claim".to_string()),
-            ..Config::default()
-        };
-        let resp = sample_auth_response();
-        let selection = AuthSelection::default();
-        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
-
-        assert_eq!(cfg.last_claim_token, None);
-    }
-
-    #[test]
     fn select_organization_uses_cli_when_present() {
         let organizations = vec![sample_org("team_alpha"), sample_org("team_beta")];
         let selected = select_organization(
@@ -1079,7 +1064,6 @@ mod tests {
             url: Some("https://api.rawtree.com".to_string()),
             default_project: Some("analytics".to_string()),
             default_organization: Some("team_alpha".to_string()),
-            last_claim_token: Some("claim_abc".to_string()),
             ..Config::default()
         };
 
@@ -1090,7 +1074,6 @@ mod tests {
         assert_eq!(cfg.url, None);
         assert_eq!(cfg.default_project, None);
         assert_eq!(cfg.default_organization, None);
-        assert_eq!(cfg.last_claim_token, None);
     }
 
     #[test]
