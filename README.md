@@ -151,8 +151,6 @@ rtree insert --project analytics --table events --file ./events.jsonl
 rtree insert --project analytics --table events --url https://example.com/events.jsonl
 ```
 
-If you are not logged in with a JWT, `rtree insert` can bootstrap an anonymous ingest project automatically.
-
 ### Keys and tables
 
 ```sh

@@ -14,15 +14,11 @@ fn resolve_dashboard_url(
     authenticated: bool,
     organization: Option<&str>,
     project: Option<&str>,
-    claim_token: Option<&str>,
 ) -> Option<String> {
     if authenticated {
         return Some(open::build_open_url(base_url, organization, project));
     }
-    match claim_token {
-        Some(token) => Some(open::build_claim_dashboard_url(base_url, token)),
-        None => Some(build_login_url(base_url)),
-    }
+    Some(build_login_url(base_url))
 }
 
 pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
@@ -41,7 +37,6 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
         authenticated,
         organization.as_deref(),
         project.as_deref(),
-        cfg.last_claim_token.as_deref(),
     );
 
     output::print_result(
@@ -72,34 +67,25 @@ mod tests {
 
     #[test]
     fn resolve_dashboard_url_prefers_normal_dashboard_when_authenticated() {
-        let url = resolve_dashboard_url(
-            "https://rawtree.com",
-            true,
-            Some("team"),
-            Some("analytics"),
-            Some("claim_abc"),
-        );
+        let url =
+            resolve_dashboard_url("https://rawtree.com", true, Some("team"), Some("analytics"));
         assert_eq!(url.as_deref(), Some("https://rawtree.com/team/analytics"));
     }
 
     #[test]
-    fn resolve_dashboard_url_uses_claim_dashboard_when_not_authenticated() {
+    fn resolve_dashboard_url_uses_login_when_not_authenticated() {
         let url = resolve_dashboard_url(
             "https://rawtree.com",
             false,
             Some("team"),
             Some("analytics"),
-            Some("claim_abc"),
         );
-        assert_eq!(
-            url.as_deref(),
-            Some("https://rawtree.com/claim/claim_abc/dashboard")
-        );
+        assert_eq!(url.as_deref(), Some("https://rawtree.com/login"));
     }
 
     #[test]
-    fn resolve_dashboard_url_uses_login_when_not_authenticated_and_no_claim_token() {
-        let url = resolve_dashboard_url("https://rawtree.com", false, None, None, None);
+    fn resolve_dashboard_url_uses_login_when_not_authenticated_without_project_context() {
+        let url = resolve_dashboard_url("https://rawtree.com", false, None, None);
         assert_eq!(url.as_deref(), Some("https://rawtree.com/login"));
     }
 
@@ -107,10 +93,5 @@ mod tests {
     fn build_login_url_appends_login_path() {
         let url = build_login_url("https://rawtree.com/");
         assert_eq!(url, "https://rawtree.com/login");
-    }
-
-    #[test]
-    fn temporary_token_is_treated_as_not_authenticated() {
-        assert!(!crate::token_looks_like_jwt("rw_temporary"));
     }
 }
