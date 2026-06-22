@@ -540,6 +540,7 @@ fn run(cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
+    use std::sync::Mutex;
 
     use super::{
         resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
@@ -547,6 +548,8 @@ mod tests {
         should_bootstrap_anonymous_project_for_insert, should_open_claim_dashboard_by_default,
         should_resolve_org_for_project_create, token_looks_like_jwt,
     };
+
+    static ENV_VAR_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvVarGuard {
         name: &'static str,
@@ -644,6 +647,7 @@ mod tests {
 
     #[test]
     fn resolve_url_supports_legacy_rawtree_url_fallback() {
+        let _lock = ENV_VAR_LOCK.lock().unwrap();
         let _api_url_guard = EnvVarGuard::remove("RAWTREE_API_URL");
         let _legacy_url_guard = EnvVarGuard::set("RAWTREE_URL", "https://legacy.example.com");
 
@@ -652,6 +656,7 @@ mod tests {
 
     #[test]
     fn resolve_url_prefers_api_url_over_legacy_rawtree_url() {
+        let _lock = ENV_VAR_LOCK.lock().unwrap();
         let _api_url_guard = EnvVarGuard::set("RAWTREE_API_URL", "https://api.example.com");
         let _legacy_url_guard = EnvVarGuard::set("RAWTREE_URL", "https://legacy.example.com");
 
