@@ -12,7 +12,6 @@ struct DatabaseItem {
     name: String,
     #[serde(default)]
     organization: Option<OrganizationRef>,
-    created_at: String,
 }
 
 #[derive(Deserialize)]
@@ -84,7 +83,6 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                     .as_ref()
                     .or(resp.organization.as_ref())
                     .map(|org| json!({"name": org.name})),
-                "created_at": p.created_at,
             })).collect::<Vec<_>>()
         }),
         json_mode,
@@ -99,10 +97,7 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                         .or(resp.organization.as_ref())
                         .map(|org| org.name.as_str())
                         .unwrap_or("unknown");
-                    println!(
-                        "{:<20} org={} created={}",
-                        p.name, organization, p.created_at
-                    );
+                    println!("{:<20} org={}", p.name, organization);
                 }
             }
         },
@@ -213,8 +208,7 @@ mod tests {
     fn database_item_deserializes_nested_organization_field() {
         let item: DatabaseItem = serde_json::from_value(json!({
             "name": "analytics",
-            "organization": {"name": "team_alpha"},
-            "created_at": "2026-04-10T00:00:00Z"
+            "organization": {"name": "team_alpha"}
         }))
         .expect("database item should deserialize");
 
