@@ -20,7 +20,7 @@ struct QuerySummary {
 
 pub fn query(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     sql: &str,
     limit: Option<u64>,
@@ -33,7 +33,7 @@ pub fn query(
 
     let body = json!({ "sql": sql });
 
-    let path = org::project_scoped_path(project, "/query", organization);
+    let path = org::database_scoped_path(database, "/query", organization);
     let raw = client.post_raw(&path, &body)?;
 
     if let Ok(value) = serde_json::from_str::<Value>(&raw) {

@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn marks_cli_requests_with_rawtree_client_header() {
         let client = Client::new();
-        let request = with_client_header(client.get("https://api.rawtree.local/v1/projects"))
+        let request = with_client_header(client.get("https://api.rawtree.local/v1/databases"))
             .build()
             .expect("request should build");
 

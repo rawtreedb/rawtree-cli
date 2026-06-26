@@ -51,27 +51,27 @@ enum CliDeviceTokenPoll {
 #[derive(Clone, Debug, Default)]
 struct AuthSelection {
     organization: Option<String>,
-    project: Option<String>,
+    database: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct ProjectItem {
+struct DatabaseItem {
     name: String,
 }
 
 #[derive(Deserialize)]
-struct ListProjectsResponse {
-    projects: Vec<ProjectItem>,
+struct ListDatabasesResponse {
+    databases: Vec<DatabaseItem>,
 }
 
 #[derive(Deserialize)]
-struct ProjectContextResponse {
-    project: Option<ProjectContextRef>,
+struct DatabaseContextResponse {
+    database: Option<DatabaseContextRef>,
     organization: Option<OrganizationContextRef>,
 }
 
 #[derive(Deserialize)]
-struct ProjectContextRef {
+struct DatabaseContextRef {
     name: String,
 }
 
@@ -89,7 +89,7 @@ fn apply_auth_config(
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
     cfg.default_organization = selection.organization.clone();
-    cfg.default_project = selection.project.clone();
+    cfg.default_database = selection.database.clone();
     if cfg.url.is_none() && base_url != DEFAULT_API_URL {
         cfg.url = Some(base_url.to_string());
     }
@@ -130,27 +130,27 @@ fn select_organization(
     Ok(organizations.first().cloned())
 }
 
-fn select_project(
-    project_names: &[String],
+fn select_database(
+    database_names: &[String],
     selected_org: &str,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
 ) -> Result<Option<String>> {
-    if let Some(name) = cli_project {
-        return project_names
+    if let Some(name) = cli_database {
+        return database_names
             .iter()
-            .find(|project| project.as_str() == name)
+            .find(|database| database.as_str() == name)
             .cloned()
             .map(Some)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Project '{}' not found in organization '{}'.",
+                    "Database '{}' not found in organization '{}'.",
                     name,
                     selected_org
                 )
             });
     }
 
-    Ok(project_names.first().cloned())
+    Ok(database_names.first().cloned())
 }
 
 fn prompt_for_selection(label: &str, names: &[String], json_mode: bool) -> Result<Option<String>> {
@@ -249,66 +249,66 @@ fn select_or_prompt_organization(
     prompt_for_organization(organizations, json_mode)
 }
 
-fn select_or_prompt_project(
-    project_names: &[String],
+fn select_or_prompt_database(
+    database_names: &[String],
     selected_org: &str,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<Option<String>> {
-    if cli_project.is_some() {
-        return select_project(project_names, selected_org, cli_project);
+    if cli_database.is_some() {
+        return select_database(database_names, selected_org, cli_database);
     }
 
-    select_single_or_prompt("project", project_names, json_mode)
+    select_single_or_prompt("database", database_names, json_mode)
 }
 
-fn resolve_selected_project(
-    project_names_result: Result<Vec<String>>,
+fn resolve_selected_database(
+    database_names_result: Result<Vec<String>>,
     selected_org: &str,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
 ) -> Result<Option<String>> {
-    match project_names_result {
-        Ok(project_names) => select_project(&project_names, selected_org, cli_project),
-        Err(err) if cli_project.is_some() => Err(err),
+    match database_names_result {
+        Ok(database_names) => select_database(&database_names, selected_org, cli_database),
+        Err(err) if cli_database.is_some() => Err(err),
         Err(_err) => Ok(None),
     }
 }
 
-fn resolve_selected_browser_project(
-    project_names_result: Result<Vec<String>>,
+fn resolve_selected_browser_database(
+    database_names_result: Result<Vec<String>>,
     selected_org: &str,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<Option<String>> {
-    match project_names_result {
-        Ok(project_names) => {
-            select_or_prompt_project(&project_names, selected_org, cli_project, json_mode)
+    match database_names_result {
+        Ok(database_names) => {
+            select_or_prompt_database(&database_names, selected_org, cli_database, json_mode)
         }
-        Err(err) if cli_project.is_some() => Err(err),
+        Err(err) if cli_database.is_some() => Err(err),
         Err(_err) => Ok(None),
     }
 }
 
-fn list_projects_for_organization(
+fn list_databases_for_organization(
     client: &ApiClient,
     organization_name: &str,
 ) -> Result<Vec<String>> {
-    let path = org::projects_collection_path(Some(organization_name));
-    let resp: ListProjectsResponse = client.get(&path)?;
-    Ok(resp.projects.into_iter().map(|item| item.name).collect())
+    let path = org::databases_collection_path(Some(organization_name));
+    let resp: ListDatabasesResponse = client.get(&path)?;
+    Ok(resp.databases.into_iter().map(|item| item.name).collect())
 }
 
 fn resolve_browser_auth_selection(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
         Ok(items) => items,
-        Err(err) if cli_org.is_some() || cli_project.is_some() => {
+        Err(err) if cli_org.is_some() || cli_database.is_some() => {
             return Err(err.context("failed to list organizations for auth-time selection"));
         }
         Err(_err) => return Ok(AuthSelection::default()),
@@ -318,31 +318,31 @@ fn resolve_browser_auth_selection(
     let selected_org = match selected_org {
         Some(item) => item,
         None => {
-            if let Some(project_name) = cli_project {
+            if let Some(database_name) = cli_database {
                 anyhow::bail!(
-                    "Cannot select project '{}' because no organization is available.",
-                    project_name
+                    "Cannot select database '{}' because no organization is available.",
+                    database_name
                 );
             }
             return Ok(AuthSelection::default());
         }
     };
 
-    let selected_project = resolve_selected_browser_project(
-        list_projects_for_organization(&authed_client, &selected_org.name).with_context(|| {
+    let selected_database = resolve_selected_browser_database(
+        list_databases_for_organization(&authed_client, &selected_org.name).with_context(|| {
             format!(
-                "failed to list projects for organization '{}'",
+                "failed to list databases for organization '{}'",
                 selected_org.name
             )
         }),
         &selected_org.name,
-        cli_project,
+        cli_database,
         json_mode,
     )?;
 
     Ok(AuthSelection {
         organization: Some(selected_org.name),
-        project: selected_project,
+        database: selected_database,
     })
 }
 
@@ -350,14 +350,14 @@ fn resolve_auth_selection(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
     env_org: Option<&str>,
     cfg_org: Option<&str>,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
         Ok(items) => items,
-        Err(err) if cli_org.is_some() || cli_project.is_some() => {
+        Err(err) if cli_org.is_some() || cli_database.is_some() => {
             return Err(err.context("failed to list organizations for auth-time selection"));
         }
         Err(_err) => return Ok(AuthSelection::default()),
@@ -367,46 +367,46 @@ fn resolve_auth_selection(
     let selected_org = match selected_org {
         Some(item) => item,
         None => {
-            if let Some(project_name) = cli_project {
+            if let Some(database_name) = cli_database {
                 anyhow::bail!(
-                    "Cannot select project '{}' because no organization is available.",
-                    project_name
+                    "Cannot select database '{}' because no organization is available.",
+                    database_name
                 );
             }
             return Ok(AuthSelection::default());
         }
     };
 
-    let selected_project = resolve_selected_project(
-        list_projects_for_organization(&authed_client, &selected_org.name).with_context(|| {
+    let selected_database = resolve_selected_database(
+        list_databases_for_organization(&authed_client, &selected_org.name).with_context(|| {
             format!(
-                "failed to list projects for organization '{}'",
+                "failed to list databases for organization '{}'",
                 selected_org.name
             )
         }),
         &selected_org.name,
-        cli_project,
+        cli_database,
     )?;
 
     Ok(AuthSelection {
         organization: Some(selected_org.name),
-        project: selected_project,
+        database: selected_database,
     })
 }
 
-fn auth_selection_from_project_context(
-    context: ProjectContextResponse,
+fn auth_selection_from_database_context(
+    context: DatabaseContextResponse,
     cli_org: Option<&str>,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
 ) -> Result<AuthSelection> {
     let organization = context
         .organization
         .map(|org| org.name)
         .ok_or_else(|| anyhow::anyhow!("server response did not include an organization"))?;
-    let project = context
-        .project
-        .map(|project| project.name)
-        .ok_or_else(|| anyhow::anyhow!("server response did not include a project"))?;
+    let database = context
+        .database
+        .map(|database| database.name)
+        .ok_or_else(|| anyhow::anyhow!("server response did not include a database"))?;
 
     if let Some(requested_org) = cli_org {
         if requested_org != organization {
@@ -417,19 +417,19 @@ fn auth_selection_from_project_context(
             );
         }
     }
-    if let Some(requested_project) = cli_project {
-        if requested_project != project {
+    if let Some(requested_database) = cli_database {
+        if requested_database != database {
             anyhow::bail!(
-                "API key belongs to project '{}', not '{}'.",
-                project,
-                requested_project
+                "API key belongs to database '{}', not '{}'.",
+                database,
+                requested_database
             );
         }
     }
 
     Ok(AuthSelection {
         organization: Some(organization),
-        project: Some(project),
+        database: Some(database),
     })
 }
 
@@ -437,21 +437,32 @@ fn resolve_api_key_auth_selection(
     base_url: &str,
     token: &str,
     cli_org: Option<&str>,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
+    let (keys_path, tables_path) = api_key_context_paths(cli_org, cli_database);
 
-    match authed_client.get::<ProjectContextResponse>("/v1/keys") {
-        Ok(context) => return auth_selection_from_project_context(context, cli_org, cli_project),
-        Err(keys_err) => match authed_client.get::<ProjectContextResponse>("/v1/tables") {
-            Ok(context) => auth_selection_from_project_context(context, cli_org, cli_project),
+    match authed_client.get::<DatabaseContextResponse>(&keys_path) {
+        Ok(context) => return auth_selection_from_database_context(context, cli_org, cli_database),
+        Err(keys_err) => match authed_client.get::<DatabaseContextResponse>(&tables_path) {
+            Ok(context) => auth_selection_from_database_context(context, cli_org, cli_database),
             Err(tables_err) => Err(anyhow::anyhow!(
-                "failed to resolve API key project context: {}; fallback /v1/tables failed: {}",
+                "failed to resolve API key database context: {}; fallback /v1/tables failed: {}",
                 keys_err,
                 tables_err
             )),
         },
     }
+}
+
+fn api_key_context_paths(cli_org: Option<&str>, cli_database: Option<&str>) -> (String, String) {
+    let keys_path = cli_database
+        .map(|database| org::database_scoped_path(database, "/keys", cli_org))
+        .unwrap_or_else(|| "/v1/keys".to_string());
+    let tables_path = cli_database
+        .map(|database| org::database_scoped_path(database, "/tables", cli_org))
+        .unwrap_or_else(|| "/v1/tables".to_string());
+    (keys_path, tables_path)
 }
 
 fn map_validation_error(err: anyhow::Error) -> anyhow::Error {
@@ -470,7 +481,7 @@ fn update_and_save_config(
     client: &ApiClient,
     resp: &AuthResponse,
     cli_org: Option<&str>,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
 ) -> Result<AuthSelection> {
     let mut cfg = config::load()?;
     let env_org = std::env::var("RAWTREE_ORG").ok();
@@ -478,7 +489,7 @@ fn update_and_save_config(
         &client.base_url,
         &resp.token,
         cli_org,
-        cli_project,
+        cli_database,
         env_org.as_deref(),
         cfg.default_organization.as_deref(),
     )?;
@@ -491,7 +502,7 @@ fn update_and_save_browser_config(
     client: &ApiClient,
     resp: &AuthResponse,
     cli_org: Option<&str>,
-    cli_project: Option<&str>,
+    cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<AuthSelection> {
     let mut cfg = config::load()?;
@@ -499,7 +510,7 @@ fn update_and_save_browser_config(
         &client.base_url,
         &resp.token,
         cli_org,
-        cli_project,
+        cli_database,
         json_mode,
     )?;
     apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
@@ -512,12 +523,12 @@ fn print_selected_context(selection: &AuthSelection) {
         Some(org_name) => println!("Selected organization: {}", org_name),
         None => println!("Selected organization: none"),
     }
-    match &selection.project {
-        Some(project_name) => println!("Selected project: {}", project_name),
+    match &selection.database {
+        Some(database_name) => println!("Selected database: {}", database_name),
         None => {
-            println!("Selected project: none");
+            println!("Selected database: none");
             eprintln!(
-                "Warning: No default project selected. Create one with `rtree project create <name>`."
+                "Warning: No default database selected. Create one with `rtree database create <name>`."
             );
         }
     }
@@ -532,7 +543,7 @@ pub fn register(
     email: &str,
     password: &str,
     organization: Option<String>,
-    project: Option<String>,
+    database: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     let resp: AuthResponse = client.post(
@@ -541,16 +552,16 @@ pub fn register(
     )?;
 
     let selection =
-        update_and_save_config(client, &resp, organization.as_deref(), project.as_deref())?;
+        update_and_save_config(client, &resp, organization.as_deref(), database.as_deref())?;
     let selected_organization = selection.organization.clone();
-    let selected_project = selection.project.clone();
+    let selected_database = selection.database.clone();
 
     output::print_result(
         &json!({
             "email": resp.email,
             "status": "registered",
             "selected_organization": selected_organization,
-            "selected_project": selected_project,
+            "selected_database": selected_database,
         }),
         json_mode,
         |_| {
@@ -566,7 +577,7 @@ pub fn login(
     email: &str,
     password: &str,
     organization: Option<String>,
-    project: Option<String>,
+    database: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     let resp: AuthResponse = client.post(
@@ -575,16 +586,16 @@ pub fn login(
     )?;
 
     let selection =
-        update_and_save_config(client, &resp, organization.as_deref(), project.as_deref())?;
+        update_and_save_config(client, &resp, organization.as_deref(), database.as_deref())?;
     let selected_organization = selection.organization.clone();
-    let selected_project = selection.project.clone();
+    let selected_database = selection.database.clone();
 
     output::print_result(
         &json!({
             "email": resp.email,
             "status": "logged_in",
             "selected_organization": selected_organization,
-            "selected_project": selected_project,
+            "selected_database": selected_database,
         }),
         json_mode,
         |_| {
@@ -599,7 +610,7 @@ pub fn login_with_api_key(
     client: &ApiClient,
     api_key: &str,
     organization: Option<String>,
-    project: Option<String>,
+    database: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     if api_key.is_empty() {
@@ -631,14 +642,14 @@ pub fn login_with_api_key(
         &client.base_url,
         api_key,
         organization.as_deref(),
-        project.as_deref(),
+        database.as_deref(),
     )
     .map_err(map_validation_error)?;
 
     cfg.token = Some(api_key.to_string());
     cfg.email = None;
     cfg.default_organization = selection.organization.clone();
-    cfg.default_project = selection.project.clone();
+    cfg.default_database = selection.database.clone();
     if cfg.url.is_none() && client.base_url != DEFAULT_API_URL {
         cfg.url = Some(client.base_url.clone());
     }
@@ -647,13 +658,13 @@ pub fn login_with_api_key(
     let config_path = config::path().map_err(map_write_error)?;
     let config_path = config_path.display().to_string();
     let selected_organization = selection.organization.clone();
-    let selected_project = selection.project.clone();
+    let selected_database = selection.database.clone();
 
     output::print_result(
         &json!({
             "success": true,
             "config_path": config_path,
-            "project": selected_project,
+            "database": selected_database,
             "organization": selected_organization,
         }),
         json_mode,
@@ -725,7 +736,7 @@ pub fn login_with_browser(
     no_browser: bool,
     timeout_seconds: u64,
     organization: Option<String>,
-    project: Option<String>,
+    database: Option<String>,
     json_mode: bool,
 ) -> Result<()> {
     let start: CliDeviceStartResponse = client.post("/v1/auth/cli/device/start", &json!({}))?;
@@ -769,18 +780,18 @@ pub fn login_with_browser(
                     client,
                     &auth,
                     organization.as_deref(),
-                    project.as_deref(),
+                    database.as_deref(),
                     json_mode,
                 )?;
                 let selected_organization = selection.organization.clone();
-                let selected_project = selection.project.clone();
+                let selected_database = selection.database.clone();
                 output::print_result(
                     &json!({
                         "email": auth.email,
                         "status": "logged_in",
                         "method": "browser",
                         "selected_organization": selected_organization,
-                        "selected_project": selected_project,
+                        "selected_database": selected_database,
                     }),
                     json_mode,
                     |_| {
@@ -817,10 +828,11 @@ pub fn logout(json_mode: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_auth_config, auth_selection_from_project_context, clear_auth_config,
-        effective_timeout_seconds, parse_selection_number, prompt_for_selection,
-        resolve_selected_project, select_or_prompt_organization, select_or_prompt_project,
-        select_organization, select_project, AuthResponse, AuthSelection, ProjectContextResponse,
+        api_key_context_paths, apply_auth_config, auth_selection_from_database_context,
+        clear_auth_config, effective_timeout_seconds, parse_selection_number, prompt_for_selection,
+        resolve_selected_database, select_database, select_or_prompt_database,
+        select_or_prompt_organization, select_organization, AuthResponse, AuthSelection,
+        DatabaseContextResponse,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -840,19 +852,19 @@ mod tests {
     }
 
     #[test]
-    fn apply_auth_config_sets_default_organization_and_project() {
+    fn apply_auth_config_sets_default_organization_and_database() {
         let mut cfg = Config::default();
         let resp = sample_auth_response();
         let selection = AuthSelection {
             organization: Some("team_alpha".to_string()),
-            project: Some("analytics".to_string()),
+            database: Some("analytics".to_string()),
         };
         apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
 
         assert_eq!(cfg.token.as_deref(), Some("jwt"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
-        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
         assert_eq!(cfg.url, None);
     }
 
@@ -869,7 +881,7 @@ mod tests {
     #[test]
     fn apply_auth_config_clears_default_selection_when_missing() {
         let mut cfg = Config {
-            default_project: Some("old_project".to_string()),
+            default_database: Some("old_database".to_string()),
             default_organization: Some("old_team".to_string()),
             ..Config::default()
         };
@@ -878,7 +890,7 @@ mod tests {
         apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
 
         assert_eq!(cfg.default_organization, None);
-        assert_eq!(cfg.default_project, None);
+        assert_eq!(cfg.default_database, None);
     }
 
     #[test]
@@ -926,47 +938,47 @@ mod tests {
     }
 
     #[test]
-    fn select_project_prefers_cli_and_fails_when_unknown() {
-        let projects = vec!["analytics".to_string(), "billing".to_string()];
+    fn select_database_prefers_cli_and_fails_when_unknown() {
+        let databases = vec!["analytics".to_string(), "billing".to_string()];
 
-        let selected = select_project(&projects, "team_alpha", Some("billing"))
+        let selected = select_database(&databases, "team_alpha", Some("billing"))
             .expect("selection should succeed")
-            .expect("project should exist");
+            .expect("database should exist");
         assert_eq!(selected, "billing");
 
-        let err = select_project(&projects, "team_alpha", Some("missing"));
-        assert!(err.is_err(), "unknown CLI project should fail");
+        let err = select_database(&databases, "team_alpha", Some("missing"));
+        assert!(err.is_err(), "unknown CLI database should fail");
     }
 
     #[test]
-    fn select_project_defaults_to_first_when_cli_missing() {
-        let projects = vec!["analytics".to_string(), "billing".to_string()];
-        let selected = select_project(&projects, "team_alpha", None)
+    fn select_database_defaults_to_first_when_cli_missing() {
+        let databases = vec!["analytics".to_string(), "billing".to_string()];
+        let selected = select_database(&databases, "team_alpha", None)
             .expect("selection should succeed")
-            .expect("first project should be selected");
+            .expect("first database should be selected");
         assert_eq!(selected, "analytics");
     }
 
     #[test]
-    fn browser_project_selection_prefers_cli_and_fails_when_unknown() {
-        let projects = vec!["analytics".to_string(), "billing".to_string()];
+    fn browser_database_selection_prefers_cli_and_fails_when_unknown() {
+        let databases = vec!["analytics".to_string(), "billing".to_string()];
 
-        let selected = select_or_prompt_project(&projects, "team_alpha", Some("billing"), true)
+        let selected = select_or_prompt_database(&databases, "team_alpha", Some("billing"), true)
             .expect("selection should succeed")
-            .expect("project should exist");
+            .expect("database should exist");
         assert_eq!(selected, "billing");
 
-        let err = select_or_prompt_project(&projects, "team_alpha", Some("missing"), true);
-        assert!(err.is_err(), "unknown CLI project should fail");
+        let err = select_or_prompt_database(&databases, "team_alpha", Some("missing"), true);
+        assert!(err.is_err(), "unknown CLI database should fail");
     }
 
     #[test]
-    fn browser_project_selection_uses_only_project_without_prompt() {
-        let projects = vec!["analytics".to_string()];
+    fn browser_database_selection_uses_only_database_without_prompt() {
+        let databases = vec!["analytics".to_string()];
 
-        let selected = select_or_prompt_project(&projects, "team_alpha", None, true)
+        let selected = select_or_prompt_database(&databases, "team_alpha", None, true)
             .expect("selection should succeed")
-            .expect("project should exist");
+            .expect("database should exist");
         assert_eq!(selected, "analytics");
     }
 
@@ -982,12 +994,12 @@ mod tests {
 
     #[test]
     fn browser_selection_requires_prompt_when_json_mode_and_missing() {
-        let projects = vec!["analytics".to_string(), "billing".to_string()];
+        let databases = vec!["analytics".to_string(), "billing".to_string()];
 
-        let err = prompt_for_selection("project", &projects, true)
-            .expect_err("json browser login should require an explicit project");
+        let err = prompt_for_selection("database", &databases, true)
+            .expect_err("json browser login should require an explicit database");
         assert!(
-            err.to_string().contains("No project specified"),
+            err.to_string().contains("No database specified"),
             "unexpected error: {err}"
         );
     }
@@ -1002,9 +1014,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_selected_project_tolerates_fetch_errors_when_cli_project_missing() {
-        let result = resolve_selected_project(
-            Err(anyhow::anyhow!("failed to list projects")),
+    fn resolve_selected_database_tolerates_fetch_errors_when_cli_database_missing() {
+        let result = resolve_selected_database(
+            Err(anyhow::anyhow!("failed to list databases")),
             "team_alpha",
             None,
         )
@@ -1013,46 +1025,69 @@ mod tests {
     }
 
     #[test]
-    fn resolve_selected_project_fails_on_fetch_errors_when_cli_project_provided() {
-        let result = resolve_selected_project(
-            Err(anyhow::anyhow!("failed to list projects")),
+    fn resolve_selected_database_fails_on_fetch_errors_when_cli_database_provided() {
+        let result = resolve_selected_database(
+            Err(anyhow::anyhow!("failed to list databases")),
             "team_alpha",
             Some("analytics"),
         );
-        assert!(result.is_err(), "explicit project should remain strict");
+        assert!(result.is_err(), "explicit database should remain strict");
     }
 
     #[test]
-    fn api_key_auth_selection_uses_server_project_context() {
-        let context: ProjectContextResponse = serde_json::from_str(
+    fn api_key_auth_selection_uses_server_database_context() {
+        let context: DatabaseContextResponse = serde_json::from_str(
             r#"{
-                "project": {"name": "analytics"},
+                "database": {"name": "analytics"},
                 "organization": {"name": "team_alpha"}
             }"#,
         )
         .expect("valid context");
-        let selection = auth_selection_from_project_context(context, None, None)
+        let selection = auth_selection_from_database_context(context, None, None)
             .expect("context should select");
 
         assert_eq!(selection.organization.as_deref(), Some("team_alpha"));
-        assert_eq!(selection.project.as_deref(), Some("analytics"));
+        assert_eq!(selection.database.as_deref(), Some("analytics"));
     }
 
     #[test]
-    fn api_key_auth_selection_rejects_conflicting_project_context() {
-        let context: ProjectContextResponse = serde_json::from_str(
+    fn api_key_auth_selection_rejects_conflicting_database_context() {
+        let context: DatabaseContextResponse = serde_json::from_str(
             r#"{
-                "project": {"name": "analytics"},
+                "database": {"name": "analytics"},
                 "organization": {"name": "team_alpha"}
             }"#,
         )
         .expect("valid context");
-        let err = auth_selection_from_project_context(context, Some("team_alpha"), Some("billing"))
-            .expect_err("conflicting project should fail");
+        let err =
+            auth_selection_from_database_context(context, Some("team_alpha"), Some("billing"))
+                .expect_err("conflicting database should fail");
 
         assert!(
-            err.to_string().contains("API key belongs to project"),
+            err.to_string().contains("API key belongs to database"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn api_key_context_paths_do_not_invent_organization() {
+        let (keys_path, tables_path) = api_key_context_paths(None, Some("analytics"));
+
+        assert_eq!(keys_path, "/v1/keys?database=analytics");
+        assert_eq!(tables_path, "/v1/tables?database=analytics");
+    }
+
+    #[test]
+    fn api_key_context_paths_include_explicit_organization() {
+        let (keys_path, tables_path) = api_key_context_paths(Some("team alpha"), Some("analytics"));
+
+        assert_eq!(
+            keys_path,
+            "/v1/keys?database=analytics&organization=team%20alpha"
+        );
+        assert_eq!(
+            tables_path,
+            "/v1/tables?database=analytics&organization=team%20alpha"
         );
     }
 
@@ -1062,7 +1097,7 @@ mod tests {
             token: Some("rw_temp".to_string()),
             email: Some("user@example.com".to_string()),
             url: Some("https://api.rawtree.com".to_string()),
-            default_project: Some("analytics".to_string()),
+            default_database: Some("analytics".to_string()),
             default_organization: Some("team_alpha".to_string()),
             ..Config::default()
         };
@@ -1072,7 +1107,7 @@ mod tests {
         assert_eq!(cfg.token, None);
         assert_eq!(cfg.email, None);
         assert_eq!(cfg.url, None);
-        assert_eq!(cfg.default_project, None);
+        assert_eq!(cfg.default_database, None);
         assert_eq!(cfg.default_organization, None);
     }
 

@@ -44,11 +44,11 @@ struct DescribeTableResponse {
 
 pub fn list(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let list_path = org::project_scoped_path(project, "/tables", organization);
+    let list_path = org::database_scoped_path(database, "/tables", organization);
     let resp: TablesResponse = client.get(&list_path)?;
     output::print_result(
         &json!({
@@ -82,13 +82,13 @@ pub fn list(
 
 pub fn describe(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     table: &str,
     json_mode: bool,
 ) -> Result<()> {
     let describe_path =
-        org::project_scoped_path(project, &format!("/tables/{table}"), organization);
+        org::database_scoped_path(database, &format!("/tables/{table}"), organization);
     let resp: DescribeTableResponse = client.get(&describe_path)?;
     output::print_result(
         &json!({

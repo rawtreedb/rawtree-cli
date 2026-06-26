@@ -12,8 +12,13 @@ pub struct Config {
     pub email: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default)]
-    pub default_project: Option<String>,
+    #[serde(
+        default,
+        rename = "database",
+        alias = "default_database",
+        alias = "default_project"
+    )]
+    pub default_database: Option<String>,
     #[serde(default)]
     pub default_organization: Option<String>,
 }
@@ -69,7 +74,7 @@ mod tests {
     use super::Config;
 
     #[test]
-    fn old_config_without_default_organization_still_deserializes() {
+    fn old_config_with_default_project_still_deserializes() {
         let old = r#"{
   "token": "t",
   "email": "e@example.com",
@@ -77,8 +82,30 @@ mod tests {
   "default_project": "analytics"
 }"#;
         let cfg: Config = serde_json::from_str(old).expect("old config should parse");
-        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
         assert_eq!(cfg.default_organization, None);
+    }
+
+    #[test]
+    fn old_config_with_default_database_still_deserializes() {
+        let old = r#"{
+  "default_database": "analytics"
+}"#;
+        let cfg: Config = serde_json::from_str(old).expect("old config should parse");
+        assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
+    }
+
+    #[test]
+    fn config_serializes_database_key() {
+        let cfg = Config {
+            default_database: Some("analytics".to_string()),
+            ..Config::default()
+        };
+        let json = serde_json::to_value(&cfg).expect("config should serialize");
+
+        assert_eq!(json["database"], "analytics");
+        assert!(json.get("default_database").is_none());
+        assert!(json.get("default_project").is_none());
     }
 
     #[test]

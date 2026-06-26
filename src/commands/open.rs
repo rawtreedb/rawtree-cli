@@ -12,15 +12,15 @@ pub fn resolve_ui_base_url() -> String {
 pub(crate) fn build_open_url(
     base_url: &str,
     organization: Option<&str>,
-    project: Option<&str>,
+    database: Option<&str>,
 ) -> String {
     let trimmed_base = base_url.trim_end_matches('/');
-    match (organization, project) {
-        (Some(org), Some(project_name)) => format!(
+    match (organization, database) {
+        (Some(org), Some(database_name)) => format!(
             "{}/{}/{}",
             trimmed_base,
             urlencoding::encode(org),
-            urlencoding::encode(project_name)
+            urlencoding::encode(database_name)
         ),
         _ => trimmed_base.to_string(),
     }
@@ -37,10 +37,10 @@ pub fn open_url(target_url: &str, json_mode: bool) -> Result<()> {
 pub fn open(
     base_url: &str,
     organization: Option<&str>,
-    project: Option<&str>,
+    database: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let target_url = build_open_url(base_url, organization, project);
+    let target_url = build_open_url(base_url, organization, database);
     open_url(&target_url, json_mode)
 }
 
@@ -49,13 +49,13 @@ mod tests {
     use super::build_open_url;
 
     #[test]
-    fn build_open_url_uses_base_url_when_project_context_missing() {
+    fn build_open_url_uses_base_url_when_database_context_missing() {
         let url = build_open_url("https://rawtree.com/", Some("team_alpha"), None);
         assert_eq!(url, "https://rawtree.com");
     }
 
     #[test]
-    fn build_open_url_appends_org_and_project_path() {
+    fn build_open_url_appends_org_and_database_path() {
         let url = build_open_url("https://rawtree.com", Some("team_alpha"), Some("analytics"));
         assert_eq!(url, "https://rawtree.com/team_alpha/analytics");
     }

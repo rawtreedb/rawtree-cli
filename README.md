@@ -38,9 +38,9 @@ cargo build --release
 # Authenticate (browser flow by default)
 rtree login
 
-# Create and select a project
-rtree project create analytics
-rtree project use analytics
+# Create and select a database
+rtree database create analytics
+rtree database use analytics
 
 # Insert a JSON row
 rtree insert --table events --data '{"event":"signup","user_id":1}'
@@ -48,7 +48,7 @@ rtree insert --table events --data '{"event":"signup","user_id":1}'
 # Run a query
 rtree query --sql "SELECT count(*) FROM events"
 
-# Open the UI for the current project
+# Open the UI for the current database
 rtree open
 ```
 
@@ -59,13 +59,13 @@ rtree open
 - Browser-based (default): `rtree login`
 - Email/password: `rtree login --email you@example.com --password '***'`
 - Direct API key save: `rtree login --api-key rw_123`
-- Select defaults during auth: `rtree login --org team-alpha --project analytics`
+- Select defaults during auth: `rtree login --org team-alpha --database analytics`
 
-When using `--api-key`, the CLI stores the API key directly and resolves organization/project defaults from that key.
+When using `--api-key`, the CLI stores the API key directly and resolves organization/database defaults from that key.
 With `--json`, API key login returns:
 
 ```json
-{"success":true,"config_path":"<path>","project":"<name>","organization":"<name>"}
+{"success":true,"config_path":"<path>","database":"<name>","organization":"<name>"}
 ```
 
 ### Token resolution
@@ -93,7 +93,7 @@ Resolution priority by setting:
 
 - API KEY: `--api-key` -> `RAWTREE_API_KEY` -> config file token
 - API URL: `--api-url` -> `RAWTREE_API_URL` -> config file -> `https://api.rawtree.com`
-- Project: `--project` -> `RAWTREE_PROJECT` -> config file default project
+- Database: `--database` -> `RAWTREE_DATABASE` -> config file default database
 - Organization: `--org` -> `RAWTREE_ORG` -> config file default organization
 
 ## Commands
@@ -101,7 +101,7 @@ Resolution priority by setting:
 Top-level commands:
 
 - `register`, `login`, `logout`
-- `project`, `organization`, `key`, `table`
+- `database`, `organization`, `key`, `table`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -113,16 +113,16 @@ Global flags:
 
 ## Common Workflows
 
-### Projects and organizations
+### Databases and organizations
 
 ```sh
 rtree organization list
 rtree organization create team-alpha
 rtree organization use team-alpha
 
-rtree project list
-rtree project create analytics
-rtree project use analytics
+rtree database list
+rtree database create analytics
+rtree database use analytics
 ```
 
 ### Querying
@@ -142,23 +142,23 @@ rtree query --json --sql "SELECT * FROM events LIMIT 10"
 
 ```sh
 # Inline JSON
-rtree insert --project analytics --table events --data '{"event":"page_view"}'
+rtree insert --database analytics --table events --data '{"event":"page_view"}'
 
 # JSON/JSONL file
-rtree insert --project analytics --table events --file ./events.jsonl
+rtree insert --database analytics --table events --file ./events.jsonl
 
 # Public URL to JSON/JSONL
-rtree insert --project analytics --table events --url https://example.com/events.jsonl
+rtree insert --database analytics --table events --url https://example.com/events.jsonl
 ```
 
 ### Keys and tables
 
 ```sh
-rtree key list --project analytics
-rtree key create --project analytics --name ci --permission read_write
+rtree key list --database analytics
+rtree key create --database analytics --name ci --permission read_write
 
-rtree table list --project analytics
-rtree table describe --project analytics events
+rtree table list --database analytics
+rtree table describe --database analytics events
 ```
 
 ## Shell Completions

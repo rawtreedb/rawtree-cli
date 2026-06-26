@@ -12,7 +12,9 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
-use cli::{Cli, Command, KeyCommand, OrganizationCommand, ProjectCommand, ShellType, TableCommand};
+use cli::{
+    Cli, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType, TableCommand,
+};
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
 
@@ -53,24 +55,24 @@ fn resolve_token(cli_api_key: Option<String>) -> Option<String> {
     resolve_token_from_sources(cli_api_key, env_api_key, legacy_env_token, cfg_token)
 }
 
-fn resolve_project_from_sources(
-    cli_project: Option<String>,
-    env_project: Option<String>,
-    cfg_project: Option<String>,
+fn resolve_database_from_sources(
+    cli_database: Option<String>,
+    env_database: Option<String>,
+    cfg_database: Option<String>,
 ) -> Option<String> {
-    cli_project.or(env_project).or(cfg_project)
+    cli_database.or(env_database).or(cfg_database)
 }
 
-fn resolve_optional_project(cli_project: Option<String>) -> Option<String> {
-    let env_project = std::env::var("RAWTREE_PROJECT").ok();
-    let cfg_project = config::load().ok().and_then(|c| c.default_project);
-    resolve_project_from_sources(cli_project, env_project, cfg_project)
+fn resolve_optional_database(cli_database: Option<String>) -> Option<String> {
+    let env_database = std::env::var("RAWTREE_DATABASE").ok();
+    let cfg_database = config::load().ok().and_then(|c| c.default_database);
+    resolve_database_from_sources(cli_database, env_database, cfg_database)
 }
 
-fn resolve_project(cli_project: Option<String>) -> Result<String> {
-    resolve_optional_project(cli_project).ok_or_else(|| {
+fn resolve_database(cli_database: Option<String>) -> Result<String> {
+    resolve_optional_database(cli_database).ok_or_else(|| {
         anyhow::anyhow!(
-            "No project specified. Use --project, RAWTREE_PROJECT env, or `rtree project use <name>`"
+            "No database specified. Use --database, RAWTREE_DATABASE env, or `rtree database use <name>`"
         )
     })
 }
@@ -112,15 +114,15 @@ pub(crate) fn token_looks_like_jwt(token: &str) -> bool {
         && parts.next().is_none()
 }
 
-fn should_resolve_org_for_project_create(token: Option<&str>) -> bool {
+fn should_resolve_org_for_database_create(token: Option<&str>) -> bool {
     token.map(token_looks_like_jwt).unwrap_or(false)
 }
 
-fn resolve_effective_org_for_project_create(
+fn resolve_effective_org_for_database_create(
     client: &ApiClient,
     cli_org: Option<String>,
 ) -> Option<String> {
-    if !should_resolve_org_for_project_create(client.token.as_deref()) {
+    if !should_resolve_org_for_database_create(client.token.as_deref()) {
         return None;
     }
     resolve_effective_org(client, cli_org)
@@ -190,17 +192,17 @@ fn run(cli: Cli) -> Result<()> {
         Command::Register {
             email,
             password,
-            project,
+            database,
         } => {
             let password = prompt_password_if_missing(password)?;
-            commands::auth::register(&client, &email, &password, cli_org.clone(), project, json)
+            commands::auth::register(&client, &email, &password, cli_org.clone(), database, json)
         }
         Command::Login {
             email,
             password,
             no_browser,
             timeout_seconds,
-            project,
+            database,
         } => {
             if let Some(api_key) = cli_api_key {
                 if email.is_some() || password.is_some() {
@@ -212,42 +214,38 @@ fn run(cli: Cli) -> Result<()> {
                     &client,
                     &api_key,
                     cli_org.clone(),
-                    project,
+                    database,
                     json,
                 )
             } else if let Some(email) = email {
                 let password = prompt_password_if_missing(password)?;
-                commands::auth::login(&client, &email, &password, cli_org.clone(), project, json)
+                commands::auth::login(&client, &email, &password, cli_org.clone(), database, json)
             } else {
                 commands::auth::login_with_browser(
                     &client,
                     no_browser,
                     timeout_seconds,
                     cli_org.clone(),
-                    project,
+                    database,
                     json,
                 )
             }
         }
         Command::Logout => commands::auth::logout(json),
-        Command::Project { action } => match action {
-            ProjectCommand::List => {
+        Command::Database { action } => match action {
+            DatabaseCommand::List => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::project::list(&client, effective_org.as_deref(), json)
+                commands::database::list(&client, effective_org.as_deref(), json)
             }
-            ProjectCommand::Create { name } => {
+            DatabaseCommand::Create { name } => {
                 let effective_org =
-                    resolve_effective_org_for_project_create(&client, cli_org.clone());
-                commands::project::create(&client, &name, effective_org.as_deref(), json)
+                    resolve_effective_org_for_database_create(&client, cli_org.clone());
+                commands::database::create(&client, &name, effective_org.as_deref(), json)
             }
-            ProjectCommand::Use { name } => commands::project::use_project(&name, json),
-            ProjectCommand::Rename { old, new_name } => {
+            DatabaseCommand::Use { name } => commands::database::use_database(&name, json),
+            DatabaseCommand::Delete { name } => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::project::rename(&client, &old, &new_name, effective_org.as_deref(), json)
-            }
-            ProjectCommand::Delete { name } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::project::delete(&client, &name, effective_org.as_deref(), json)
+                commands::database::delete(&client, &name, effective_org.as_deref(), json)
             }
         },
         Command::Organization { action } => match action {
@@ -268,19 +266,19 @@ fn run(cli: Cli) -> Result<()> {
         Command::Key { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
-                KeyCommand::List { project } => {
-                    let project = resolve_project(project)?;
-                    commands::keys::list(&client, &project, effective_org.as_deref(), json)
+                KeyCommand::List { database } => {
+                    let database = resolve_database(database)?;
+                    commands::keys::list(&client, &database, effective_org.as_deref(), json)
                 }
                 KeyCommand::Create {
-                    project,
+                    database,
                     name,
                     permission,
                 } => {
-                    let project = resolve_project(project)?;
+                    let database = resolve_database(database)?;
                     commands::keys::create(
                         &client,
-                        &project,
+                        &database,
                         effective_org.as_deref(),
                         &name,
                         &permission,
@@ -288,13 +286,13 @@ fn run(cli: Cli) -> Result<()> {
                     )
                 }
                 KeyCommand::Delete {
-                    project,
+                    database,
                     id_or_token,
                 } => {
-                    let project = resolve_project(project)?;
+                    let database = resolve_database(database)?;
                     commands::keys::delete(
                         &client,
-                        &project,
+                        &database,
                         effective_org.as_deref(),
                         &id_or_token,
                         json,
@@ -305,15 +303,15 @@ fn run(cli: Cli) -> Result<()> {
         Command::Table { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
-                TableCommand::List { project } => {
-                    let project = resolve_project(project)?;
-                    commands::table::list(&client, &project, effective_org.as_deref(), json)
+                TableCommand::List { database } => {
+                    let database = resolve_database(database)?;
+                    commands::table::list(&client, &database, effective_org.as_deref(), json)
                 }
-                TableCommand::Describe { project, table } => {
-                    let project = resolve_project(project)?;
+                TableCommand::Describe { database, table } => {
+                    let database = resolve_database(database)?;
                     commands::table::describe(
                         &client,
-                        &project,
+                        &database,
                         effective_org.as_deref(),
                         &table,
                         json,
@@ -322,7 +320,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Logs {
-            project,
+            database,
             r#type,
             table,
             status,
@@ -334,10 +332,10 @@ fn run(cli: Cli) -> Result<()> {
             end_time,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let project = resolve_project(project)?;
+            let database = resolve_database(database)?;
             commands::logs::logs(
                 &client,
-                &project,
+                &database,
                 effective_org.as_deref(),
                 r#type.as_deref(),
                 &table,
@@ -352,17 +350,17 @@ fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Query {
-            project,
+            database,
             sql_positional,
             sql,
             limit,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let project = resolve_project(project)?;
+            let database = resolve_database(database)?;
             let sql = resolve_sql(sql_positional, sql)?;
             commands::query::query(
                 &client,
-                &project,
+                &database,
                 effective_org.as_deref(),
                 &sql,
                 limit,
@@ -370,7 +368,7 @@ fn run(cli: Cli) -> Result<()> {
             )
         }
         Command::Insert {
-            project,
+            database,
             table,
             data,
             file,
@@ -378,11 +376,11 @@ fn run(cli: Cli) -> Result<()> {
             transform,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let project = resolve_project(project)?;
+            let database = resolve_database(database)?;
 
             commands::insert::insert(
                 &client,
-                &project,
+                &database,
                 effective_org.as_deref(),
                 &table,
                 data.as_deref(),
@@ -395,14 +393,14 @@ fn run(cli: Cli) -> Result<()> {
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
         Command::Status => commands::status::status(&url, json),
-        Command::Open { project } => {
+        Command::Open { database } => {
             let ui_base_url = commands::open::resolve_ui_base_url();
             let effective_org = resolve_effective_org(&client, cli_org);
-            let project = resolve_optional_project(project);
+            let database = resolve_optional_database(database);
             commands::open::open(
                 &ui_base_url,
                 effective_org.as_deref(),
-                project.as_deref(),
+                database.as_deref(),
                 json,
             )
         }
@@ -421,8 +419,8 @@ fn run(cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_effective_org_with, resolve_org_from_sources, resolve_project_from_sources,
-        resolve_token_from_sources, resolve_url, should_resolve_org_for_project_create,
+        resolve_database_from_sources, resolve_effective_org_with, resolve_org_from_sources,
+        resolve_token_from_sources, resolve_url, should_resolve_org_for_database_create,
         token_looks_like_jwt,
     };
 
@@ -514,10 +512,10 @@ mod tests {
     }
 
     #[test]
-    fn project_create_org_resolution_requires_jwt_token() {
-        assert!(should_resolve_org_for_project_create(Some("a.b.c")));
-        assert!(!should_resolve_org_for_project_create(Some("rw_key")));
-        assert!(!should_resolve_org_for_project_create(None));
+    fn database_create_org_resolution_requires_jwt_token() {
+        assert!(should_resolve_org_for_database_create(Some("a.b.c")));
+        assert!(!should_resolve_org_for_database_create(Some("rw_key")));
+        assert!(!should_resolve_org_for_database_create(None));
     }
 
     #[test]
@@ -576,28 +574,28 @@ mod tests {
     }
 
     #[test]
-    fn resolve_project_uses_cli_first() {
-        let resolved = resolve_project_from_sources(
-            Some("cli-project".to_string()),
-            Some("env-project".to_string()),
-            Some("cfg-project".to_string()),
+    fn resolve_database_uses_cli_first() {
+        let resolved = resolve_database_from_sources(
+            Some("cli-database".to_string()),
+            Some("env-database".to_string()),
+            Some("cfg-database".to_string()),
         );
-        assert_eq!(resolved.as_deref(), Some("cli-project"));
+        assert_eq!(resolved.as_deref(), Some("cli-database"));
     }
 
     #[test]
-    fn resolve_project_uses_env_when_cli_missing() {
-        let resolved = resolve_project_from_sources(
+    fn resolve_database_uses_env_when_cli_missing() {
+        let resolved = resolve_database_from_sources(
             None,
-            Some("env-project".to_string()),
-            Some("cfg-project".to_string()),
+            Some("env-database".to_string()),
+            Some("cfg-database".to_string()),
         );
-        assert_eq!(resolved.as_deref(), Some("env-project"));
+        assert_eq!(resolved.as_deref(), Some("env-database"));
     }
 
     #[test]
-    fn resolve_project_uses_config_when_cli_and_env_missing() {
-        let resolved = resolve_project_from_sources(None, None, Some("cfg-project".to_string()));
-        assert_eq!(resolved.as_deref(), Some("cfg-project"));
+    fn resolve_database_uses_config_when_cli_and_env_missing() {
+        let resolved = resolve_database_from_sources(None, None, Some("cfg-database".to_string()));
+        assert_eq!(resolved.as_deref(), Some("cfg-database"));
     }
 }
