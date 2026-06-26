@@ -17,7 +17,6 @@ struct TablesResponse {
 #[derive(Deserialize)]
 struct TableInfo {
     name: String,
-    created_at: String,
     #[serde(alias = "rows")]
     total_rows: u64,
     #[serde(alias = "size")]
@@ -54,7 +53,6 @@ pub fn list(
         &json!({
             "tables": resp.tables.iter().map(|t| json!({
                 "name": t.name,
-                "created_at": t.created_at,
                 "total_rows": t.total_rows,
                 "total_bytes": t.total_bytes,
             })).collect::<Vec<_>>()
@@ -155,7 +153,6 @@ mod tests {
         let payload = r#"{
             "tables": [{
                 "name": "events",
-                "created_at": "2026-01-01 10:00:00",
                 "total_rows": 1200,
                 "total_bytes": 98304
             }]
