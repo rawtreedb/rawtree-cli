@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::client::ApiClient;
 use crate::config;
@@ -8,7 +8,7 @@ use crate::org;
 use crate::output;
 
 #[derive(Deserialize)]
-struct ProjectItem {
+struct DatabaseItem {
     name: String,
     #[serde(default)]
     organization: Option<OrganizationRef>,
@@ -16,10 +16,10 @@ struct ProjectItem {
 }
 
 #[derive(Deserialize)]
-struct ListProjectsResponse {
+struct ListDatabasesResponse {
     #[serde(default)]
     organization: Option<OrganizationRef>,
-    projects: Vec<ProjectItem>,
+    databases: Vec<DatabaseItem>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -28,13 +28,13 @@ struct OrganizationRef {
 }
 
 #[derive(Deserialize)]
-struct CreateProjectResponse {
+struct CreateDatabaseResponse {
     name: String,
     #[serde(default)]
     organization: Option<OrganizationRef>,
 }
 
-impl CreateProjectResponse {
+impl CreateDatabaseResponse {
     fn resolved_organization_name(&self) -> Option<&str> {
         self.organization
             .as_ref()
@@ -42,51 +42,42 @@ impl CreateProjectResponse {
     }
 }
 
-fn apply_project_create_config(cfg: &mut config::Config, resp: &CreateProjectResponse) {
-    cfg.default_project = Some(resp.name.clone());
+fn apply_database_create_config(cfg: &mut config::Config, resp: &CreateDatabaseResponse) {
+    cfg.default_database = Some(resp.name.clone());
     cfg.default_organization = resp.resolved_organization_name().map(ToString::to_string);
 }
 
-fn project_create_collection_path(organization: Option<&str>) -> String {
-    org::projects_collection_path(organization)
+fn database_create_collection_path(organization: Option<&str>) -> String {
+    org::databases_collection_path(organization)
 }
 
-fn create_project_response(
+fn create_database_response(
     client: &ApiClient,
-    name: Option<&str>,
+    name: &str,
     organization: Option<&str>,
-) -> Result<CreateProjectResponse> {
-    let path = project_create_collection_path(organization);
-
-    let mut payload = serde_json::Map::new();
-    if let Some(project_name) = name {
-        payload.insert(
-            "project".to_string(),
-            Value::String(project_name.to_string()),
-        );
-    }
-
-    client.post(&path, &Value::Object(payload))
+) -> Result<CreateDatabaseResponse> {
+    let path = database_create_collection_path(organization);
+    client.post(&path, &json!({ "name": name }))
 }
 
 fn create_and_persist(
     client: &ApiClient,
-    name: Option<&str>,
+    name: &str,
     organization: Option<&str>,
-) -> Result<CreateProjectResponse> {
-    let resp = create_project_response(client, name, organization)?;
+) -> Result<CreateDatabaseResponse> {
+    let resp = create_database_response(client, name, organization)?;
     let mut cfg = config::load()?;
-    apply_project_create_config(&mut cfg, &resp);
+    apply_database_create_config(&mut cfg, &resp);
     config::save(&cfg)?;
     Ok(resp)
 }
 
 pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
-    let path = org::projects_collection_path(organization);
-    let resp: ListProjectsResponse = client.get(&path)?;
+    let path = org::databases_collection_path(organization);
+    let resp: ListDatabasesResponse = client.get(&path)?;
     output::print_result(
         &json!({
-            "projects": resp.projects.iter().map(|p| json!({
+            "databases": resp.databases.iter().map(|p| json!({
                 "name": p.name,
                 "organization": p
                     .organization
@@ -98,10 +89,10 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
         }),
         json_mode,
         |_| {
-            if resp.projects.is_empty() {
-                println!("No projects yet. Create one with `rtree project create <name>`.");
+            if resp.databases.is_empty() {
+                println!("No databases yet. Create one with `rtree database create <name>`.");
             } else {
-                for p in &resp.projects {
+                for p in &resp.databases {
                     let organization = p
                         .organization
                         .as_ref()
@@ -125,7 +116,7 @@ pub fn create(
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let resp = create_and_persist(client, Some(name), organization)?;
+    let resp = create_and_persist(client, name, organization)?;
 
     output::print_result(
         &json!({
@@ -138,7 +129,7 @@ pub fn create(
         |_| {
             let organization_name = resp.resolved_organization_name().unwrap_or("unknown");
             println!(
-                "Project '{}' created in organization '{}'.",
+                "Database '{}' created in organization '{}'.",
                 resp.name, organization_name
             );
         },
@@ -146,55 +137,20 @@ pub fn create(
     Ok(())
 }
 
-pub fn use_project(name: &str, json_mode: bool) -> Result<()> {
+pub fn use_database(name: &str, json_mode: bool) -> Result<()> {
     let mut cfg = config::load()?;
-    cfg.default_project = Some(name.to_string());
+    cfg.default_database = Some(name.to_string());
     config::save(&cfg)?;
 
-    output::print_result(&json!({"default_project": name}), json_mode, |_| {
-        println!("Default project set to '{}'.", name)
+    output::print_result(&json!({"default_database": name}), json_mode, |_| {
+        println!("Default database set to '{}'.", name)
     });
     Ok(())
 }
 
 #[derive(Deserialize)]
-struct RenameProjectResponse {
-    project: ProjectEntity,
-    organization: OrganizationRef,
-}
-
-#[derive(Deserialize)]
-struct ProjectEntity {
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct DeleteProjectResponse {
+struct DeleteDatabaseResponse {
     deleted: bool,
-}
-
-pub fn rename(
-    client: &ApiClient,
-    old: &str,
-    new_name: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let path = match organization {
-        Some(org_name) => format!("/v1/{org_name}/{old}"),
-        None => format!("/v1/projects/{old}"),
-    };
-    let resp: RenameProjectResponse = client.patch(&path, &json!({"project": new_name}))?;
-    output::print_result(
-        &json!({
-            "old_name": old,
-            "name": resp.project.name,
-            "organization": {"name": resp.organization.name},
-        }),
-        json_mode,
-        |_| println!("Project '{}' renamed to '{}'.", old, resp.project.name),
-    );
-    Ok(())
 }
 
 pub fn delete(
@@ -203,17 +159,18 @@ pub fn delete(
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = match organization {
-        Some(org_name) => format!("/v1/{org_name}/{name}"),
-        None => format!("/v1/projects/{name}"),
-    };
-    let resp: DeleteProjectResponse = client.delete(&path)?;
+    let mut path = format!("/v1/databases/{}", urlencoding::encode(name));
+    if let Some(org) = organization {
+        path.push_str("?organization=");
+        path.push_str(&urlencoding::encode(org));
+    }
+    let resp: DeleteDatabaseResponse = client.delete(&path)?;
     output::print_result(
         &json!({"deleted": resp.deleted, "name": name}),
         json_mode,
         |_| {
             if resp.deleted {
-                println!("Project '{}' deleted.", name);
+                println!("Database '{}' deleted.", name);
             }
         },
     );
@@ -223,54 +180,54 @@ pub fn delete(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_project_create_config, project_create_collection_path, CreateProjectResponse,
-        OrganizationRef, ProjectItem,
+        apply_database_create_config, database_create_collection_path, CreateDatabaseResponse,
+        DatabaseItem, OrganizationRef,
     };
     use crate::config::Config;
     use serde_json::json;
 
     #[test]
-    fn apply_project_create_config_preserves_jwt_for_standard_projects() {
+    fn apply_database_create_config_preserves_jwt_for_standard_databases() {
         let mut cfg = Config {
             token: Some("jwt.token.value".to_string()),
             email: Some("user@example.com".to_string()),
             default_organization: Some("team_alpha".to_string()),
             ..Config::default()
         };
-        let resp = CreateProjectResponse {
+        let resp = CreateDatabaseResponse {
             name: "analytics".to_string(),
             organization: Some(OrganizationRef {
                 name: "new_team".to_string(),
             }),
         };
 
-        apply_project_create_config(&mut cfg, &resp);
+        apply_database_create_config(&mut cfg, &resp);
 
         assert_eq!(cfg.token.as_deref(), Some("jwt.token.value"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("new_team"));
-        assert_eq!(cfg.default_project.as_deref(), Some("analytics"));
+        assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
     }
 
     #[test]
-    fn project_item_deserializes_nested_organization_field() {
-        let item: ProjectItem = serde_json::from_value(json!({
+    fn database_item_deserializes_nested_organization_field() {
+        let item: DatabaseItem = serde_json::from_value(json!({
             "name": "analytics",
             "organization": {"name": "team_alpha"},
             "created_at": "2026-04-10T00:00:00Z"
         }))
-        .expect("project item should deserialize");
+        .expect("database item should deserialize");
 
         assert_eq!(item.name, "analytics");
         assert_eq!(item.organization.expect("organization").name, "team_alpha");
     }
 
     #[test]
-    fn project_create_collection_path_uses_projects_endpoint() {
-        assert_eq!(project_create_collection_path(None), "/v1/projects");
+    fn database_create_collection_path_uses_databases_endpoint() {
+        assert_eq!(database_create_collection_path(None), "/v1/databases");
         assert_eq!(
-            project_create_collection_path(Some("team alpha")),
-            "/v1/projects?organization_name=team%20alpha"
+            database_create_collection_path(Some("team alpha")),
+            "/v1/databases?organization=team%20alpha"
         );
     }
 }

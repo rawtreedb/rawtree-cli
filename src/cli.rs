@@ -44,13 +44,13 @@ pub enum Command {
         /// Password (prompted interactively if omitted)
         #[arg(long, hide = true)]
         password: Option<String>,
-        /// Project name to set as default after authentication
+        /// Database name to set as default after authentication
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
     },
     /// Log in and save credentials
     #[command(
-        after_help = "API key mode:\n  --api-key saves an API key directly without browser/email flows.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"project\":\"<name>\",\"organization\":\"<name>\"}"
+        after_help = "API key mode:\n  --api-key saves an API key directly without browser/email flows.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\"}"
     )]
     Login {
         #[arg(long)]
@@ -64,16 +64,16 @@ pub enum Command {
         /// Max seconds to wait for browser login approval
         #[arg(long, default_value_t = 300)]
         timeout_seconds: u64,
-        /// Project name to set as default after authentication
+        /// Database name to set as default after authentication
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
     },
     /// Log out and remove saved local credentials
     Logout,
-    /// Manage projects
-    Project {
+    /// Manage databases
+    Database {
         #[command(subcommand)]
-        action: ProjectCommand,
+        action: DatabaseCommand,
     },
     /// Manage API keys
     #[command(name = "key")]
@@ -91,10 +91,10 @@ pub enum Command {
         #[command(subcommand)]
         action: TableCommand,
     },
-    /// View query logs for a project
+    /// View query logs for a database
     Logs {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
         /// Filter by query type: select or insert
         #[arg(long)]
         r#type: Option<String>,
@@ -123,10 +123,10 @@ pub enum Command {
         #[arg(long, conflicts_with_all = ["since", "until"])]
         end_time: Option<String>,
     },
-    /// Execute a SQL query against a project
+    /// Execute a SQL query against a database
     Query {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
         /// SQL query to execute (positional or --sql). Use "-" to read from stdin.
         #[arg(value_name = "SQL", conflicts_with = "sql")]
         sql_positional: Option<String>,
@@ -140,7 +140,7 @@ pub enum Command {
     /// Insert data into a table
     Insert {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
         #[arg(long)]
         table: String,
         /// Inline JSON data
@@ -164,9 +164,9 @@ pub enum Command {
     Status,
     /// Open Rawtree UI in your browser
     Open {
-        /// Project name (defaults to --project/RAWTREE_PROJECT/config default)
+        /// Database name (defaults to --database/RAWTREE_DATABASE/config default)
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
     },
     /// Generate shell completions
     Completions {
@@ -184,29 +184,22 @@ pub enum ShellType {
 }
 
 #[derive(Subcommand)]
-pub enum ProjectCommand {
-    /// List all projects
+pub enum DatabaseCommand {
+    /// List all databases
     List,
-    /// Create a new project
+    /// Create a new database
     Create {
-        /// Project name
+        /// Database name
         name: String,
     },
-    /// Set the default project
+    /// Set the default database
     Use {
-        /// Project name
+        /// Database name
         name: String,
     },
-    /// Rename a project
-    Rename {
-        /// Current project name
-        old: String,
-        /// New project name
-        new_name: String,
-    },
-    /// Delete a project and all its data
+    /// Delete a database and all its data
     Delete {
-        /// Project name
+        /// Database name
         name: String,
     },
 }
@@ -241,15 +234,15 @@ pub enum OrganizationCommand {
 
 #[derive(Subcommand)]
 pub enum KeyCommand {
-    /// List API keys for a project
+    /// List API keys for a database
     List {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
     },
     /// Create a new API key
     Create {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
         /// Name for the key
         #[arg(long)]
         name: String,
@@ -260,7 +253,7 @@ pub enum KeyCommand {
     /// Delete an API key
     Delete {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
         /// Key ID or full API key token to delete
         id_or_token: String,
     },
@@ -268,15 +261,15 @@ pub enum KeyCommand {
 
 #[derive(Subcommand)]
 pub enum TableCommand {
-    /// List tables in a project
+    /// List tables in a database
     List {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
     },
     /// Describe a table
     Describe {
         #[arg(long)]
-        project: Option<String>,
+        database: Option<String>,
         /// Table name
         table: String,
     },
@@ -318,9 +311,15 @@ mod tests {
 
     #[test]
     fn global_api_key_parses_before_subcommand() {
-        let cli = Cli::try_parse_from(["rtree", "--api-key", "rw_abc123", "project", "list"])
+        let cli = Cli::try_parse_from(["rtree", "--api-key", "rw_abc123", "database", "list"])
             .expect("global --api-key should parse before subcommand");
         assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
+    }
+
+    #[test]
+    fn project_command_is_rejected() {
+        let result = Cli::try_parse_from(["rtree", "project", "list"]);
+        assert!(result.is_err(), "project command should not be accepted");
     }
 
     #[test]
@@ -350,20 +349,22 @@ mod tests {
     }
 
     #[test]
-    fn login_with_project_without_email_is_allowed_for_browser_flow() {
-        let cli = Cli::try_parse_from(["rtree", "login", "--project", "analytics"])
-            .expect("login with --project should parse");
+    fn login_with_database_without_email_is_allowed_for_browser_flow() {
+        let cli = Cli::try_parse_from(["rtree", "login", "--database", "analytics"])
+            .expect("login with --database should parse");
         match cli.command {
-            Command::Login { email, project, .. } => {
+            Command::Login {
+                email, database, ..
+            } => {
                 assert!(email.is_none());
-                assert_eq!(project.as_deref(), Some("analytics"));
+                assert_eq!(database.as_deref(), Some("analytics"));
             }
             _ => panic!("expected login command"),
         }
     }
 
     #[test]
-    fn register_with_project_parses() {
+    fn register_with_database_parses() {
         let cli = Cli::try_parse_from([
             "rtree",
             "register",
@@ -371,14 +372,14 @@ mod tests {
             "user@example.com",
             "--password",
             "secret123",
-            "--project",
+            "--database",
             "analytics",
         ])
-        .expect("register with --project should parse");
+        .expect("register with --database should parse");
 
         match cli.command {
-            Command::Register { project, .. } => {
-                assert_eq!(project.as_deref(), Some("analytics"));
+            Command::Register { database, .. } => {
+                assert_eq!(database.as_deref(), Some("analytics"));
             }
             _ => panic!("expected register command"),
         }
@@ -389,7 +390,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "insert",
-            "--project",
+            "--database",
             "analytics",
             "--table",
             "events",
@@ -411,7 +412,7 @@ mod tests {
         let result = Cli::try_parse_from([
             "rtree",
             "insert",
-            "--project",
+            "--database",
             "analytics",
             "--table",
             "events",
@@ -430,7 +431,7 @@ mod tests {
             "--api-url",
             "https://api.rawtree.com",
             "insert",
-            "--project",
+            "--database",
             "analytics",
             "--table",
             "events",
@@ -455,7 +456,7 @@ mod tests {
             "--api-url",
             "https://api.rawtree.com",
             "query",
-            "--project",
+            "--database",
             "analytics",
             "--sql",
             "SELECT 1",
@@ -470,7 +471,7 @@ mod tests {
         let result = Cli::try_parse_from([
             "rtree",
             "query",
-            "--project",
+            "--database",
             "analytics",
             "--sql",
             "SELECT 1",
@@ -481,11 +482,24 @@ mod tests {
     }
 
     #[test]
-    fn query_named_query_flag_is_rejected() {
+    fn query_project_flag_is_rejected() {
         let result = Cli::try_parse_from([
             "rtree",
             "query",
             "--project",
+            "analytics",
+            "--sql",
+            "SELECT 1",
+        ]);
+        assert!(result.is_err(), "query should use --database");
+    }
+
+    #[test]
+    fn query_named_query_flag_is_rejected() {
+        let result = Cli::try_parse_from([
+            "rtree",
+            "query",
+            "--database",
             "analytics",
             "--query",
             "SELECT 1",
@@ -495,12 +509,12 @@ mod tests {
 
     #[test]
     fn key_command_is_singular() {
-        let cli = Cli::try_parse_from(["rtree", "key", "list", "--project", "analytics"]).unwrap();
+        let cli = Cli::try_parse_from(["rtree", "key", "list", "--database", "analytics"]).unwrap();
 
         match cli.command {
             Command::Key { action } => match action {
-                KeyCommand::List { project } => {
-                    assert_eq!(project.as_deref(), Some("analytics"));
+                KeyCommand::List { database } => {
+                    assert_eq!(database.as_deref(), Some("analytics"));
                 }
                 _ => panic!("expected key list command"),
             },
@@ -510,7 +524,7 @@ mod tests {
 
     #[test]
     fn keys_command_is_rejected() {
-        let result = Cli::try_parse_from(["rtree", "keys", "list", "--project", "analytics"]);
+        let result = Cli::try_parse_from(["rtree", "keys", "list", "--database", "analytics"]);
         assert!(result.is_err(), "keys should not be accepted as a command");
     }
 
@@ -520,7 +534,7 @@ mod tests {
             "rtree",
             "key",
             "create",
-            "--project",
+            "--database",
             "analytics",
             "--name",
             "ci",
@@ -546,7 +560,7 @@ mod tests {
             "rtree",
             "key",
             "create",
-            "--project",
+            "--database",
             "analytics",
             "--label",
             "ci",
@@ -561,7 +575,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "logs",
-            "--project",
+            "--database",
             "analytics",
             "--table",
             "events",

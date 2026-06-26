@@ -17,7 +17,7 @@ struct ApiKeyItem {
 
 #[derive(Deserialize)]
 struct ListApiKeysResponse {
-    project: Option<ApiKeyProjectRef>,
+    database: Option<ApiKeyDatabaseRef>,
     organization: Option<ApiKeyOrganizationRef>,
     keys: Vec<ApiKeyItem>,
 }
@@ -27,13 +27,13 @@ struct CreateApiKeyResponse {
     id: String,
     token: String,
     name: String,
-    project: Option<ApiKeyProjectRef>,
+    database: Option<ApiKeyDatabaseRef>,
     organization: Option<ApiKeyOrganizationRef>,
     permission: String,
 }
 
 #[derive(Deserialize)]
-struct ApiKeyProjectRef {
+struct ApiKeyDatabaseRef {
     name: String,
 }
 
@@ -49,15 +49,15 @@ struct DeleteApiKeyResponse {
 
 pub fn list(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = org::project_scoped_path(project, "/keys", organization);
+    let path = org::database_scoped_path(database, "/keys", organization);
     let resp: ListApiKeysResponse = client.get(&path)?;
     output::print_result(
         &json!({
-            "project": resp.project.as_ref().map(|p| json!({"name": p.name})),
+            "database": resp.database.as_ref().map(|p| json!({"name": p.name})),
             "organization": resp.organization.as_ref().map(|o| json!({"name": o.name})),
             "keys": resp.keys.iter().map(|k| json!({
                 "id": k.id,
@@ -86,21 +86,21 @@ pub fn list(
 
 pub fn create(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     name: &str,
     permission: &str,
     json_mode: bool,
 ) -> Result<()> {
     let body = json!({ "name": name, "permission": permission });
-    let path = org::project_scoped_path(project, "/keys", organization);
+    let path = org::database_scoped_path(database, "/keys", organization);
     let resp: CreateApiKeyResponse = client.post(&path, &body)?;
     output::print_result(
         &json!({
             "id": resp.id,
             "token": resp.token,
             "name": resp.name,
-            "project": resp.project.as_ref().map(|p| json!({"name": p.name})),
+            "database": resp.database.as_ref().map(|p| json!({"name": p.name})),
             "organization": resp.organization.as_ref().map(|o| json!({"name": o.name})),
             "permission": resp.permission,
         }),
@@ -118,13 +118,13 @@ pub fn create(
 
 pub fn delete(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     id_or_token: &str,
     json_mode: bool,
 ) -> Result<()> {
     let encoded_key = urlencoding::encode(id_or_token);
-    let path = org::project_scoped_path(project, &format!("/keys/{encoded_key}"), organization);
+    let path = org::database_scoped_path(database, &format!("/keys/{encoded_key}"), organization);
     let resp: DeleteApiKeyResponse = client.delete(&path)?;
     output::print_result(
         &json!({"deleted": resp.deleted, "id_or_token": id_or_token}),
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn list_response_accepts_new_key_fields() {
         let payload = r#"{
-            "project": {"name": "analytics"},
+            "database": {"name": "analytics"},
             "organization": {"name": "team_alpha"},
             "keys": [{
                 "id": "key-1",
@@ -158,7 +158,7 @@ mod tests {
 
         let resp: ListApiKeysResponse = serde_json::from_str(payload).expect("valid payload");
         assert_eq!(
-            resp.project.as_ref().map(|p| p.name.as_str()),
+            resp.database.as_ref().map(|p| p.name.as_str()),
             Some("analytics")
         );
         assert_eq!(
@@ -177,7 +177,7 @@ mod tests {
             "id": "key-1",
             "token": "rw_abcd",
             "name": "ci",
-            "project": {"name": "analytics"},
+            "database": {"name": "analytics"},
             "organization": {"name": "team_alpha"},
             "permission": "read_write"
         }"#;
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(resp.token, "rw_abcd");
         assert_eq!(resp.name, "ci");
         assert_eq!(
-            resp.project.as_ref().map(|p| p.name.as_str()),
+            resp.database.as_ref().map(|p| p.name.as_str()),
             Some("analytics")
         );
         assert_eq!(

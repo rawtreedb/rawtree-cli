@@ -242,7 +242,7 @@ fn format_log_line(entry: &LogEntry) -> String {
 
 fn fetch_logs(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     start_time: &str,
     end_time: &str,
@@ -255,14 +255,15 @@ fn fetch_logs(
     let query_string = build_query_string(
         start_time, end_time, log_type, tables, status, limit, offset,
     );
-    let path = org::project_scoped_path(project, &format!("/logs?{}", query_string), organization);
+    let path =
+        org::database_scoped_path(database, &format!("/logs?{}", query_string), organization);
     client.get(&path)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn logs(
     client: &ApiClient,
-    project: &str,
+    database: &str,
     organization: Option<&str>,
     log_type: Option<&str>,
     tables: &[String],
@@ -279,7 +280,7 @@ pub fn logs(
 
     let resp = fetch_logs(
         client,
-        project,
+        database,
         organization,
         &resolved_start,
         &resolved_end,
