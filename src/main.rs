@@ -18,22 +18,22 @@ use cli::{
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
 
+fn resolve_url_from_sources(
+    cli_url: Option<&str>,
+    env_api_url: Option<String>,
+    cfg_url: Option<String>,
+) -> String {
+    cli_url
+        .map(str::to_string)
+        .or(env_api_url)
+        .or(cfg_url)
+        .unwrap_or_else(|| DEFAULT_API_URL.to_string())
+}
+
 fn resolve_url(cli_url: Option<&str>) -> String {
-    if let Some(url) = cli_url {
-        return url.to_string();
-    }
-    if let Ok(url) = std::env::var("RAWTREE_API_URL") {
-        return url;
-    }
-    if let Ok(url) = std::env::var("RAWTREE_URL") {
-        return url;
-    }
-    if let Ok(cfg) = config::load() {
-        if let Some(url) = cfg.url {
-            return url;
-        }
-    }
-    DEFAULT_API_URL.to_string()
+    let env_api_url = std::env::var("RAWTREE_API_URL").ok();
+    let cfg_url = config::load().ok().and_then(|c| c.url);
+    resolve_url_from_sources(cli_url, env_api_url, cfg_url)
 }
 
 fn resolve_token_from_sources(
@@ -418,39 +418,12 @@ fn run(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::constants::DEFAULT_API_URL;
     use super::{
         resolve_database_from_sources, resolve_effective_org_with, resolve_org_from_sources,
-        resolve_token_from_sources, resolve_url, should_resolve_org_for_database_create,
-        token_looks_like_jwt,
+        resolve_token_from_sources, resolve_url_from_sources,
+        should_resolve_org_for_database_create, token_looks_like_jwt,
     };
-
-    struct EnvVarGuard {
-        name: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(name: &'static str, value: &str) -> Self {
-            let original = std::env::var(name).ok();
-            std::env::set_var(name, value);
-            Self { name, original }
-        }
-
-        fn remove(name: &'static str) -> Self {
-            let original = std::env::var(name).ok();
-            std::env::remove_var(name);
-            Self { name, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(value) => std::env::set_var(self.name, value),
-                None => std::env::remove_var(self.name),
-            }
-        }
-    }
 
     #[test]
     fn resolve_org_uses_cli_first() {
@@ -519,19 +492,36 @@ mod tests {
     }
 
     #[test]
-    fn resolve_url_supports_legacy_rawtree_url_fallback() {
-        let _api_url_guard = EnvVarGuard::remove("RAWTREE_API_URL");
-        let _legacy_url_guard = EnvVarGuard::set("RAWTREE_URL", "https://legacy.example.com");
-
-        assert_eq!(resolve_url(None), "https://legacy.example.com");
+    fn resolve_url_uses_cli_first() {
+        let resolved = resolve_url_from_sources(
+            Some("https://cli.example.com"),
+            Some("https://api.example.com".to_string()),
+            Some("https://cfg.example.com".to_string()),
+        );
+        assert_eq!(resolved, "https://cli.example.com");
     }
 
     #[test]
-    fn resolve_url_prefers_api_url_over_legacy_rawtree_url() {
-        let _api_url_guard = EnvVarGuard::set("RAWTREE_API_URL", "https://api.example.com");
-        let _legacy_url_guard = EnvVarGuard::set("RAWTREE_URL", "https://legacy.example.com");
+    fn resolve_url_uses_env_when_cli_missing() {
+        let resolved = resolve_url_from_sources(
+            None,
+            Some("https://api.example.com".to_string()),
+            Some("https://cfg.example.com".to_string()),
+        );
+        assert_eq!(resolved, "https://api.example.com");
+    }
 
-        assert_eq!(resolve_url(None), "https://api.example.com");
+    #[test]
+    fn resolve_url_uses_config_when_cli_and_env_missing() {
+        let resolved =
+            resolve_url_from_sources(None, None, Some("https://cfg.example.com".to_string()));
+        assert_eq!(resolved, "https://cfg.example.com");
+    }
+
+    #[test]
+    fn resolve_url_defaults_when_no_sources() {
+        let resolved = resolve_url_from_sources(None, None, None);
+        assert_eq!(resolved, DEFAULT_API_URL);
     }
 
     #[test]
