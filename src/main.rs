@@ -21,22 +21,19 @@ use constants::DEFAULT_API_URL;
 fn resolve_url_from_sources(
     cli_url: Option<&str>,
     env_api_url: Option<String>,
-    legacy_env_url: Option<String>,
     cfg_url: Option<String>,
 ) -> String {
     cli_url
         .map(str::to_string)
         .or(env_api_url)
-        .or(legacy_env_url)
         .or(cfg_url)
         .unwrap_or_else(|| DEFAULT_API_URL.to_string())
 }
 
 fn resolve_url(cli_url: Option<&str>) -> String {
     let env_api_url = std::env::var("RAWTREE_API_URL").ok();
-    let legacy_env_url = std::env::var("RAWTREE_URL").ok();
     let cfg_url = config::load().ok().and_then(|c| c.url);
-    resolve_url_from_sources(cli_url, env_api_url, legacy_env_url, cfg_url)
+    resolve_url_from_sources(cli_url, env_api_url, cfg_url)
 }
 
 fn resolve_token_from_sources(
@@ -499,48 +496,31 @@ mod tests {
         let resolved = resolve_url_from_sources(
             Some("https://cli.example.com"),
             Some("https://api.example.com".to_string()),
-            Some("https://legacy.example.com".to_string()),
             Some("https://cfg.example.com".to_string()),
         );
         assert_eq!(resolved, "https://cli.example.com");
     }
 
     #[test]
-    fn resolve_url_prefers_api_url_over_legacy_rawtree_url() {
+    fn resolve_url_uses_env_when_cli_missing() {
         let resolved = resolve_url_from_sources(
             None,
             Some("https://api.example.com".to_string()),
-            Some("https://legacy.example.com".to_string()),
-            None,
+            Some("https://cfg.example.com".to_string()),
         );
         assert_eq!(resolved, "https://api.example.com");
     }
 
     #[test]
-    fn resolve_url_supports_legacy_rawtree_url_fallback() {
-        let resolved = resolve_url_from_sources(
-            None,
-            None,
-            Some("https://legacy.example.com".to_string()),
-            None,
-        );
-        assert_eq!(resolved, "https://legacy.example.com");
-    }
-
-    #[test]
     fn resolve_url_uses_config_when_cli_and_env_missing() {
-        let resolved = resolve_url_from_sources(
-            None,
-            None,
-            None,
-            Some("https://cfg.example.com".to_string()),
-        );
+        let resolved =
+            resolve_url_from_sources(None, None, Some("https://cfg.example.com".to_string()));
         assert_eq!(resolved, "https://cfg.example.com");
     }
 
     #[test]
     fn resolve_url_defaults_when_no_sources() {
-        let resolved = resolve_url_from_sources(None, None, None, None);
+        let resolved = resolve_url_from_sources(None, None, None);
         assert_eq!(resolved, DEFAULT_API_URL);
     }
 
