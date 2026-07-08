@@ -39,20 +39,15 @@ fn resolve_url(cli_url: Option<&str>) -> String {
 fn resolve_token_from_sources(
     cli_api_key: Option<String>,
     env_api_key: Option<String>,
-    legacy_env_token: Option<String>,
     cfg_token: Option<String>,
 ) -> Option<String> {
-    cli_api_key
-        .or(env_api_key)
-        .or(legacy_env_token)
-        .or(cfg_token)
+    cli_api_key.or(env_api_key).or(cfg_token)
 }
 
 fn resolve_token(cli_api_key: Option<String>) -> Option<String> {
     let env_api_key = std::env::var("RAWTREE_API_KEY").ok();
-    let legacy_env_token = std::env::var("RAWTREE_TOKEN").ok();
     let cfg_token = config::load().ok().and_then(|c| c.token);
-    resolve_token_from_sources(cli_api_key, env_api_key, legacy_env_token, cfg_token)
+    resolve_token_from_sources(cli_api_key, env_api_key, cfg_token)
 }
 
 fn resolve_database_from_sources(
@@ -529,7 +524,6 @@ mod tests {
         let resolved = resolve_token_from_sources(
             Some("cli-key".to_string()),
             Some("env-key".to_string()),
-            Some("legacy-env-token".to_string()),
             Some("cfg-token".to_string()),
         );
         assert_eq!(resolved.as_deref(), Some("cli-key"));
@@ -540,26 +534,14 @@ mod tests {
         let resolved = resolve_token_from_sources(
             None,
             Some("env-key".to_string()),
-            Some("legacy-env-token".to_string()),
             Some("cfg-token".to_string()),
         );
         assert_eq!(resolved.as_deref(), Some("env-key"));
     }
 
     #[test]
-    fn resolve_token_uses_legacy_env_when_api_key_env_missing() {
-        let resolved = resolve_token_from_sources(
-            None,
-            None,
-            Some("legacy-env-token".to_string()),
-            Some("cfg-token".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("legacy-env-token"));
-    }
-
-    #[test]
     fn resolve_token_uses_config_when_cli_and_env_missing() {
-        let resolved = resolve_token_from_sources(None, None, None, Some("cfg-token".to_string()));
+        let resolved = resolve_token_from_sources(None, None, Some("cfg-token".to_string()));
         assert_eq!(resolved.as_deref(), Some("cfg-token"));
     }
 
