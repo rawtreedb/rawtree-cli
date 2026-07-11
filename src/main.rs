@@ -101,28 +101,6 @@ fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<
     resolve_effective_org_with(explicit_org, || org::first_organization_name(client))
 }
 
-pub(crate) fn token_looks_like_jwt(token: &str) -> bool {
-    let mut parts = token.split('.');
-    parts.next().is_some()
-        && parts.next().is_some()
-        && parts.next().is_some()
-        && parts.next().is_none()
-}
-
-fn should_resolve_org_for_database_create(token: Option<&str>) -> bool {
-    token.map(token_looks_like_jwt).unwrap_or(false)
-}
-
-fn resolve_effective_org_for_database_create(
-    client: &ApiClient,
-    cli_org: Option<String>,
-) -> Option<String> {
-    if !should_resolve_org_for_database_create(client.token.as_deref()) {
-        return None;
-    }
-    resolve_effective_org(client, cli_org)
-}
-
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
@@ -233,8 +211,7 @@ fn run(cli: Cli) -> Result<()> {
                 commands::database::list(&client, effective_org.as_deref(), json)
             }
             DatabaseCommand::Create { name } => {
-                let effective_org =
-                    resolve_effective_org_for_database_create(&client, cli_org.clone());
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
                 commands::database::create(&client, &name, effective_org.as_deref(), json)
             }
             DatabaseCommand::Use { name } => commands::database::use_database(&name, json),
@@ -417,7 +394,6 @@ mod tests {
     use super::{
         resolve_database_from_sources, resolve_effective_org_with, resolve_org_from_sources,
         resolve_token_from_sources, resolve_url_from_sources,
-        should_resolve_org_for_database_create, token_looks_like_jwt,
     };
 
     #[test]
@@ -470,20 +446,6 @@ mod tests {
     fn auto_default_org_can_fall_back_to_none() {
         let resolved = resolve_effective_org_with(None, || None);
         assert_eq!(resolved, None);
-    }
-
-    #[test]
-    fn token_looks_like_jwt_detects_jwt_shape() {
-        assert!(token_looks_like_jwt("a.b.c"));
-        assert!(!token_looks_like_jwt("rw_key"));
-        assert!(!token_looks_like_jwt("a.b"));
-    }
-
-    #[test]
-    fn database_create_org_resolution_requires_jwt_token() {
-        assert!(should_resolve_org_for_database_create(Some("a.b.c")));
-        assert!(!should_resolve_org_for_database_create(Some("rw_key")));
-        assert!(!should_resolve_org_for_database_create(None));
     }
 
     #[test]

@@ -23,11 +23,7 @@ fn resolve_dashboard_url(
 
 pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
     let cfg = config::load()?;
-    let authenticated = cfg
-        .token
-        .as_deref()
-        .map(crate::token_looks_like_jwt)
-        .unwrap_or(false);
+    let authenticated = cfg.token.is_some();
     let user = cfg.email.clone();
     let database = cfg.default_database.clone();
     let organization = cfg.default_organization.clone();
