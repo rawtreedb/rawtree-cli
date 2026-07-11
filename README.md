@@ -58,7 +58,7 @@ rtree open
 
 - Browser-based (default): `rtree login`
 - Email/password: `rtree login --email you@example.com --password '***'`
-- Direct API key save: `rtree login --api-key rw_123`
+- Direct API key save: `rtree login --api-key rt_123`
 - Select defaults during auth: `rtree login --org team-alpha --database analytics`
 
 When using `--api-key`, the CLI stores the API key directly and resolves organization/database defaults from that key.

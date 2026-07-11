@@ -149,7 +149,7 @@ mod tests {
             "organization": {"name": "team_alpha"},
             "keys": [{
                 "id": "key-1",
-                "token": "rw_***abcd",
+                "token": "rt_***abcd",
                 "name": "ci",
                 "permission": "read_write",
                 "created_at": "2026-01-01 10:00:00"
@@ -167,7 +167,7 @@ mod tests {
         );
         assert_eq!(resp.keys.len(), 1);
         assert_eq!(resp.keys[0].id, "key-1");
-        assert_eq!(resp.keys[0].token, "rw_***abcd");
+        assert_eq!(resp.keys[0].token, "rt_***abcd");
         assert_eq!(resp.keys[0].name, "ci");
     }
 
@@ -175,7 +175,7 @@ mod tests {
     fn create_response_accepts_new_key_fields() {
         let payload = r#"{
             "id": "key-1",
-            "token": "rw_abcd",
+            "token": "rt_abcd",
             "name": "ci",
             "database": {"name": "analytics"},
             "organization": {"name": "team_alpha"},
@@ -184,7 +184,7 @@ mod tests {
 
         let resp: CreateApiKeyResponse = serde_json::from_str(payload).expect("valid payload");
         assert_eq!(resp.id, "key-1");
-        assert_eq!(resp.token, "rw_abcd");
+        assert_eq!(resp.token, "rt_abcd");
         assert_eq!(resp.name, "ci");
         assert_eq!(
             resp.database.as_ref().map(|p| p.name.as_str()),
