@@ -304,16 +304,16 @@ mod tests {
 
     #[test]
     fn login_with_api_key_parses() {
-        let cli = Cli::try_parse_from(["rtree", "login", "--api-key", "rw_abc123"])
+        let cli = Cli::try_parse_from(["rtree", "login", "--api-key", "rt_abc123"])
             .expect("login with --api-key should parse");
-        assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
+        assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
     }
 
     #[test]
     fn global_api_key_parses_before_subcommand() {
-        let cli = Cli::try_parse_from(["rtree", "--api-key", "rw_abc123", "database", "list"])
+        let cli = Cli::try_parse_from(["rtree", "--api-key", "rt_abc123", "database", "list"])
             .expect("global --api-key should parse before subcommand");
-        assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
+        assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn login_with_token_flag_is_rejected() {
-        let result = Cli::try_parse_from(["rtree", "login", "--token", "rw_abc123"]);
+        let result = Cli::try_parse_from(["rtree", "login", "--token", "rt_abc123"]);
         assert!(result.is_err(), "--token should not be accepted");
     }
 
@@ -340,12 +340,12 @@ mod tests {
             "rtree",
             "login",
             "--api-key",
-            "rw_abc123",
+            "rt_abc123",
             "--email",
             "user@example.com",
         ])
         .expect("global --api-key is parsed before runtime login validation");
-        assert_eq!(cli.api_key.as_deref(), Some("rw_abc123"));
+        assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
     }
 
     #[test]

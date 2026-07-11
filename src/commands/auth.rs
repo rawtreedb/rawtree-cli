@@ -629,10 +629,10 @@ pub fn login_with_api_key(
         ));
     }
 
-    if !api_key.starts_with("rw_") {
+    if !api_key.starts_with("rt_") {
         return Err(output::coded_error(
             "invalid_api_key_format",
-            "Invalid API key format. Expected an API key starting with 'rw_'.",
+            "Invalid API key format. Expected an API key starting with 'rt_'.",
             1,
         ));
     }
@@ -1094,7 +1094,7 @@ mod tests {
     #[test]
     fn clear_auth_config_resets_auth_state_and_saved_url() {
         let mut cfg = Config {
-            token: Some("rw_temp".to_string()),
+            token: Some("rt_test".to_string()),
             email: Some("user@example.com".to_string()),
             url: Some("https://api.rawtree.com".to_string()),
             default_database: Some("analytics".to_string()),
