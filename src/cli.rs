@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub org: Option<String>,
 
+    /// Cluster name (overrides RAWTREE_CLUSTER env and config file)
+    #[arg(long, global = true)]
+    pub cluster: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -85,6 +89,11 @@ pub enum Command {
     Organization {
         #[command(subcommand)]
         action: OrganizationCommand,
+    },
+    /// Manage clusters
+    Cluster {
+        #[command(subcommand)]
+        action: ClusterCommand,
     },
     /// Inspect tables
     Table {
@@ -233,6 +242,30 @@ pub enum OrganizationCommand {
 }
 
 #[derive(Subcommand)]
+pub enum ClusterCommand {
+    /// List clusters in an organization
+    List,
+    /// Set the default cluster
+    Use {
+        /// Cluster name
+        name: String,
+    },
+    /// Create a cluster using the platform default size
+    Create {
+        /// Cluster name
+        name: String,
+    },
+    /// Delete a cluster and its databases and API keys
+    Delete {
+        /// Cluster name or ID
+        name_or_id: String,
+        /// Skip the interactive confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum KeyCommand {
     /// List API keys for a database
     List {
@@ -277,7 +310,7 @@ pub enum TableCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, KeyCommand};
+    use super::{Cli, ClusterCommand, Command, KeyCommand};
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
@@ -314,6 +347,31 @@ mod tests {
         let cli = Cli::try_parse_from(["rtree", "--api-key", "rt_abc123", "database", "list"])
             .expect("global --api-key should parse before subcommand");
         assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
+    }
+
+    #[test]
+    fn global_cluster_parses_with_cluster_command() {
+        let cli = Cli::try_parse_from(["rtree", "cluster", "list", "--cluster", "production"])
+            .expect("global --cluster should parse after the subcommand");
+        assert_eq!(cli.cluster.as_deref(), Some("production"));
+        assert!(matches!(
+            cli.command,
+            Command::Cluster {
+                action: ClusterCommand::List
+            }
+        ));
+    }
+
+    #[test]
+    fn cluster_delete_accepts_yes() {
+        let cli = Cli::try_parse_from(["rtree", "cluster", "delete", "production", "--yes"])
+            .expect("cluster delete should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Cluster {
+                action: ClusterCommand::Delete { yes: true, .. }
+            }
+        ));
     }
 
     #[test]

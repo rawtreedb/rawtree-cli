@@ -95,13 +95,18 @@ Resolution priority by setting:
 - API URL: `--api-url` -> `RAWTREE_API_URL` -> config file -> `https://api.rawtree.com`
 - Database: `--database` -> `RAWTREE_DATABASE` -> config file default database
 - Organization: `--org` -> `RAWTREE_ORG` -> config file default organization
+- Cluster: `--cluster` -> `RAWTREE_CLUSTER` -> config file default cluster
+
+When `--api-key` or `RAWTREE_API_KEY` overrides saved authentication, the saved
+cluster is not applied. Pass `--cluster` or `RAWTREE_CLUSTER` explicitly when
+the override key is scoped to a named cluster.
 
 ## Commands
 
 Top-level commands:
 
 - `register`, `login`, `logout`
-- `database`, `organization`, `key`, `table`
+- `database`, `organization`, `cluster`, `key`, `table`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -109,20 +114,42 @@ Global flags:
 
 - `--api-url <URL>`
 - `--org <ORG>`
+- `--cluster <CLUSTER>`
 - `--json`
 
 ## Common Workflows
 
-### Databases and organizations
+### Organizations, clusters, and databases
 
 ```sh
 rtree organization list
 rtree organization create team-alpha
 rtree organization use team-alpha
 
+rtree cluster list
+rtree cluster create production
+rtree cluster use production
+
 rtree database list
 rtree database create analytics
 rtree database use analytics
+```
+
+Cluster management requires a user login. `cluster create` uses the platform's
+default size. Deleting a cluster also deletes its databases and cluster-scoped
+API keys, so interactive deletion asks for confirmation and non-interactive or
+JSON usage requires `--yes`:
+
+```sh
+rtree cluster delete production --yes
+```
+
+Use `--cluster` or `RAWTREE_CLUSTER` for a one-command override without changing
+the saved cluster:
+
+```sh
+rtree database list --cluster production
+RAWTREE_CLUSTER=production rtree query --database analytics "SELECT 1"
 ```
 
 ### Querying
