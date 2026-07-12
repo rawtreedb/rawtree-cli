@@ -21,6 +21,8 @@ pub struct Config {
     pub default_database: Option<String>,
     #[serde(default)]
     pub default_organization: Option<String>,
+    #[serde(default, rename = "cluster")]
+    pub default_cluster: Option<String>,
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -115,5 +117,15 @@ mod tests {
 }"#;
         let cfg: Config = serde_json::from_str(new_cfg).expect("new config should parse");
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
+    }
+
+    #[test]
+    fn config_serializes_cluster_key() {
+        let cfg = Config {
+            default_cluster: Some("production".to_string()),
+            ..Config::default()
+        };
+        let json = serde_json::to_value(&cfg).expect("config should serialize");
+        assert_eq!(json["cluster"], "production");
     }
 }

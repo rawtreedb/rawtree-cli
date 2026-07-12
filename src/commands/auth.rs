@@ -88,6 +88,7 @@ fn apply_auth_config(
 ) {
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
+    cfg.default_cluster = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_database = selection.database.clone();
     if cfg.url.is_none() && base_url != DEFAULT_API_URL {
@@ -293,7 +294,7 @@ fn list_databases_for_organization(
     client: &ApiClient,
     organization_name: &str,
 ) -> Result<Vec<String>> {
-    let path = org::databases_collection_path(Some(organization_name));
+    let path = org::databases_collection_path(Some(organization_name), None);
     let resp: ListDatabasesResponse = client.get(&path)?;
     Ok(resp.databases.into_iter().map(|item| item.name).collect())
 }
@@ -457,10 +458,10 @@ fn resolve_api_key_auth_selection(
 
 fn api_key_context_paths(cli_org: Option<&str>, cli_database: Option<&str>) -> (String, String) {
     let keys_path = cli_database
-        .map(|database| org::database_scoped_path(database, "/keys", cli_org))
+        .map(|database| org::database_scoped_path(database, "/keys", cli_org, None))
         .unwrap_or_else(|| "/v1/keys".to_string());
     let tables_path = cli_database
-        .map(|database| org::database_scoped_path(database, "/tables", cli_org))
+        .map(|database| org::database_scoped_path(database, "/tables", cli_org, None))
         .unwrap_or_else(|| "/v1/tables".to_string());
     (keys_path, tables_path)
 }
@@ -648,6 +649,7 @@ pub fn login_with_api_key(
 
     cfg.token = Some(api_key.to_string());
     cfg.email = None;
+    cfg.default_cluster = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_database = selection.database.clone();
     if cfg.url.is_none() && client.base_url != DEFAULT_API_URL {

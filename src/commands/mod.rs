@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cluster;
 pub mod database;
 pub mod docs;
 pub mod insert;

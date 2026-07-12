@@ -12,16 +12,25 @@ pub fn resolve_ui_base_url() -> String {
 pub(crate) fn build_open_url(
     base_url: &str,
     organization: Option<&str>,
+    cluster: Option<&str>,
     database: Option<&str>,
 ) -> String {
     let trimmed_base = base_url.trim_end_matches('/');
-    match (organization, database) {
-        (Some(org), Some(database_name)) => format!(
-            "{}/{}/{}",
-            trimmed_base,
-            urlencoding::encode(org),
-            urlencoding::encode(database_name)
-        ),
+    match (organization, cluster) {
+        (Some(org), Some(cluster_name)) => {
+            let base = format!(
+                "{}/{}/{}",
+                trimmed_base,
+                urlencoding::encode(org),
+                urlencoding::encode(cluster_name)
+            );
+            match database {
+                Some(database_name) => {
+                    format!("{base}?database={}", urlencoding::encode(database_name))
+                }
+                None => base,
+            }
+        }
         _ => trimmed_base.to_string(),
     }
 }
@@ -37,10 +46,11 @@ pub fn open_url(target_url: &str, json_mode: bool) -> Result<()> {
 pub fn open(
     base_url: &str,
     organization: Option<&str>,
+    cluster: Option<&str>,
     database: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let target_url = build_open_url(base_url, organization, database);
+    let target_url = build_open_url(base_url, organization, cluster, database);
     open_url(&target_url, json_mode)
 }
 
@@ -50,19 +60,35 @@ mod tests {
 
     #[test]
     fn build_open_url_uses_base_url_when_database_context_missing() {
-        let url = build_open_url("https://rawtree.com/", Some("team_alpha"), None);
+        let url = build_open_url("https://rawtree.com/", Some("team_alpha"), None, None);
         assert_eq!(url, "https://rawtree.com");
     }
 
     #[test]
     fn build_open_url_appends_org_and_database_path() {
-        let url = build_open_url("https://rawtree.com", Some("team_alpha"), Some("analytics"));
-        assert_eq!(url, "https://rawtree.com/team_alpha/analytics");
+        let url = build_open_url(
+            "https://rawtree.com",
+            Some("team_alpha"),
+            Some("production"),
+            Some("analytics"),
+        );
+        assert_eq!(
+            url,
+            "https://rawtree.com/team_alpha/production?database=analytics"
+        );
     }
 
     #[test]
     fn build_open_url_encodes_path_segments() {
-        let url = build_open_url("https://rawtree.com", Some("team alpha"), Some("p/1"));
-        assert_eq!(url, "https://rawtree.com/team%20alpha/p%2F1");
+        let url = build_open_url(
+            "https://rawtree.com",
+            Some("team alpha"),
+            Some("cluster/1"),
+            Some("p/1"),
+        );
+        assert_eq!(
+            url,
+            "https://rawtree.com/team%20alpha/cluster%2F1?database=p%2F1"
+        );
     }
 }

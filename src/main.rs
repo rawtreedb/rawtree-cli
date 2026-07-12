@@ -13,7 +13,8 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
 use cli::{
-    Cli, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType, TableCommand,
+    Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType,
+    TableCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -70,6 +71,24 @@ fn resolve_database(cli_database: Option<String>) -> Result<String> {
             "No database specified. Use --database, RAWTREE_DATABASE env, or `rtree database use <name>`"
         )
     })
+}
+
+fn resolve_cluster_from_sources(
+    cli_cluster: Option<String>,
+    env_cluster: Option<String>,
+    cfg_cluster: Option<String>,
+    api_key_override: bool,
+) -> Option<String> {
+    cli_cluster
+        .or(env_cluster)
+        .or_else(|| (!api_key_override).then_some(cfg_cluster).flatten())
+}
+
+fn resolve_cluster(cli_cluster: Option<String>, cli_api_key: Option<&str>) -> Option<String> {
+    let env_cluster = std::env::var("RAWTREE_CLUSTER").ok();
+    let api_key_override = cli_api_key.is_some() || std::env::var("RAWTREE_API_KEY").is_ok();
+    let cfg_cluster = config::load().ok().and_then(|c| c.default_cluster);
+    resolve_cluster_from_sources(cli_cluster, env_cluster, cfg_cluster, api_key_override)
 }
 
 fn resolve_org_from_sources(
@@ -154,12 +173,14 @@ fn run(cli: Cli) -> Result<()> {
         api_url: cli_url,
         json,
         org: cli_org,
+        cluster: cli_cluster,
         command,
     } = cli;
 
     let url = resolve_url(cli_url.as_deref());
     let token = resolve_token(cli_api_key.clone());
     let client = ApiClient::new(url.clone(), token);
+    let effective_cluster = resolve_cluster(cli_cluster, cli_api_key.as_deref());
 
     match command {
         Command::Register {
@@ -208,16 +229,33 @@ fn run(cli: Cli) -> Result<()> {
         Command::Database { action } => match action {
             DatabaseCommand::List => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::database::list(&client, effective_org.as_deref(), json)
+                commands::database::list(
+                    &client,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    json,
+                )
             }
             DatabaseCommand::Create { name } => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::database::create(&client, &name, effective_org.as_deref(), json)
+                commands::database::create(
+                    &client,
+                    &name,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    json,
+                )
             }
             DatabaseCommand::Use { name } => commands::database::use_database(&name, json),
             DatabaseCommand::Delete { name } => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::database::delete(&client, &name, effective_org.as_deref(), json)
+                commands::database::delete(
+                    &client,
+                    &name,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    json,
+                )
             }
         },
         Command::Organization { action } => match action {
@@ -235,12 +273,39 @@ fn run(cli: Cli) -> Result<()> {
                 commands::organization::delete(&client, &name, json)
             }
         },
+        Command::Cluster { action } => {
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            match action {
+                ClusterCommand::List => {
+                    commands::cluster::list(&client, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Use { name } => {
+                    commands::cluster::use_cluster(&client, &name, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Create { name } => {
+                    commands::cluster::create(&client, &name, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Delete { name_or_id, yes } => commands::cluster::delete(
+                    &client,
+                    &name_or_id,
+                    effective_org.as_deref(),
+                    yes,
+                    json,
+                ),
+            }
+        }
         Command::Key { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
                 KeyCommand::List { database } => {
                     let database = resolve_database(database)?;
-                    commands::keys::list(&client, &database, effective_org.as_deref(), json)
+                    commands::keys::list(
+                        &client,
+                        &database,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        json,
+                    )
                 }
                 KeyCommand::Create {
                     database,
@@ -252,6 +317,7 @@ fn run(cli: Cli) -> Result<()> {
                         &client,
                         &database,
                         effective_org.as_deref(),
+                        effective_cluster.as_deref(),
                         &name,
                         &permission,
                         json,
@@ -266,6 +332,7 @@ fn run(cli: Cli) -> Result<()> {
                         &client,
                         &database,
                         effective_org.as_deref(),
+                        effective_cluster.as_deref(),
                         &id_or_token,
                         json,
                     )
@@ -277,7 +344,13 @@ fn run(cli: Cli) -> Result<()> {
             match action {
                 TableCommand::List { database } => {
                     let database = resolve_database(database)?;
-                    commands::table::list(&client, &database, effective_org.as_deref(), json)
+                    commands::table::list(
+                        &client,
+                        &database,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        json,
+                    )
                 }
                 TableCommand::Describe { database, table } => {
                     let database = resolve_database(database)?;
@@ -285,6 +358,7 @@ fn run(cli: Cli) -> Result<()> {
                         &client,
                         &database,
                         effective_org.as_deref(),
+                        effective_cluster.as_deref(),
                         &table,
                         json,
                     )
@@ -309,6 +383,7 @@ fn run(cli: Cli) -> Result<()> {
                 &client,
                 &database,
                 effective_org.as_deref(),
+                effective_cluster.as_deref(),
                 r#type.as_deref(),
                 &table,
                 status.as_deref(),
@@ -334,6 +409,7 @@ fn run(cli: Cli) -> Result<()> {
                 &client,
                 &database,
                 effective_org.as_deref(),
+                effective_cluster.as_deref(),
                 &sql,
                 limit,
                 json,
@@ -354,6 +430,7 @@ fn run(cli: Cli) -> Result<()> {
                 &client,
                 &database,
                 effective_org.as_deref(),
+                effective_cluster.as_deref(),
                 &table,
                 data.as_deref(),
                 file.as_deref(),
@@ -364,7 +441,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
-        Command::Status => commands::status::status(&url, json),
+        Command::Status => commands::status::status(&url, effective_cluster.as_deref(), json),
         Command::Open { database } => {
             let ui_base_url = commands::open::resolve_ui_base_url();
             let effective_org = resolve_effective_org(&client, cli_org);
@@ -372,6 +449,7 @@ fn run(cli: Cli) -> Result<()> {
             commands::open::open(
                 &ui_base_url,
                 effective_org.as_deref(),
+                effective_cluster.as_deref(),
                 database.as_deref(),
                 json,
             )
@@ -392,8 +470,8 @@ fn run(cli: Cli) -> Result<()> {
 mod tests {
     use super::constants::DEFAULT_API_URL;
     use super::{
-        resolve_database_from_sources, resolve_effective_org_with, resolve_org_from_sources,
-        resolve_token_from_sources, resolve_url_from_sources,
+        resolve_cluster_from_sources, resolve_database_from_sources, resolve_effective_org_with,
+        resolve_org_from_sources, resolve_token_from_sources, resolve_url_from_sources,
     };
 
     #[test]
@@ -531,5 +609,51 @@ mod tests {
     fn resolve_database_uses_config_when_cli_and_env_missing() {
         let resolved = resolve_database_from_sources(None, None, Some("cfg-database".to_string()));
         assert_eq!(resolved.as_deref(), Some("cfg-database"));
+    }
+
+    #[test]
+    fn resolve_cluster_uses_cli_then_env_then_config() {
+        assert_eq!(
+            resolve_cluster_from_sources(
+                Some("cli".to_string()),
+                Some("env".to_string()),
+                Some("config".to_string()),
+                false,
+            )
+            .as_deref(),
+            Some("cli")
+        );
+        assert_eq!(
+            resolve_cluster_from_sources(
+                None,
+                Some("env".to_string()),
+                Some("config".to_string()),
+                false,
+            )
+            .as_deref(),
+            Some("env")
+        );
+        assert_eq!(
+            resolve_cluster_from_sources(None, None, Some("config".to_string()), false).as_deref(),
+            Some("config")
+        );
+    }
+
+    #[test]
+    fn api_key_override_skips_saved_cluster() {
+        assert_eq!(
+            resolve_cluster_from_sources(None, None, Some("config".to_string()), true),
+            None
+        );
+        assert_eq!(
+            resolve_cluster_from_sources(
+                Some("explicit".to_string()),
+                None,
+                Some("config".to_string()),
+                true,
+            )
+            .as_deref(),
+            Some("explicit")
+        );
     }
 }

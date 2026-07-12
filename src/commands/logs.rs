@@ -244,6 +244,7 @@ fn fetch_logs(
     client: &ApiClient,
     database: &str,
     organization: Option<&str>,
+    cluster: Option<&str>,
     start_time: &str,
     end_time: &str,
     log_type: Option<&str>,
@@ -255,8 +256,12 @@ fn fetch_logs(
     let query_string = build_query_string(
         start_time, end_time, log_type, tables, status, limit, offset,
     );
-    let path =
-        org::database_scoped_path(database, &format!("/logs?{}", query_string), organization);
+    let path = org::database_scoped_path(
+        database,
+        &format!("/logs?{}", query_string),
+        organization,
+        cluster,
+    );
     client.get(&path)
 }
 
@@ -265,6 +270,7 @@ pub fn logs(
     client: &ApiClient,
     database: &str,
     organization: Option<&str>,
+    cluster: Option<&str>,
     log_type: Option<&str>,
     tables: &[String],
     status: Option<&str>,
@@ -282,6 +288,7 @@ pub fn logs(
         client,
         database,
         organization,
+        cluster,
         &resolved_start,
         &resolved_end,
         log_type,

@@ -85,6 +85,10 @@ pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
 
 pub fn use_organization(name: &str, json_mode: bool) -> Result<()> {
     let mut cfg = config::load()?;
+    if cfg.default_organization.as_deref() != Some(name) {
+        cfg.default_cluster = None;
+        cfg.default_database = None;
+    }
     cfg.default_organization = Some(name.to_string());
     config::save(&cfg)?;
 
@@ -125,6 +129,8 @@ pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
                 .map(|item| item.name);
             cfg.default_organization =
                 default_org_after_delete(cfg.default_organization.as_deref(), name, next);
+            cfg.default_cluster = None;
+            cfg.default_database = None;
             config::save(&cfg)?;
         }
     }
