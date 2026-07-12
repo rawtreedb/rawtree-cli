@@ -11,6 +11,7 @@ const RAWTREE_CLIENT_HEADER: &str = "x-rawtree-client";
 const RAWTREE_CLIENT_VALUE: &str = "cli";
 const RAWTREE_CLIENT_VERSION_HEADER: &str = "x-rawtree-client-version";
 const RAWTREE_CLIENT_VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
+const RAWTREE_USER_AGENT: &str = concat!("rawtree-cli/", env!("CARGO_PKG_VERSION"));
 
 pub struct ApiClient {
     pub base_url: String,
@@ -143,7 +144,8 @@ impl ApiClient {
 }
 
 fn with_client_header(req: RequestBuilder) -> RequestBuilder {
-    req.header(RAWTREE_CLIENT_HEADER, RAWTREE_CLIENT_VALUE)
+    req.header(reqwest::header::USER_AGENT, RAWTREE_USER_AGENT)
+        .header(RAWTREE_CLIENT_HEADER, RAWTREE_CLIENT_VALUE)
         .header(RAWTREE_CLIENT_VERSION_HEADER, RAWTREE_CLIENT_VERSION_VALUE)
 }
 
@@ -176,10 +178,22 @@ mod tests {
 
     #[test]
     fn marks_cli_requests_with_rawtree_client_header() {
-        let client = Client::new();
-        let request = with_client_header(client.get("https://api.rawtree.local/v1/databases"))
-            .build()
-            .expect("request should build");
+        let api_client = ApiClient::new("https://api.rawtree.local".to_string(), None);
+        let request = with_client_header(
+            api_client
+                .client
+                .get("https://api.rawtree.local/v1/databases"),
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            Some(RAWTREE_USER_AGENT)
+        );
 
         assert_eq!(
             request
