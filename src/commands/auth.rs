@@ -34,6 +34,10 @@ struct CliDeviceTokenResponse {
     token: String,
     user_id: String,
     email: String,
+    #[serde(default)]
+    selected_organization: Option<String>,
+    #[serde(default)]
+    selected_database: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +50,7 @@ struct ApiErrorResponse {
 enum CliDeviceTokenPoll {
     Pending,
     Approved(CliDeviceTokenResponse),
+    Declined,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -296,6 +301,33 @@ fn list_databases_for_organization(
     let path = org::databases_collection_path(Some(organization_name));
     let resp: ListDatabasesResponse = client.get(&path)?;
     Ok(resp.databases.into_iter().map(|item| item.name).collect())
+}
+
+/// Format the device user code the way the approval page displays it
+/// (grouped as XXXX-XXXX) so the visual comparison is glyph-for-glyph.
+fn format_cli_user_code(user_code: &str) -> String {
+    if user_code.len() == 8 && user_code.is_ascii() {
+        format!("{}-{}", &user_code[..4], &user_code[4..])
+    } else {
+        user_code.to_string()
+    }
+}
+
+/// Selection made in the browser during approval. Explicit `--org` /
+/// `--database` flags take precedence and fall back to the interactive flow.
+fn server_auth_selection(
+    cli_org: Option<&str>,
+    cli_database: Option<&str>,
+    selected_organization: Option<String>,
+    selected_database: Option<String>,
+) -> Option<AuthSelection> {
+    if cli_org.is_some() || cli_database.is_some() {
+        return None;
+    }
+    selected_organization.map(|organization| AuthSelection {
+        organization: Some(organization),
+        database: selected_database,
+    })
 }
 
 fn resolve_browser_auth_selection(
@@ -726,6 +758,9 @@ fn poll_cli_device_token(base_url: &str, device_code: &str) -> Result<CliDeviceT
         if parsed.error == "authorization_pending" {
             return Ok(CliDeviceTokenPoll::Pending);
         }
+        if parsed.error == "access_denied" {
+            return Ok(CliDeviceTokenPoll::Declined);
+        }
     }
 
     Err(format_api_error(status_code, &body))
@@ -744,7 +779,7 @@ pub fn login_with_browser(
     let poll_interval_seconds = start.interval.max(1);
 
     if !json_mode {
-        println!("CLI login code: {}", start.user_code);
+        println!("CLI login code: {}", format_cli_user_code(&start.user_code));
         if no_browser {
             println!(
                 "Open this URL to continue login: {}",
@@ -774,15 +809,30 @@ pub fn login_with_browser(
                     token,
                     user_id: _user_id,
                     email,
+                    selected_organization,
+                    selected_database,
                 } = resp;
                 let auth = AuthResponse { token, email };
-                let selection = update_and_save_browser_config(
-                    client,
-                    &auth,
+                let selection = match server_auth_selection(
                     organization.as_deref(),
                     database.as_deref(),
-                    json_mode,
-                )?;
+                    selected_organization,
+                    selected_database,
+                ) {
+                    Some(selection) => {
+                        let mut cfg = config::load()?;
+                        apply_auth_config(&mut cfg, &client.base_url, &auth, &selection);
+                        config::save(&cfg)?;
+                        selection
+                    }
+                    None => update_and_save_browser_config(
+                        client,
+                        &auth,
+                        organization.as_deref(),
+                        database.as_deref(),
+                        json_mode,
+                    )?,
+                };
                 let selected_organization = selection.organization.clone();
                 let selected_database = selection.database.clone();
                 output::print_result(
@@ -800,6 +850,9 @@ pub fn login_with_browser(
                     },
                 );
                 return Ok(());
+            }
+            CliDeviceTokenPoll::Declined => {
+                anyhow::bail!("Browser login was declined. Run `rtree login` to try again.");
             }
             CliDeviceTokenPoll::Pending => {
                 if Instant::now() >= deadline {
@@ -829,10 +882,10 @@ pub fn logout(json_mode: bool) -> Result<()> {
 mod tests {
     use super::{
         api_key_context_paths, apply_auth_config, auth_selection_from_database_context,
-        clear_auth_config, effective_timeout_seconds, parse_selection_number, prompt_for_selection,
-        resolve_selected_database, select_database, select_or_prompt_database,
-        select_or_prompt_organization, select_organization, AuthResponse, AuthSelection,
-        DatabaseContextResponse,
+        clear_auth_config, effective_timeout_seconds, format_cli_user_code, parse_selection_number,
+        prompt_for_selection, resolve_selected_database, select_database,
+        select_or_prompt_database, select_or_prompt_organization, select_organization,
+        server_auth_selection, AuthResponse, AuthSelection, DatabaseContextResponse,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -849,6 +902,54 @@ mod tests {
             name: name.to_string(),
             role: "owner".to_string(),
         }
+    }
+
+    #[test]
+    fn format_cli_user_code_groups_eight_char_codes() {
+        assert_eq!(format_cli_user_code("RCNR9J5K"), "RCNR-9J5K");
+        assert_eq!(format_cli_user_code("ABC"), "ABC");
+    }
+
+    #[test]
+    fn server_auth_selection_used_when_no_flags() {
+        let selection = server_auth_selection(
+            None,
+            None,
+            Some("team_alpha".to_string()),
+            Some("analytics".to_string()),
+        )
+        .expect("server selection should be used");
+        assert_eq!(selection.organization.as_deref(), Some("team_alpha"));
+        assert_eq!(selection.database.as_deref(), Some("analytics"));
+    }
+
+    #[test]
+    fn server_auth_selection_allows_missing_database() {
+        let selection = server_auth_selection(None, None, Some("team_alpha".to_string()), None)
+            .expect("server selection should be used");
+        assert_eq!(selection.organization.as_deref(), Some("team_alpha"));
+        assert_eq!(selection.database, None);
+    }
+
+    #[test]
+    fn server_auth_selection_ignored_when_flags_present() {
+        assert!(server_auth_selection(
+            Some("cli_org"),
+            None,
+            Some("team_alpha".to_string()),
+            Some("analytics".to_string()),
+        )
+        .is_none());
+        assert!(
+            server_auth_selection(None, Some("cli_db"), Some("team_alpha".to_string()), None,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn server_auth_selection_absent_when_server_returned_none() {
+        assert!(server_auth_selection(None, None, None, Some("analytics".to_string())).is_none());
+        assert!(server_auth_selection(None, None, None, None).is_none());
     }
 
     #[test]
