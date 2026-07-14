@@ -13,7 +13,8 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
 use cli::{
-    Cli, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType, TableCommand,
+    Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType,
+    TableCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -235,6 +236,14 @@ fn run(cli: Cli) -> Result<()> {
                 commands::organization::delete(&client, &name, json)
             }
         },
+        Command::Cluster { action } => {
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            match action {
+                ClusterCommand::List => {
+                    commands::cluster::list(&client, effective_org.as_deref(), json)
+                }
+            }
+        }
         Command::Key { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
