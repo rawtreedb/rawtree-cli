@@ -165,7 +165,7 @@ rtree table describe --database analytics events
 
 ```sh
 rtree cluster list
-rtree --json cluster list
+rtree cluster list --json
 ```
 
 ## Shell Completions

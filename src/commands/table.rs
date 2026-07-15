@@ -1,10 +1,9 @@
 use anyhow::Result;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
+use comfy_table::{Cell, CellAlignment};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::table_output::new_cli_table;
 use crate::client::ApiClient;
 use crate::org;
 use crate::output;
@@ -133,15 +132,6 @@ fn format_bytes(bytes: u64) -> String {
     }
 
     format!("{size:.1} {}", UNITS[unit_index])
-}
-
-fn new_cli_table() -> Table {
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_content_arrangement(ContentArrangement::Dynamic);
-    table
 }
 
 #[cfg(test)]

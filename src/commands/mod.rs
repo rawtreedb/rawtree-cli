@@ -11,3 +11,4 @@ pub mod ping;
 pub mod query;
 pub mod status;
 pub mod table;
+mod table_output;

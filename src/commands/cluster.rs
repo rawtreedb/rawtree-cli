@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
+use comfy_table::{Cell, CellAlignment};
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::table_output::new_cli_table;
 use crate::client::ApiClient;
 use crate::output;
 
@@ -142,15 +141,6 @@ fn compact_number(value: f64) -> String {
     } else {
         format!("{value:.1}")
     }
-}
-
-fn new_cli_table() -> Table {
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_content_arrangement(ContentArrangement::Dynamic);
-    table
 }
 
 #[cfg(test)]
