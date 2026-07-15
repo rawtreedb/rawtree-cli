@@ -98,6 +98,13 @@ fn filter_dedicated_clusters(value: &mut Value) -> Result<()> {
         .get_mut("clusters")
         .and_then(Value::as_array_mut)
         .context("invalid clusters response from server: missing clusters array")?;
+    for (index, cluster) in clusters.iter().enumerate() {
+        if cluster.get("shared").and_then(Value::as_bool).is_none() {
+            anyhow::bail!(
+                "invalid clusters response from server: cluster at index {index} has a missing or invalid boolean shared field"
+            );
+        }
+    }
     clusters.retain(|cluster| cluster.get("shared").and_then(Value::as_bool) == Some(false));
     Ok(())
 }
@@ -183,6 +190,27 @@ mod tests {
 
         assert_eq!(response["clusters"], json!([dedicated]));
         assert_eq!(response["future_top_level_field"], true);
+    }
+
+    #[test]
+    fn missing_or_invalid_shared_field_is_rejected() {
+        for shared_field in [None, Some(json!(null)), Some(json!("false"))] {
+            let mut cluster = json!({"id": "cluster-id"});
+            if let Some(shared) = shared_field {
+                cluster["shared"] = shared;
+            }
+            let mut response = json!({
+                "organization": {"name": "acme"},
+                "clusters": [cluster]
+            });
+
+            let error = filter_dedicated_clusters(&mut response)
+                .expect_err("missing or invalid shared field should fail");
+
+            assert!(error
+                .to_string()
+                .contains("missing or invalid boolean shared field"));
+        }
     }
 
     #[test]
