@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cluster;
 pub mod database;
 pub mod docs;
 pub mod insert;
@@ -10,3 +11,4 @@ pub mod ping;
 pub mod query;
 pub mod status;
 pub mod table;
+mod table_output;

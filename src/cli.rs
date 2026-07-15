@@ -86,6 +86,11 @@ pub enum Command {
         #[command(subcommand)]
         action: OrganizationCommand,
     },
+    /// Inspect dedicated clusters
+    Cluster {
+        #[command(subcommand)]
+        action: ClusterCommand,
+    },
     /// Inspect tables
     Table {
         #[command(subcommand)]
@@ -233,6 +238,12 @@ pub enum OrganizationCommand {
 }
 
 #[derive(Subcommand)]
+pub enum ClusterCommand {
+    /// List dedicated clusters
+    List,
+}
+
+#[derive(Subcommand)]
 pub enum KeyCommand {
     /// List API keys for a database
     List {
@@ -277,7 +288,7 @@ pub enum TableCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, KeyCommand};
+    use super::{Cli, ClusterCommand, Command, KeyCommand};
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
@@ -314,6 +325,18 @@ mod tests {
         let cli = Cli::try_parse_from(["rtree", "--api-key", "rt_abc123", "database", "list"])
             .expect("global --api-key should parse before subcommand");
         assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
+    }
+
+    #[test]
+    fn cluster_list_parses() {
+        let cli =
+            Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Cluster {
+                action: ClusterCommand::List
+            }
+        ));
     }
 
     #[test]

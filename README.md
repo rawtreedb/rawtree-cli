@@ -101,7 +101,7 @@ Resolution priority by setting:
 Top-level commands:
 
 - `register`, `login`, `logout`
-- `database`, `organization`, `key`, `table`
+- `database`, `organization`, `cluster`, `key`, `table`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -159,6 +159,13 @@ rtree key create --database analytics --name ci --permission read_write
 
 rtree table list --database analytics
 rtree table describe --database analytics events
+```
+
+### Clusters
+
+```sh
+rtree cluster list
+rtree cluster list --json
 ```
 
 ## Shell Completions
