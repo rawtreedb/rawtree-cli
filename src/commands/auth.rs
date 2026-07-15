@@ -65,6 +65,11 @@ struct ListDatabasesResponse {
 }
 
 #[derive(Deserialize)]
+struct CreateOrganizationResponse {
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct DatabaseContextResponse {
     database: Option<DatabaseContextRef>,
     organization: Option<OrganizationContextRef>,
@@ -249,6 +254,65 @@ fn select_or_prompt_organization(
     prompt_for_organization(organizations, json_mode)
 }
 
+fn resolve_new_organization_name(
+    cli_org: Option<&str>,
+    can_prompt: bool,
+) -> Result<Option<String>> {
+    if let Some(name) = cli_org {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("Organization name cannot be empty.");
+        }
+        return Ok(Some(name.to_string()));
+    }
+
+    if !can_prompt {
+        anyhow::bail!(
+            "No organizations found for this account. Pass --org <name> to create your first organization during login."
+        );
+    }
+
+    Ok(None)
+}
+
+fn prompt_for_new_organization_name() -> Result<String> {
+    println!("No organizations found. Create your first organization to continue.");
+    loop {
+        print!("Organization name: ");
+        io::stdout().flush()?;
+
+        let name = read_selection_input("organization name")?;
+        if !name.is_empty() {
+            return Ok(name);
+        }
+        eprintln!("Organization name cannot be empty.");
+    }
+}
+
+fn create_first_organization(
+    client: &ApiClient,
+    cli_org: Option<&str>,
+    json_mode: bool,
+) -> Result<org::OrganizationItem> {
+    let can_prompt = !json_mode && io::stdin().is_terminal();
+    let name = match resolve_new_organization_name(cli_org, can_prompt)? {
+        Some(name) => name,
+        None => prompt_for_new_organization_name()?,
+    };
+    let resp: CreateOrganizationResponse = client
+        .post("/v1/organizations", &json!({"organization_name": name}))
+        .context("failed to create the first organization")?;
+
+    if !json_mode {
+        println!("Organization '{}' created.", resp.name);
+    }
+
+    Ok(org::OrganizationItem {
+        name: resp.name,
+        role: "admin".to_string(),
+    })
+}
+
 fn select_or_prompt_database(
     database_names: &[String],
     selected_org: &str,
@@ -314,7 +378,15 @@ fn resolve_browser_auth_selection(
         Err(_err) => return Ok(AuthSelection::default()),
     };
 
-    let selected_org = select_or_prompt_organization(&organizations, cli_org, json_mode)?;
+    let selected_org = if organizations.is_empty() {
+        Some(create_first_organization(
+            &authed_client,
+            cli_org,
+            json_mode,
+        )?)
+    } else {
+        select_or_prompt_organization(&organizations, cli_org, json_mode)?
+    };
     let selected_org = match selected_org {
         Some(item) => item,
         None => {
@@ -353,6 +425,7 @@ fn resolve_auth_selection(
     cli_database: Option<&str>,
     env_org: Option<&str>,
     cfg_org: Option<&str>,
+    json_mode: bool,
 ) -> Result<AuthSelection> {
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
@@ -363,7 +436,15 @@ fn resolve_auth_selection(
         Err(_err) => return Ok(AuthSelection::default()),
     };
 
-    let selected_org = select_organization(&organizations, cli_org, env_org, cfg_org)?;
+    let selected_org = if organizations.is_empty() {
+        Some(create_first_organization(
+            &authed_client,
+            cli_org,
+            json_mode,
+        )?)
+    } else {
+        select_organization(&organizations, cli_org, env_org, cfg_org)?
+    };
     let selected_org = match selected_org {
         Some(item) => item,
         None => {
@@ -482,6 +563,7 @@ fn update_and_save_config(
     resp: &AuthResponse,
     cli_org: Option<&str>,
     cli_database: Option<&str>,
+    json_mode: bool,
 ) -> Result<AuthSelection> {
     let mut cfg = config::load()?;
     let env_org = std::env::var("RAWTREE_ORG").ok();
@@ -492,6 +574,7 @@ fn update_and_save_config(
         cli_database,
         env_org.as_deref(),
         cfg.default_organization.as_deref(),
+        json_mode,
     )?;
     apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
     config::save(&cfg)?;
@@ -521,15 +604,22 @@ fn update_and_save_browser_config(
 fn print_selected_context(selection: &AuthSelection) {
     match &selection.organization {
         Some(org_name) => println!("Selected organization: {}", org_name),
-        None => println!("Selected organization: none"),
+        None => {
+            println!("Selected organization: none");
+            eprintln!(
+                "Warning: No organization selected. Create one with `rtree organization create <name>`."
+            );
+        }
     }
     match &selection.database {
         Some(database_name) => println!("Selected database: {}", database_name),
         None => {
             println!("Selected database: none");
-            eprintln!(
-                "Warning: No default database selected. Create one with `rtree database create <name>`."
-            );
+            if selection.organization.is_some() {
+                eprintln!(
+                    "Warning: No default database selected. Create one with `rtree database create <name>`."
+                );
+            }
         }
     }
 }
@@ -551,8 +641,13 @@ pub fn register(
         &json!({"email": email, "password": password}),
     )?;
 
-    let selection =
-        update_and_save_config(client, &resp, organization.as_deref(), database.as_deref())?;
+    let selection = update_and_save_config(
+        client,
+        &resp,
+        organization.as_deref(),
+        database.as_deref(),
+        json_mode,
+    )?;
     let selected_organization = selection.organization.clone();
     let selected_database = selection.database.clone();
 
@@ -585,8 +680,13 @@ pub fn login(
         &json!({"email": email, "password": password}),
     )?;
 
-    let selection =
-        update_and_save_config(client, &resp, organization.as_deref(), database.as_deref())?;
+    let selection = update_and_save_config(
+        client,
+        &resp,
+        organization.as_deref(),
+        database.as_deref(),
+        json_mode,
+    )?;
     let selected_organization = selection.organization.clone();
     let selected_database = selection.database.clone();
 
@@ -830,9 +930,9 @@ mod tests {
     use super::{
         api_key_context_paths, apply_auth_config, auth_selection_from_database_context,
         clear_auth_config, effective_timeout_seconds, parse_selection_number, prompt_for_selection,
-        resolve_selected_database, select_database, select_or_prompt_database,
-        select_or_prompt_organization, select_organization, AuthResponse, AuthSelection,
-        DatabaseContextResponse,
+        resolve_new_organization_name, resolve_selected_database, select_database,
+        select_or_prompt_database, select_or_prompt_organization, select_organization,
+        AuthResponse, AuthSelection, DatabaseContextResponse,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -990,6 +1090,27 @@ mod tests {
             .expect("selection should succeed")
             .expect("organization should exist");
         assert_eq!(selected.name, "team_alpha");
+    }
+
+    #[test]
+    fn zero_org_auth_uses_explicit_name_without_a_prompt() {
+        let name = resolve_new_organization_name(Some("team_alpha"), false)
+            .expect("explicit organization should work non-interactively");
+        assert_eq!(name.as_deref(), Some("team_alpha"));
+    }
+
+    #[test]
+    fn zero_org_auth_requires_name_when_non_interactive() {
+        let err = resolve_new_organization_name(None, false)
+            .expect_err("non-interactive auth should require --org");
+        assert!(err.to_string().contains("Pass --org <name>"));
+    }
+
+    #[test]
+    fn zero_org_auth_prompts_when_interactive() {
+        let name = resolve_new_organization_name(None, true)
+            .expect("interactive auth should continue to the prompt");
+        assert_eq!(name, None);
     }
 
     #[test]
