@@ -242,6 +242,18 @@ fn run(cli: Cli) -> Result<()> {
                 ClusterCommand::List => {
                     commands::cluster::list(&client, effective_org.as_deref(), json)
                 }
+                ClusterCommand::Status { name_or_id } => {
+                    commands::cluster::status(&client, &name_or_id, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Stop { name_or_id } => {
+                    commands::cluster::stop(&client, &name_or_id, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Resume { name_or_id } => {
+                    commands::cluster::resume(&client, &name_or_id, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Delete { name_or_id } => {
+                    commands::cluster::delete(&client, &name_or_id, effective_org.as_deref(), json)
+                }
             }
         }
         Command::Key { action } => {

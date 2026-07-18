@@ -241,6 +241,26 @@ pub enum OrganizationCommand {
 pub enum ClusterCommand {
     /// List dedicated clusters
     List,
+    /// Show the current state of a dedicated cluster
+    Status {
+        /// Cluster name or ID
+        name_or_id: String,
+    },
+    /// Request that a dedicated cluster stop
+    Stop {
+        /// Cluster name or ID
+        name_or_id: String,
+    },
+    /// Request that a stopped dedicated cluster resume
+    Resume {
+        /// Cluster name or ID
+        name_or_id: String,
+    },
+    /// Request deletion of a dedicated cluster and its data
+    Delete {
+        /// Cluster name or ID
+        name_or_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -336,6 +356,45 @@ mod tests {
             Command::Cluster {
                 action: ClusterCommand::List
             }
+        ));
+    }
+
+    #[test]
+    fn cluster_lifecycle_commands_parse() {
+        let status = Cli::try_parse_from(["rtree", "cluster", "status", "production"])
+            .expect("cluster status should parse");
+        assert!(matches!(
+            status.command,
+            Command::Cluster {
+                action: ClusterCommand::Status { name_or_id }
+            } if name_or_id == "production"
+        ));
+
+        let stop = Cli::try_parse_from(["rtree", "cluster", "stop", "production"])
+            .expect("cluster stop should parse");
+        assert!(matches!(
+            stop.command,
+            Command::Cluster {
+                action: ClusterCommand::Stop { name_or_id }
+            } if name_or_id == "production"
+        ));
+
+        let resume = Cli::try_parse_from(["rtree", "cluster", "resume", "production"])
+            .expect("cluster resume should parse");
+        assert!(matches!(
+            resume.command,
+            Command::Cluster {
+                action: ClusterCommand::Resume { name_or_id }
+            } if name_or_id == "production"
+        ));
+
+        let delete = Cli::try_parse_from(["rtree", "cluster", "delete", "production"])
+            .expect("cluster delete should parse");
+        assert!(matches!(
+            delete.command,
+            Command::Cluster {
+                action: ClusterCommand::Delete { name_or_id }
+            } if name_or_id == "production"
         ));
     }
 
