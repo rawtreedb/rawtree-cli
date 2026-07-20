@@ -37,6 +37,7 @@ cargo build --release
 ```sh
 # Authenticate (browser flow by default)
 rtree login
+# If this is your first login, the CLI prompts you to create an organization.
 
 # Create and select a database
 rtree database create analytics
@@ -60,6 +61,10 @@ rtree open
 - Email/password: `rtree login --email you@example.com --password '***'`
 - Direct API key save: `rtree login --api-key rt_123`
 - Select defaults during auth: `rtree login --org team-alpha --database analytics`
+
+When an account has no organizations, interactive login prompts for an organization
+name and creates it. For non-interactive or `--json` login, pass `--org <name>` to
+create the first organization.
 
 When using `--api-key`, the CLI stores the API key directly and resolves organization/database defaults from that key.
 With `--json`, API key login returns:
