@@ -166,7 +166,16 @@ rtree table describe --database analytics events
 ```sh
 rtree cluster list
 rtree cluster list --json
+rtree cluster status production
+rtree cluster stop production
+rtree cluster resume production
+rtree cluster delete production
 ```
+
+Cluster lifecycle changes are asynchronous. The `stop`, `resume`, and `delete`
+commands return as soon as the API accepts the request; they do not wait for
+the infrastructure operation to finish. After stopping or resuming a cluster,
+run `rtree cluster status <name-or-id>` to follow its current state.
 
 ## Shell Completions
 

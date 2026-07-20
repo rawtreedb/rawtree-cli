@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use comfy_table::{Cell, CellAlignment};
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
 use crate::client::ApiClient;
@@ -19,33 +19,62 @@ struct OrganizationRef {
     name: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct ClusterItem {
     id: String,
     name: String,
+    shared: bool,
     created_at: String,
     status: ClusterStatus,
     resources: Option<ClusterResources>,
+    can_pause: bool,
+    can_resume: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct ClusterStatus {
     phase: String,
+    ready: bool,
+    message: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct ClusterResources {
+    shards: u32,
     replicas: u32,
     cpu_cores_per_replica: Option<f64>,
     memory_bytes_per_replica: Option<u64>,
 }
 
+#[derive(Clone, Copy)]
+enum LifecycleAction {
+    Stop,
+    Resume,
+}
+
+impl LifecycleAction {
+    fn path_segment(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Resume => "resume",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stop => "Stop",
+            Self::Resume => "Resume",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteClusterResponse {
+    deleted: bool,
+}
+
 pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
-    let path = clusters_collection_path(organization);
-    let mut value: Value = client.get(&path)?;
-    filter_dedicated_clusters(&mut value)?;
-    let resp: ListClustersResponse =
-        serde_json::from_value(value.clone()).context("invalid clusters response from server")?;
+    let (value, resp) = load_dedicated_clusters(client, organization)?;
 
     output::print_result(&value, json_mode, |_| {
         if resp.clusters.is_empty() {
@@ -86,11 +115,160 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
     Ok(())
 }
 
+pub fn status(
+    client: &ApiClient,
+    name_or_id: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client, organization)?;
+    let cluster = resolve_cluster(&resp.clusters, name_or_id)?;
+
+    output::print_result(cluster, json_mode, |cluster| {
+        println!("Cluster: {}", cluster.name);
+        println!("ID: {}", cluster.id);
+        println!("Status: {}", format_phase(&cluster.status.phase));
+        println!("Ready: {}", if cluster.status.ready { "yes" } else { "no" });
+        if let Some(message) = cluster.status.message.as_deref() {
+            println!("Message: {message}");
+        }
+    });
+    Ok(())
+}
+
+pub fn stop(
+    client: &ApiClient,
+    name_or_id: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    request_lifecycle(
+        client,
+        name_or_id,
+        organization,
+        LifecycleAction::Stop,
+        json_mode,
+    )
+}
+
+pub fn resume(
+    client: &ApiClient,
+    name_or_id: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    request_lifecycle(
+        client,
+        name_or_id,
+        organization,
+        LifecycleAction::Resume,
+        json_mode,
+    )
+}
+
+pub fn delete(
+    client: &ApiClient,
+    name_or_id: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client, organization)?;
+    let cluster = resolve_cluster(&resp.clusters, name_or_id)?.clone();
+    let path = cluster_path(&cluster.id, None, organization);
+    let result: DeleteClusterResponse = client.delete(&path)?;
+    let value = delete_output(&cluster, result.deleted);
+
+    output::print_result(&value, json_mode, |_| {
+        if result.deleted {
+            println!("Delete request accepted for cluster '{}'.", cluster.name);
+            println!(
+                "The cluster is removed from status listings while infrastructure cleanup continues asynchronously."
+            );
+        }
+    });
+    Ok(())
+}
+
+fn delete_output(cluster: &ClusterItem, deleted: bool) -> Value {
+    json!({
+        "deleted": deleted,
+        "id": cluster.id,
+        "name": cluster.name,
+    })
+}
+
+fn load_dedicated_clusters(
+    client: &ApiClient,
+    organization: Option<&str>,
+) -> Result<(Value, ListClustersResponse)> {
+    let path = clusters_collection_path(organization);
+    let mut value: Value = client.get(&path)?;
+    filter_dedicated_clusters(&mut value)?;
+    let resp =
+        serde_json::from_value(value.clone()).context("invalid clusters response from server")?;
+    Ok((value, resp))
+}
+
+fn resolve_cluster<'a>(clusters: &'a [ClusterItem], name_or_id: &str) -> Result<&'a ClusterItem> {
+    clusters
+        .iter()
+        .find(|cluster| cluster.name == name_or_id || cluster.id == name_or_id)
+        .ok_or_else(|| {
+            output::coded_error(
+                "cluster_not_found",
+                format!("Dedicated cluster '{name_or_id}' not found."),
+                4,
+            )
+        })
+}
+
+fn request_lifecycle(
+    client: &ApiClient,
+    name_or_id: &str,
+    organization: Option<&str>,
+    action: LifecycleAction,
+    json_mode: bool,
+) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client, organization)?;
+    let cluster = resolve_cluster(&resp.clusters, name_or_id)?;
+    let path = cluster_path(&cluster.id, Some(action.path_segment()), organization);
+    let value: Value = client.post_empty(&path)?;
+    let updated: ClusterItem =
+        serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
+
+    output::print_result(&value, json_mode, |_| {
+        println!(
+            "{} request accepted for cluster '{}' (status: {}).",
+            action.label(),
+            updated.name,
+            format_phase(&updated.status.phase),
+        );
+        println!(
+            "Run `rtree cluster status {}` to check progress.",
+            updated.name
+        );
+    });
+    Ok(())
+}
+
 fn clusters_collection_path(organization: Option<&str>) -> String {
     match organization {
         Some(name) => format!("/v1/clusters?organization={}", urlencoding::encode(name)),
         None => "/v1/clusters".to_string(),
     }
+}
+
+fn cluster_path(cluster_id: &str, action: Option<&str>, organization: Option<&str>) -> String {
+    let mut path = format!("/v1/clusters/{}", urlencoding::encode(cluster_id));
+    if let Some(action) = action {
+        path.push('/');
+        path.push_str(action);
+    }
+    if let Some(name) = organization {
+        path.push_str("?organization=");
+        path.push_str(&urlencoding::encode(name));
+    }
+    path
 }
 
 fn filter_dedicated_clusters(value: &mut Value) -> Result<()> {
@@ -155,8 +333,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        clusters_collection_path, filter_dedicated_clusters, format_created_at, format_phase,
-        format_size_per_replica, ClusterResources,
+        cluster_path, clusters_collection_path, delete_output, filter_dedicated_clusters,
+        format_created_at, format_phase, format_size_per_replica, resolve_cluster, ClusterItem,
+        ClusterResources, ClusterStatus,
     };
 
     #[test]
@@ -166,6 +345,110 @@ mod tests {
             "/v1/clusters?organization=team%20alpha"
         );
         assert_eq!(clusters_collection_path(None), "/v1/clusters");
+    }
+
+    #[test]
+    fn lifecycle_paths_encode_cluster_and_organization() {
+        assert_eq!(
+            cluster_path("cluster/id", Some("stop"), Some("team alpha")),
+            "/v1/clusters/cluster%2Fid/stop?organization=team%20alpha"
+        );
+        assert_eq!(
+            cluster_path("cluster-id", Some("resume"), None),
+            "/v1/clusters/cluster-id/resume"
+        );
+        assert_eq!(
+            cluster_path("cluster-id", None, Some("team alpha")),
+            "/v1/clusters/cluster-id?organization=team%20alpha"
+        );
+    }
+
+    fn cluster() -> ClusterItem {
+        ClusterItem {
+            id: "11111111-1111-1111-1111-111111111111".to_string(),
+            name: "production".to_string(),
+            shared: false,
+            created_at: "2026-07-14 20:38:33.004347+00".to_string(),
+            status: ClusterStatus {
+                phase: "ready".to_string(),
+                ready: true,
+                message: None,
+            },
+            resources: None,
+            can_pause: true,
+            can_resume: false,
+        }
+    }
+
+    #[test]
+    fn resolves_dedicated_cluster_by_name_or_id() {
+        let clusters = vec![cluster()];
+        assert_eq!(
+            resolve_cluster(&clusters, "production")
+                .expect("cluster by name")
+                .id,
+            "11111111-1111-1111-1111-111111111111"
+        );
+        assert_eq!(
+            resolve_cluster(&clusters, "11111111-1111-1111-1111-111111111111")
+                .expect("cluster by id")
+                .name,
+            "production"
+        );
+        let error = match resolve_cluster(&clusters, "missing") {
+            Ok(_) => panic!("missing cluster should fail"),
+            Err(error) => error,
+        };
+        let cli_error = error
+            .downcast_ref::<crate::output::CliError>()
+            .expect("coded CLI error");
+        assert_eq!(cli_error.code(), "cluster_not_found");
+        assert_eq!(cli_error.exit_code(), 4);
+    }
+
+    #[test]
+    fn delete_json_output_identifies_the_cluster() {
+        assert_eq!(
+            delete_output(&cluster(), true),
+            json!({
+                "deleted": true,
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "production"
+            })
+        );
+    }
+
+    #[test]
+    fn lifecycle_response_fields_deserialize_for_status_output() {
+        let cluster: ClusterItem = serde_json::from_value(json!({
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "production",
+            "shared": false,
+            "created_at": "2026-07-14 20:38:33.004347+00",
+            "status": {
+                "phase": "pausing",
+                "ready": false,
+                "message": "Waiting for active queries to finish."
+            },
+            "resources": {
+                "shards": 1,
+                "replicas": 3,
+                "cpu_cores_per_replica": 2.0,
+                "memory_bytes_per_replica": 8589934592_u64
+            },
+            "can_pause": false,
+            "can_resume": false
+        }))
+        .expect("valid cluster lifecycle response");
+
+        assert_eq!(cluster.status.phase, "pausing");
+        assert!(!cluster.status.ready);
+        assert_eq!(
+            cluster.status.message.as_deref(),
+            Some("Waiting for active queries to finish.")
+        );
+        assert!(!cluster.can_pause);
+        assert!(!cluster.can_resume);
     }
 
     #[test]
@@ -228,6 +511,7 @@ mod tests {
     #[test]
     fn resources_are_formatted_per_replica() {
         let resources = ClusterResources {
+            shards: 1,
             replicas: 3,
             cpu_cores_per_replica: Some(2.0),
             memory_bytes_per_replica: Some(8 * 1024 * 1024 * 1024),

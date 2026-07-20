@@ -38,6 +38,17 @@ impl ApiClient {
         handle_response(resp)
     }
 
+    /// POST without a request body.
+    pub fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = with_client_header(self.client.post(&url));
+        if let Some(ref token) = self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().context("failed to connect to server")?;
+        handle_response(resp)
+    }
+
     /// POST without a body and return a streaming response.
     pub fn post_empty_stream(&self, path: &str) -> Result<Response> {
         let url = format!("{}{}", self.base_url, path);
