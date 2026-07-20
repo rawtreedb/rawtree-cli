@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use comfy_table::{Cell, CellAlignment};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
 use crate::client::ApiClient;
@@ -68,7 +68,7 @@ impl LifecycleAction {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct DeleteClusterResponse {
     deleted: bool,
 }
@@ -176,8 +176,9 @@ pub fn delete(
     let cluster = resolve_cluster(&resp.clusters, name_or_id)?.clone();
     let path = cluster_path(&cluster.id, None, organization);
     let result: DeleteClusterResponse = client.delete(&path)?;
+    let value = delete_output(&cluster, result.deleted);
 
-    output::print_result(&result, json_mode, |result| {
+    output::print_result(&value, json_mode, |_| {
         if result.deleted {
             println!("Delete request accepted for cluster '{}'.", cluster.name);
             println!(
@@ -186,6 +187,14 @@ pub fn delete(
         }
     });
     Ok(())
+}
+
+fn delete_output(cluster: &ClusterItem, deleted: bool) -> Value {
+    json!({
+        "deleted": deleted,
+        "id": cluster.id,
+        "name": cluster.name,
+    })
 }
 
 fn load_dedicated_clusters(
@@ -324,9 +333,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        cluster_path, clusters_collection_path, filter_dedicated_clusters, format_created_at,
-        format_phase, format_size_per_replica, resolve_cluster, ClusterItem, ClusterResources,
-        ClusterStatus,
+        cluster_path, clusters_collection_path, delete_output, filter_dedicated_clusters,
+        format_created_at, format_phase, format_size_per_replica, resolve_cluster, ClusterItem,
+        ClusterResources, ClusterStatus,
     };
 
     #[test]
@@ -395,6 +404,18 @@ mod tests {
             .expect("coded CLI error");
         assert_eq!(cli_error.code(), "cluster_not_found");
         assert_eq!(cli_error.exit_code(), 4);
+    }
+
+    #[test]
+    fn delete_json_output_identifies_the_cluster() {
+        assert_eq!(
+            delete_output(&cluster(), true),
+            json!({
+                "deleted": true,
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "production"
+            })
+        );
     }
 
     #[test]
