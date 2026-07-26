@@ -56,10 +56,13 @@ rtree open
 
 ### Login modes
 
-- Browser-based (default): `rtree login`
-- Email/password: `rtree login --email you@example.com --password '***'`
+- Interactive login selection: `rtree login`
 - Direct API key save: `rtree login --api-key rt_123`
 - Select defaults during auth: `rtree login --org team-alpha --database analytics`
+
+Interactive login offers browser-based Rawtree authentication or securely prompts
+for an existing API key. Non-interactive and `--json` login continue to use
+browser-based authentication unless `--api-key` is provided.
 
 When using `--api-key`, the CLI stores the API key directly and resolves organization/database defaults from that key.
 With `--json`, API key login returns:

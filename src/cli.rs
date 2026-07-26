@@ -50,10 +50,10 @@ pub enum Command {
     },
     /// Log in and save credentials
     #[command(
-        after_help = "API key mode:\n  --api-key saves an API key directly without browser/email flows.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\"}"
+        after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\"}"
     )]
     Login {
-        #[arg(long)]
+        #[arg(long, hide = true)]
         email: Option<String>,
         /// Password (prompted interactively if omitted)
         #[arg(long, requires = "email", hide = true)]
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn login_without_api_key_is_allowed_for_browser_flow() {
+    fn login_without_api_key_is_allowed_for_interactive_flow() {
         let cli = Cli::try_parse_from(["rtree", "login"]).expect("login should parse");
         assert!(cli.api_key.is_none());
     }
@@ -318,6 +318,19 @@ mod tests {
         let cli = Cli::try_parse_from(["rtree", "login", "--api-key", "rt_abc123"])
             .expect("login with --api-key should parse");
         assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
+    }
+
+    #[test]
+    fn login_help_hides_internal_email_and_password_flags() {
+        let err = match Cli::try_parse_from(["rtree", "login", "--help"]) {
+            Ok(_) => panic!("--help should return display output"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+        let help = err.to_string();
+        assert!(!help.contains("--email"));
+        assert!(!help.contains("--password"));
+        assert!(!help.to_ascii_lowercase().contains("email"));
     }
 
     #[test]
@@ -372,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn login_with_database_without_email_is_allowed_for_browser_flow() {
+    fn login_with_database_without_email_is_allowed_for_interactive_flow() {
         let cli = Cli::try_parse_from(["rtree", "login", "--database", "analytics"])
             .expect("login with --database should parse");
         match cli.command {
