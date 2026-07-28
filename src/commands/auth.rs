@@ -13,6 +13,48 @@ use crate::constants::DEFAULT_API_URL;
 use crate::org;
 use crate::output;
 
+const LOGIN_METHOD_LABELS: [&str; 2] = ["Log in with Rawtree", "Enter API key"];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginMethod {
+    Rawtree,
+    ManualApiKey,
+}
+
+fn parse_login_method(input: &str) -> Option<LoginMethod> {
+    match input.trim() {
+        "1" => Some(LoginMethod::Rawtree),
+        "2" => Some(LoginMethod::ManualApiKey),
+        input if input.eq_ignore_ascii_case(LOGIN_METHOD_LABELS[0]) => Some(LoginMethod::Rawtree),
+        input if input.eq_ignore_ascii_case(LOGIN_METHOD_LABELS[1]) => {
+            Some(LoginMethod::ManualApiKey)
+        }
+        _ => None,
+    }
+}
+
+pub fn prompt_for_login_method() -> Result<LoginMethod> {
+    println!("Choose how to log in:");
+    for (index, label) in LOGIN_METHOD_LABELS.iter().enumerate() {
+        println!("  {}. {}", index + 1, label);
+    }
+
+    loop {
+        print!("Login method: ");
+        io::stdout().flush()?;
+
+        let input = read_selection_input("login method")?;
+        if let Some(method) = parse_login_method(&input) {
+            return Ok(method);
+        }
+        eprintln!("Enter 1 or 2.");
+    }
+}
+
+pub fn prompt_for_api_key() -> Result<String> {
+    rpassword::prompt_password("API key: ").context("failed to read API key")
+}
+
 #[derive(Deserialize)]
 struct AuthResponse {
     token: String,
@@ -829,10 +871,10 @@ pub fn logout(json_mode: bool) -> Result<()> {
 mod tests {
     use super::{
         api_key_context_paths, apply_auth_config, auth_selection_from_database_context,
-        clear_auth_config, effective_timeout_seconds, parse_selection_number, prompt_for_selection,
-        resolve_selected_database, select_database, select_or_prompt_database,
-        select_or_prompt_organization, select_organization, AuthResponse, AuthSelection,
-        DatabaseContextResponse,
+        clear_auth_config, effective_timeout_seconds, parse_login_method, parse_selection_number,
+        prompt_for_selection, resolve_selected_database, select_database,
+        select_or_prompt_database, select_or_prompt_organization, select_organization,
+        AuthResponse, AuthSelection, DatabaseContextResponse, LoginMethod, LOGIN_METHOD_LABELS,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -1011,6 +1053,25 @@ mod tests {
         assert_eq!(parse_selection_number("0", 2), None);
         assert_eq!(parse_selection_number("3", 2), None);
         assert_eq!(parse_selection_number("analytics", 2), None);
+    }
+
+    #[test]
+    fn login_method_uses_expected_labels_and_accepts_numbers_or_labels() {
+        let expected = [
+            ("Log in with Rawtree", LoginMethod::Rawtree),
+            ("Enter API key", LoginMethod::ManualApiKey),
+        ];
+
+        assert_eq!(LOGIN_METHOD_LABELS, expected.map(|(label, _method)| label));
+        for (index, (label, method)) in expected.iter().enumerate() {
+            assert_eq!(parse_login_method(&(index + 1).to_string()), Some(*method));
+            assert_eq!(parse_login_method(label), Some(*method));
+        }
+        assert_eq!(
+            parse_login_method("enter api key"),
+            Some(LoginMethod::ManualApiKey)
+        );
+        assert_eq!(parse_login_method("3"), None);
     }
 
     #[test]

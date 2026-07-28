@@ -149,6 +149,15 @@ fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
     }
 }
 
+fn should_prompt_for_login_method(
+    email: Option<&str>,
+    json_mode: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> bool {
+    email.is_none() && !json_mode && stdin_is_terminal && stdout_is_terminal
+}
+
 fn run(cli: Cli) -> Result<()> {
     let Cli {
         api_key: cli_api_key,
@@ -191,6 +200,32 @@ fn run(cli: Cli) -> Result<()> {
                     database,
                     json,
                 )
+            } else if should_prompt_for_login_method(
+                email.as_deref(),
+                json,
+                io::stdin().is_terminal(),
+                io::stdout().is_terminal(),
+            ) {
+                match commands::auth::prompt_for_login_method()? {
+                    commands::auth::LoginMethod::Rawtree => commands::auth::login_with_browser(
+                        &client,
+                        no_browser,
+                        timeout_seconds,
+                        cli_org.clone(),
+                        database,
+                        json,
+                    ),
+                    commands::auth::LoginMethod::ManualApiKey => {
+                        let api_key = commands::auth::prompt_for_api_key()?;
+                        commands::auth::login_with_api_key(
+                            &client,
+                            &api_key,
+                            cli_org.clone(),
+                            database,
+                            json,
+                        )
+                    }
+                }
             } else if let Some(email) = email {
                 let password = prompt_password_if_missing(password)?;
                 commands::auth::login(&client, &email, &password, cli_org.clone(), database, json)
@@ -414,7 +449,7 @@ mod tests {
     use super::constants::DEFAULT_API_URL;
     use super::{
         resolve_database_from_sources, resolve_effective_org_with, resolve_org_from_sources,
-        resolve_token_from_sources, resolve_url_from_sources,
+        resolve_token_from_sources, resolve_url_from_sources, should_prompt_for_login_method,
     };
 
     #[test]
@@ -526,6 +561,28 @@ mod tests {
     fn resolve_token_uses_config_when_cli_and_env_missing() {
         let resolved = resolve_token_from_sources(None, None, Some("cfg-token".to_string()));
         assert_eq!(resolved.as_deref(), Some("cfg-token"));
+    }
+
+    #[test]
+    fn plain_terminal_login_prompts_for_login_method() {
+        assert!(should_prompt_for_login_method(None, false, true, true));
+    }
+
+    #[test]
+    fn explicit_or_non_interactive_login_skips_login_method_prompt() {
+        assert!(!should_prompt_for_login_method(
+            Some("user@example.com"),
+            false,
+            true,
+            true
+        ));
+        assert!(!should_prompt_for_login_method(None, true, true, true));
+        assert!(!should_prompt_for_login_method(None, false, false, true));
+    }
+
+    #[test]
+    fn redirected_stdout_skips_login_method_prompt() {
+        assert!(!should_prompt_for_login_method(None, false, true, false));
     }
 
     #[test]
