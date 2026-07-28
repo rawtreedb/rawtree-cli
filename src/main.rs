@@ -153,8 +153,9 @@ fn should_prompt_for_login_method(
     email: Option<&str>,
     json_mode: bool,
     stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
 ) -> bool {
-    email.is_none() && !json_mode && stdin_is_terminal
+    email.is_none() && !json_mode && stdin_is_terminal && stdout_is_terminal
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -203,6 +204,7 @@ fn run(cli: Cli) -> Result<()> {
                 email.as_deref(),
                 json,
                 io::stdin().is_terminal(),
+                io::stdout().is_terminal(),
             ) {
                 match commands::auth::prompt_for_login_method()? {
                     commands::auth::LoginMethod::Rawtree => commands::auth::login_with_browser(
@@ -551,7 +553,7 @@ mod tests {
 
     #[test]
     fn plain_terminal_login_prompts_for_login_method() {
-        assert!(should_prompt_for_login_method(None, false, true));
+        assert!(should_prompt_for_login_method(None, false, true, true));
     }
 
     #[test]
@@ -559,10 +561,16 @@ mod tests {
         assert!(!should_prompt_for_login_method(
             Some("user@example.com"),
             false,
+            true,
             true
         ));
-        assert!(!should_prompt_for_login_method(None, true, true));
-        assert!(!should_prompt_for_login_method(None, false, false));
+        assert!(!should_prompt_for_login_method(None, true, true, true));
+        assert!(!should_prompt_for_login_method(None, false, false, true));
+    }
+
+    #[test]
+    fn redirected_stdout_skips_login_method_prompt() {
+        assert!(!should_prompt_for_login_method(None, false, true, false));
     }
 
     #[test]
