@@ -4,7 +4,6 @@ pub mod database;
 pub mod docs;
 pub mod insert;
 pub mod keys;
-pub mod logs;
 pub mod open;
 pub mod organization;
 pub mod ping;
