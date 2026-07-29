@@ -163,14 +163,6 @@ fn run(cli: Cli) -> Result<()> {
     let client = ApiClient::new(url.clone(), token);
 
     match command {
-        Command::Register {
-            email,
-            password,
-            database,
-        } => {
-            let password = prompt_password_if_missing(password)?;
-            commands::auth::register(&client, &email, &password, cli_org.clone(), database, json)
-        }
         Command::Login {
             email,
             password,
