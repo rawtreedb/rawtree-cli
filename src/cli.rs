@@ -37,17 +37,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Register a new account
-    Register {
-        #[arg(long)]
-        email: String,
-        /// Password (prompted interactively if omitted)
-        #[arg(long, hide = true)]
-        password: Option<String>,
-        /// Database name to set as default after authentication
-        #[arg(long)]
-        database: Option<String>,
-    },
     /// Log in and save credentials
     #[command(
         after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\"}"
@@ -459,25 +448,16 @@ mod tests {
     }
 
     #[test]
-    fn register_with_database_parses() {
-        let cli = Cli::try_parse_from([
+    fn register_command_is_rejected() {
+        let result = Cli::try_parse_from([
             "rtree",
             "register",
             "--email",
             "user@example.com",
             "--password",
             "secret123",
-            "--database",
-            "analytics",
-        ])
-        .expect("register with --database should parse");
-
-        match cli.command {
-            Command::Register { database, .. } => {
-                assert_eq!(database.as_deref(), Some("analytics"));
-            }
-            _ => panic!("expected register command"),
-        }
+        ]);
+        assert!(result.is_err(), "register command should not be accepted");
     }
 
     #[test]

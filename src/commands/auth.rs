@@ -580,40 +580,6 @@ fn clear_auth_config(cfg: &mut config::Config) {
     *cfg = config::Config::default();
 }
 
-pub fn register(
-    client: &ApiClient,
-    email: &str,
-    password: &str,
-    organization: Option<String>,
-    database: Option<String>,
-    json_mode: bool,
-) -> Result<()> {
-    let resp: AuthResponse = client.post(
-        "/v1/auth/register",
-        &json!({"email": email, "password": password}),
-    )?;
-
-    let selection =
-        update_and_save_config(client, &resp, organization.as_deref(), database.as_deref())?;
-    let selected_organization = selection.organization.clone();
-    let selected_database = selection.database.clone();
-
-    output::print_result(
-        &json!({
-            "email": resp.email,
-            "status": "registered",
-            "selected_organization": selected_organization,
-            "selected_database": selected_database,
-        }),
-        json_mode,
-        |_| {
-            println!("Registered and logged in as {}.", resp.email);
-            print_selected_context(&selection);
-        },
-    );
-    Ok(())
-}
-
 pub fn login(
     client: &ApiClient,
     email: &str,

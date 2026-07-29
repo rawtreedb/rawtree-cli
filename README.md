@@ -103,7 +103,7 @@ Resolution priority by setting:
 
 Top-level commands:
 
-- `register`, `login`, `logout`
+- `login`, `logout`
 - `database`, `organization`, `cluster`, `key`, `table`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
