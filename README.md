@@ -162,6 +162,10 @@ rtree insert --table events --file ./events.jsonl
 rtree insert --table events --url https://example.com/events.jsonl
 ```
 
+URL imports wait for completion and print the inserted row count and query ID.
+With `--json`, the result is
+`{"inserted":1000}` (or `{"inserted":null}` when the count is unavailable).
+
 ### Keys and tables
 
 ```sh
