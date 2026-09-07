@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
-use crate::cli::{ClusterSizeArg, S3StorageArgs, S3StorageMetadata};
+use crate::cli::{
+    ClusterSizeArg, DatabaseS3AccessArgs, DatabaseS3AccessMetadata, S3StorageArgs,
+    S3StorageMetadata,
+};
 use crate::client::ApiClient;
 use crate::config;
 use crate::output;
@@ -43,6 +46,8 @@ struct ClusterItem {
     can_resume: bool,
     #[serde(default, alias = "custom_s3")]
     s3_storage: Option<S3StorageMetadata>,
+    #[serde(default)]
+    database_s3_access: Option<DatabaseS3AccessMetadata>,
     idle_timeout_minutes: u64,
 }
 
@@ -119,6 +124,8 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let s3_storage = options.s3_storage.to_json()?;
+    let database_s3_access = options.database_s3_access.to_json()?;
+    validate_matching_s3_external_ids(&options.s3_storage, &options.database_s3_access)?;
     let (_, sizes) = load_cluster_sizes(client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
@@ -137,6 +144,7 @@ pub fn create(
         max_size,
         options.idle_timeout_minutes,
         s3_storage,
+        database_s3_access,
     );
 
     let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
@@ -165,6 +173,7 @@ pub struct ClusterCreateOptions<'a> {
     pub max_size: Option<ClusterSizeArg>,
     pub idle_timeout_minutes: Option<u64>,
     pub s3_storage: S3StorageArgs,
+    pub database_s3_access: DatabaseS3AccessArgs,
 }
 
 pub fn update(
@@ -241,6 +250,7 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
             "size / replica",
             "idle timeout",
             "storage",
+            "database S3",
             "created",
             "id",
         ]);
@@ -257,6 +267,9 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                 Cell::new(format_size_per_replica(cluster.resources.as_ref())),
                 Cell::new(format_idle_timeout(cluster.idle_timeout_minutes)),
                 Cell::new(format_storage(cluster.s3_storage.as_ref())),
+                Cell::new(format_database_s3_access(
+                    cluster.database_s3_access.as_ref(),
+                )),
                 Cell::new(format_created_at(&cluster.created_at)),
                 Cell::new(&cluster.id),
             ]);
@@ -329,6 +342,19 @@ pub fn status(
             format_idle_timeout(cluster.idle_timeout_minutes)
         );
         println!("Storage: {}", format_storage(cluster.s3_storage.as_ref()));
+        if let Some(database_s3_access) = cluster.database_s3_access.as_ref() {
+            println!("Database S3 access: configured");
+            println!(
+                "Database S3 external ID: {}",
+                database_s3_access.external_id
+            );
+            println!(
+                "Database bucket tag: {}",
+                database_s3_access.database_bucket_tag
+            );
+        } else {
+            println!("Database S3 access: not configured");
+        }
         if let Some(message) = cluster.status.message.as_deref() {
             println!("Message: {message}");
         }
@@ -471,6 +497,7 @@ fn create_request_body(
     max_size: ClusterSizeArg,
     idle_timeout_minutes: Option<u64>,
     s3_storage: Option<Value>,
+    database_s3_access: Option<Value>,
 ) -> Value {
     let mut body = json!({
         "name": name,
@@ -487,7 +514,27 @@ fn create_request_body(
     if let Some(s3_storage) = s3_storage {
         body["s3_storage"] = s3_storage;
     }
+    if let Some(database_s3_access) = database_s3_access {
+        body["database_s3_access"] = database_s3_access;
+    }
     body
+}
+
+fn validate_matching_s3_external_ids(
+    s3_storage: &S3StorageArgs,
+    database_s3_access: &DatabaseS3AccessArgs,
+) -> Result<()> {
+    if let (Some(storage_external_id), Some(database_external_id)) = (
+        s3_storage.s3_external_id.as_deref(),
+        database_s3_access.database_s3_external_id.as_deref(),
+    ) {
+        if storage_external_id.trim() != database_external_id.trim() {
+            anyhow::bail!(
+                "S3 External IDs do not match. Use the same value for --s3-external-id and --database-s3-external-id."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn resolve_cluster<'a>(clusters: &'a [ClusterItem], name_or_id: &str) -> Result<&'a ClusterItem> {
@@ -572,6 +619,12 @@ fn format_storage(storage: Option<&S3StorageMetadata>) -> &'static str {
     }
 }
 
+fn format_database_s3_access(access: Option<&DatabaseS3AccessMetadata>) -> String {
+    access
+        .map(|access| format!("configured ({})", access.database_bucket_tag))
+        .unwrap_or_else(|| "not configured".to_string())
+}
+
 fn format_created_at(created_at: &str) -> String {
     DateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S%.f%#z")
         .map(|timestamp| {
@@ -615,12 +668,13 @@ mod tests {
 
     use super::{
         cluster_path, cluster_size_json, clusters_collection_path, create_request_body,
-        default_cluster_after_delete, delete_output, format_created_at, format_idle_timeout,
-        format_phase, format_size_per_replica, format_storage, renamed_default_cluster,
-        resolve_cluster, resolve_cluster_size, ClusterItem, ClusterResources, ClusterSizeItem,
+        default_cluster_after_delete, delete_output, format_created_at, format_database_s3_access,
+        format_idle_timeout, format_phase, format_size_per_replica, format_storage,
+        renamed_default_cluster, resolve_cluster, resolve_cluster_size,
+        validate_matching_s3_external_ids, ClusterItem, ClusterResources, ClusterSizeItem,
         ClusterStatus,
     };
-    use crate::cli::{ClusterSizeArg, S3StorageArgs};
+    use crate::cli::{ClusterSizeArg, DatabaseS3AccessArgs, S3StorageArgs};
 
     #[test]
     fn collection_path_encodes_organization() {
@@ -714,6 +768,7 @@ mod tests {
                 },
                 Some(30),
                 None,
+                None,
             ),
             json!({
                 "name": "production",
@@ -742,6 +797,7 @@ mod tests {
             can_pause: true,
             can_resume: false,
             s3_storage: None,
+            database_s3_access: None,
             idle_timeout_minutes: 15,
         }
     }
@@ -882,6 +938,37 @@ mod tests {
     }
 
     #[test]
+    fn cluster_database_s3_access_response_deserializes_metadata() {
+        let cluster: ClusterItem = serde_json::from_value(json!({
+            "id": "cluster-id",
+            "name": "production",
+            "created_at": "2026-07-14 20:38:33.004347+00",
+            "status": {"phase": "ready", "ready": true, "message": null},
+            "resources": null,
+            "can_pause": true,
+            "can_resume": false,
+            "s3_storage": null,
+            "database_s3_access": {
+                "external_id": "rawtree-database-access",
+                "database_bucket_tag": "rawtree-customer-database"
+            },
+            "idle_timeout_minutes": 15
+        }))
+        .expect("cluster database S3 access metadata should deserialize");
+
+        let access = cluster
+            .database_s3_access
+            .expect("database S3 access metadata");
+        assert_eq!(access.external_id, "rawtree-database-access");
+        assert_eq!(access.database_bucket_tag, "rawtree-customer-database");
+        assert_eq!(
+            format_database_s3_access(Some(&access)),
+            "configured (rawtree-customer-database)"
+        );
+        assert_eq!(format_database_s3_access(None), "not configured");
+    }
+
+    #[test]
     fn cluster_create_body_uses_s3_storage() {
         let storage = S3StorageArgs {
             s3_data_bucket: Some("customer-data".to_string()),
@@ -904,6 +991,7 @@ mod tests {
             },
             None,
             storage.to_json().expect("valid storage"),
+            None,
         );
 
         assert_eq!(
@@ -915,6 +1003,89 @@ mod tests {
                 "external_id": "rawtree-example"
             })
         );
+    }
+
+    #[test]
+    fn cluster_create_body_supports_database_s3_access_without_cluster_storage() {
+        let body = create_request_body(
+            "production",
+            1,
+            ClusterSizeArg {
+                cpu_cores: 2,
+                memory_gib: 8,
+            },
+            ClusterSizeArg {
+                cpu_cores: 2,
+                memory_gib: 8,
+            },
+            None,
+            None,
+            Some(json!({
+                "external_id": "rawtree-database-access",
+                "database_bucket_tag": "rawtree-customer-database"
+            })),
+        );
+
+        assert!(body.get("s3_storage").is_none());
+        assert_eq!(
+            body["database_s3_access"],
+            json!({
+                "external_id": "rawtree-database-access",
+                "database_bucket_tag": "rawtree-customer-database"
+            })
+        );
+    }
+
+    #[test]
+    fn cluster_create_body_supports_matching_storage_and_database_access() {
+        let storage = S3StorageArgs {
+            s3_data_bucket: Some("customer-data".to_string()),
+            s3_backups_bucket: Some("customer-backups".to_string()),
+            s3_role_arn: Some("arn:aws:iam::123456789012:role/RawTreeS3Access".to_string()),
+            s3_external_id: Some("rawtree-example".to_string()),
+            ..S3StorageArgs::default()
+        };
+        let access = DatabaseS3AccessArgs {
+            database_s3_external_id: Some("rawtree-example".to_string()),
+            database_bucket_tag: Some("rawtree-customer-database".to_string()),
+        };
+
+        validate_matching_s3_external_ids(&storage, &access)
+            .expect("matching external IDs should be accepted");
+        let body = create_request_body(
+            "production",
+            1,
+            ClusterSizeArg {
+                cpu_cores: 2,
+                memory_gib: 8,
+            },
+            ClusterSizeArg {
+                cpu_cores: 2,
+                memory_gib: 8,
+            },
+            None,
+            storage.to_json().expect("valid storage"),
+            access.to_json().expect("valid database access"),
+        );
+
+        assert!(body["s3_storage"].is_object());
+        assert!(body["database_s3_access"].is_object());
+    }
+
+    #[test]
+    fn cluster_create_rejects_mismatched_storage_and_database_external_ids() {
+        let storage = S3StorageArgs {
+            s3_external_id: Some("rawtree-cluster".to_string()),
+            ..S3StorageArgs::default()
+        };
+        let access = DatabaseS3AccessArgs {
+            database_s3_external_id: Some("rawtree-database".to_string()),
+            ..DatabaseS3AccessArgs::default()
+        };
+
+        let error = validate_matching_s3_external_ids(&storage, &access)
+            .expect_err("mismatched external IDs should be rejected");
+        assert!(error.to_string().contains("S3 External IDs do not match"));
     }
 
     #[test]

@@ -342,6 +342,7 @@ fn run(cli: Cli) -> Result<()> {
                     max_size,
                     idle_timeout_minutes,
                     s3_storage,
+                    database_s3_access,
                 } => commands::cluster::create(
                     &client,
                     commands::cluster::ClusterCreateOptions {
@@ -352,6 +353,7 @@ fn run(cli: Cli) -> Result<()> {
                         max_size,
                         idle_timeout_minutes,
                         s3_storage,
+                        database_s3_access,
                     },
                     json,
                 ),

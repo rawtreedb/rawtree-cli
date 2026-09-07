@@ -76,6 +76,16 @@ pub(crate) struct S3StorageArgs {
     pub(crate) s3_external_id: Option<String>,
 }
 
+#[derive(Args, Clone, Debug, Default)]
+pub(crate) struct DatabaseS3AccessArgs {
+    /// External ID configured in the customer IAM role trust policy for database buckets
+    #[arg(long, value_name = "ID")]
+    pub(crate) database_s3_external_id: Option<String>,
+    /// Immutable tag required on customer-owned database buckets and IAM roles
+    #[arg(long, value_name = "TAG")]
+    pub(crate) database_bucket_tag: Option<String>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct S3StorageMetadata {
     pub(crate) data: S3StorageDestination,
@@ -86,6 +96,12 @@ pub(crate) struct S3StorageMetadata {
 pub(crate) struct S3StorageDestination {
     pub(crate) bucket: String,
     pub(crate) path: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct DatabaseS3AccessMetadata {
+    pub(crate) external_id: String,
+    pub(crate) database_bucket_tag: String,
 }
 
 impl S3StorageArgs {
@@ -122,6 +138,74 @@ impl S3StorageArgs {
             "external_id": external_id,
         })))
     }
+}
+
+impl DatabaseS3AccessArgs {
+    pub(crate) fn to_json(&self) -> Result<Option<Value>> {
+        let configured =
+            self.database_s3_external_id.is_some() || self.database_bucket_tag.is_some();
+        if !configured {
+            return Ok(None);
+        }
+
+        let external_id = self
+            .database_s3_external_id
+            .as_deref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Database S3 access is incomplete. Provide --database-s3-external-id and --database-bucket-tag. Missing --database-s3-external-id."
+                )
+            })?;
+        let database_bucket_tag = self.database_bucket_tag.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Database S3 access is incomplete. Provide --database-s3-external-id and --database-bucket-tag. Missing --database-bucket-tag."
+            )
+        })?;
+        validate_database_s3_external_id(external_id)?;
+        validate_database_bucket_tag(database_bucket_tag)?;
+
+        Ok(Some(json!({
+            "external_id": external_id,
+            "database_bucket_tag": database_bucket_tag,
+        })))
+    }
+}
+
+fn validate_database_s3_external_id(value: &str) -> Result<()> {
+    let value = value.trim();
+    if !(2..=1224).contains(&value.len())
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'+' | b'=' | b',' | b'.' | b'@' | b':' | b'/' | b'-'
+                )
+        })
+    {
+        anyhow::bail!(
+            "Invalid database S3 access External ID. Use 2-1224 letters, numbers, or the characters _ + = , . @ : / -."
+        );
+    }
+    Ok(())
+}
+
+fn validate_database_bucket_tag(value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 256
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        || !value
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        anyhow::bail!(
+            "Invalid database S3 bucket tag. Use 1-256 lowercase letters, numbers, or hyphens, starting with a letter or number."
+        );
+    }
+    Ok(())
 }
 
 fn required_s3_value<'a>(value: &'a Option<String>, flag: &str) -> Result<&'a str> {
@@ -415,6 +499,8 @@ pub enum ClusterCommand {
         idle_timeout_minutes: Option<u64>,
         #[command(flatten)]
         s3_storage: S3StorageArgs,
+        #[command(flatten)]
+        database_s3_access: DatabaseS3AccessArgs,
     },
     /// Set the default cluster
     Use {
@@ -499,7 +585,10 @@ pub enum TableCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, S3StorageArgs};
+    use super::{
+        Cli, ClusterCommand, ClusterSizeArg, Command, DatabaseS3AccessArgs, KeyCommand,
+        S3StorageArgs,
+    };
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
@@ -669,6 +758,80 @@ mod tests {
             .to_json()
             .expect_err("partial S3 options should be rejected");
         assert!(error.to_string().contains("--s3-backups-bucket"));
+    }
+
+    #[test]
+    fn cluster_create_parses_independent_database_s3_access_options() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "cluster",
+            "create",
+            "--name",
+            "production",
+            "--replicas",
+            "1",
+            "--min-size",
+            "2:8",
+            "--database-s3-external-id",
+            "rawtree-database-access",
+            "--database-bucket-tag",
+            "rawtree-customer-database",
+        ])
+        .expect("cluster create database S3 options should parse");
+
+        let Command::Cluster {
+            action:
+                ClusterCommand::Create {
+                    database_s3_access,
+                    s3_storage,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected cluster create command");
+        };
+
+        assert_eq!(
+            s3_storage.to_json().expect("storage should be omitted"),
+            None
+        );
+        assert_eq!(
+            database_s3_access
+                .to_json()
+                .expect("complete database S3 access should be valid"),
+            Some(serde_json::json!({
+                "external_id": "rawtree-database-access",
+                "database_bucket_tag": "rawtree-customer-database"
+            }))
+        );
+    }
+
+    #[test]
+    fn partial_database_s3_access_options_are_rejected_before_request() {
+        let args = DatabaseS3AccessArgs {
+            database_s3_external_id: Some("rawtree-database-access".to_string()),
+            ..DatabaseS3AccessArgs::default()
+        };
+
+        let error = args
+            .to_json()
+            .expect_err("partial database S3 access should be rejected");
+        assert!(error.to_string().contains("--database-bucket-tag"));
+    }
+
+    #[test]
+    fn invalid_database_s3_access_values_are_rejected_before_request() {
+        let invalid_external_id = DatabaseS3AccessArgs {
+            database_s3_external_id: Some("?".to_string()),
+            database_bucket_tag: Some("rawtree-customer-database".to_string()),
+        };
+        assert!(invalid_external_id.to_json().is_err());
+
+        let invalid_bucket_tag = DatabaseS3AccessArgs {
+            database_s3_external_id: Some("rawtree-database-access".to_string()),
+            database_bucket_tag: Some("RawTree_Invalid".to_string()),
+        };
+        assert!(invalid_bucket_tag.to_json().is_err());
     }
 
     #[test]
