@@ -623,12 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn project_command_is_rejected() {
-        let result = Cli::try_parse_from(["rtree", "project", "list"]);
-        assert!(result.is_err(), "project command should not be accepted");
-    }
-
-    #[test]
     fn login_with_token_flag_is_rejected() {
         let result = Cli::try_parse_from(["rtree", "login", "--token", "rt_abc123"]);
         assert!(result.is_err(), "--token should not be accepted");
@@ -793,19 +787,6 @@ mod tests {
             "csv",
         ]);
         assert!(result.is_err(), "query --format should not be supported");
-    }
-
-    #[test]
-    fn query_project_flag_is_rejected() {
-        let result = Cli::try_parse_from([
-            "rtree",
-            "query",
-            "--project",
-            "analytics",
-            "--sql",
-            "SELECT 1",
-        ]);
-        assert!(result.is_err(), "query should use --database");
     }
 
     #[test]

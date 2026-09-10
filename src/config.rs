@@ -12,12 +12,7 @@ pub struct Config {
     pub email: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(
-        default,
-        rename = "database",
-        alias = "default_database",
-        alias = "default_project"
-    )]
+    #[serde(default, rename = "database", alias = "default_database")]
     pub default_database: Option<String>,
     #[serde(default)]
     pub default_organization: Option<String>,
@@ -76,20 +71,6 @@ mod tests {
     use super::Config;
 
     #[test]
-    fn old_config_with_default_project_still_deserializes() {
-        let old = r#"{
-  "token": "t",
-  "email": "e@example.com",
-  "url": "https://api.rawtree.com",
-  "default_project": "analytics"
-}"#;
-        let cfg: Config = serde_json::from_str(old).expect("old config should parse");
-        assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
-        assert_eq!(cfg.default_organization, None);
-        assert_eq!(cfg.default_cluster, None);
-    }
-
-    #[test]
     fn old_config_with_default_database_still_deserializes() {
         let old = r#"{
   "default_database": "analytics"
@@ -108,7 +89,6 @@ mod tests {
 
         assert_eq!(json["database"], "analytics");
         assert!(json.get("default_database").is_none());
-        assert!(json.get("default_project").is_none());
     }
 
     #[test]
