@@ -31,6 +31,11 @@ struct ColumnInfo {
 
 #[derive(Deserialize)]
 struct DescribeTableResponse {
+    table: TableDetails,
+}
+
+#[derive(Deserialize)]
+struct TableDetails {
     name: String,
     created_at: String,
     #[serde(alias = "rows")]
@@ -89,28 +94,29 @@ pub fn describe(
     let describe_path =
         org::database_scoped_path(database, &format!("/tables/{table}"), organization, cluster);
     let resp: DescribeTableResponse = client.get(&describe_path)?;
+    let details = &resp.table;
     output::print_result(
         &json!({
-            "table": resp.name,
-            "created_at": resp.created_at,
-            "total_rows": resp.total_rows,
-            "total_bytes": resp.total_bytes,
-            "columns": resp.columns.iter().map(|c| json!({
+            "table": details.name,
+            "created_at": details.created_at,
+            "total_rows": details.total_rows,
+            "total_bytes": details.total_bytes,
+            "columns": details.columns.iter().map(|c| json!({
                 "name": c.name,
                 "type": c.col_type,
             })).collect::<Vec<_>>(),
         }),
         json_mode,
         |_| {
-            println!("Table: {}", resp.name);
-            println!("Rows: {}", resp.total_rows);
-            println!("Size: {}", format_bytes(resp.total_bytes));
-            println!("Created at: {}", resp.created_at);
+            println!("Table: {}", details.name);
+            println!("Rows: {}", details.total_rows);
+            println!("Size: {}", format_bytes(details.total_bytes));
+            println!("Created at: {}", details.created_at);
             println!();
 
             let mut columns = new_cli_table();
             columns.set_header(vec!["column", "type"]);
-            for col in &resp.columns {
+            for col in &details.columns {
                 columns.add_row(vec![Cell::new(&col.name), Cell::new(&col.col_type)]);
             }
 
@@ -157,18 +163,40 @@ mod tests {
     }
 
     #[test]
-    fn describe_response_accepts_legacy_field_names() {
+    fn describe_response_reads_nested_table() {
         let payload = r#"{
-            "name": "events",
-            "created_at": "2026-01-01 10:00:00",
-            "rows": 1200,
-            "size": 98304,
-            "columns": [{"name": "event", "type": "String"}]
+            "table": {
+                "name": "events",
+                "created_at": "2026-01-01 10:00:00",
+                "total_rows": 1200,
+                "total_bytes": 98304,
+                "columns": [{"name": "event", "type": "String"}],
+                "sorting_key": ["event"]
+            }
         }"#;
 
         let resp: DescribeTableResponse = serde_json::from_str(payload).expect("valid payload");
-        assert_eq!(resp.total_rows, 1200);
-        assert_eq!(resp.total_bytes, 98304);
-        assert_eq!(resp.columns.len(), 1);
+        assert_eq!(resp.table.name, "events");
+        assert_eq!(resp.table.total_rows, 1200);
+        assert_eq!(resp.table.total_bytes, 98304);
+        assert_eq!(resp.table.columns.len(), 1);
+    }
+
+    #[test]
+    fn describe_response_accepts_legacy_field_names() {
+        let payload = r#"{
+            "table": {
+                "name": "events",
+                "created_at": "2026-01-01 10:00:00",
+                "rows": 1200,
+                "size": 98304,
+                "columns": [{"name": "event", "type": "String"}]
+            }
+        }"#;
+
+        let resp: DescribeTableResponse = serde_json::from_str(payload).expect("valid payload");
+        assert_eq!(resp.table.total_rows, 1200);
+        assert_eq!(resp.table.total_bytes, 98304);
+        assert_eq!(resp.table.columns.len(), 1);
     }
 }
