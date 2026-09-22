@@ -135,7 +135,7 @@ pub enum Command {
         #[command(subcommand)]
         action: ClusterCommand,
     },
-    /// Inspect tables
+    /// Inspect and configure tables
     Table {
         #[command(subcommand)]
         action: TableCommand,
@@ -410,11 +410,21 @@ pub enum TableCommand {
         /// Table name
         table: String,
     },
+    /// Update a table's sorting key
+    Update {
+        #[arg(long)]
+        database: Option<String>,
+        /// Table name
+        table: String,
+        /// Sorting key columns in key order, comma-separated
+        #[arg(long, value_delimiter = ',', required = true)]
+        sorting_key: Vec<String>,
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand};
+    use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand};
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
@@ -916,5 +926,39 @@ mod tests {
     fn logs_status_codes_must_be_http_statuses() {
         let result = Cli::try_parse_from(["rtree", "logs", "--status-codes", "99"]);
         assert!(result.is_err(), "status codes below 100 should be rejected");
+    }
+
+    #[test]
+    fn table_update_parses_comma_separated_sorting_key() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "table",
+            "update",
+            "events",
+            "--sorting-key",
+            "region,user.id",
+        ])
+        .expect("table update should parse");
+        match cli.command {
+            Command::Table {
+                action:
+                    TableCommand::Update {
+                        table, sorting_key, ..
+                    },
+            } => {
+                assert_eq!(table, "events");
+                assert_eq!(sorting_key, vec!["region", "user.id"]);
+            }
+            _ => panic!("expected table update command"),
+        }
+    }
+
+    #[test]
+    fn table_update_requires_a_sorting_key() {
+        let err = match Cli::try_parse_from(["rtree", "table", "update", "events"]) {
+            Ok(_) => panic!("--sorting-key should be required"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 }

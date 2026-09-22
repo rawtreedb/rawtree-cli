@@ -174,7 +174,15 @@ rtree key create --database analytics --name ci --permission read_write
 
 rtree table list --database analytics
 rtree table describe --database analytics events
+rtree table update --database analytics events --sorting-key region,user.id
 ```
+
+`table describe` reports the table's sorting key, which is `auto (chosen per
+part)` until one is set. `table update --sorting-key` takes the key columns in
+key order; a bare name such as `user.id` is read as a path into the ingested
+JSON. The new key applies to newly inserted parts and wins later merges, so
+existing parts are re-sorted in the background rather than by the command. A
+sorting key cannot be removed once set, so at least one column is required.
 
 ### Clusters
 
