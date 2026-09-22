@@ -53,6 +53,36 @@ struct UpdateTableResponse {
     sorting_key: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct CreateTableResponse {
+    database: String,
+    table: String,
+    #[serde(default)]
+    sorting_key: Vec<String>,
+    #[serde(default)]
+    storage: Option<TableStorage>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TableStorage {
+    Default,
+    S3 {
+        data: TableS3Destination,
+        backups: TableS3Destination,
+    },
+    /// A storage type this CLI version predates. The table is still created, so
+    /// it must not fail the response parse.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Deserialize)]
+struct TableS3Destination {
+    bucket: String,
+    path: String,
+}
+
 pub fn list(
     client: &ApiClient,
     database: &str,
@@ -88,6 +118,43 @@ pub fn list(
             }
         },
     );
+    Ok(())
+}
+
+pub fn create(
+    client: &ApiClient,
+    database: &str,
+    organization: Option<&str>,
+    cluster: Option<&str>,
+    table: &str,
+    sorting_key: Option<&[String]>,
+    json_mode: bool,
+) -> Result<()> {
+    let mut body = serde_json::Map::new();
+    body.insert("name".to_string(), json!(table));
+    if let Some(columns) = sorting_key {
+        let columns = normalize_sorting_key(columns);
+        if columns.is_empty() {
+            anyhow::bail!("--sorting-key must list at least one column.");
+        }
+        body.insert("sorting_key".to_string(), json!(columns));
+    }
+
+    let create_path = org::database_scoped_path(database, "/tables", organization, cluster);
+    let value: Value = client.post(&create_path, &Value::Object(body))?;
+    let created: CreateTableResponse =
+        serde_json::from_value(value.clone()).context("invalid table response from server")?;
+
+    output::print_result(&value, json_mode, |_| {
+        println!(
+            "Table '{}' created in database '{}'.",
+            created.table, created.database
+        );
+        println!("Sorting key: {}", format_sorting_key(&created.sorting_key));
+        if let Some(storage) = format_storage(created.storage.as_ref()) {
+            println!("Storage: {storage}");
+        }
+    });
     Ok(())
 }
 
@@ -183,6 +250,17 @@ fn format_sorting_key(sorting_key: &[String]) -> String {
     }
 }
 
+fn format_storage(storage: Option<&TableStorage>) -> Option<String> {
+    match storage? {
+        TableStorage::Default => Some("default".to_string()),
+        TableStorage::S3 { data, backups } => Some(format!(
+            "S3 (data s3://{}/{}, backups s3://{}/{})",
+            data.bucket, data.path, backups.bucket, backups.path
+        )),
+        TableStorage::Unknown => None,
+    }
+}
+
 fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     if bytes < 1024 {
@@ -202,8 +280,8 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_sorting_key, normalize_sorting_key, DescribeTableResponse, TablesResponse,
-        UpdateTableResponse,
+        format_sorting_key, format_storage, normalize_sorting_key, CreateTableResponse,
+        DescribeTableResponse, TablesResponse, UpdateTableResponse,
     };
 
     #[test]
@@ -309,5 +387,65 @@ mod tests {
             format_sorting_key(&["region".to_string(), "user.id".to_string()]),
             "region, user.id"
         );
+    }
+
+    #[test]
+    fn create_response_reads_sorting_key_and_default_storage() {
+        let payload = r#"{
+            "database": "analytics",
+            "table": "events",
+            "storage": {"type": "default"},
+            "sorting_key": ["region", "user.id"]
+        }"#;
+
+        let resp: CreateTableResponse = serde_json::from_str(payload).expect("valid payload");
+        assert_eq!(resp.database, "analytics");
+        assert_eq!(resp.table, "events");
+        assert_eq!(
+            resp.sorting_key,
+            vec!["region".to_string(), "user.id".to_string()]
+        );
+        assert_eq!(
+            format_storage(resp.storage.as_ref()).as_deref(),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn create_response_formats_s3_storage_destinations() {
+        let payload = r#"{
+            "database": "analytics",
+            "table": "events",
+            "storage": {
+                "type": "s3",
+                "data": {"bucket": "data-bucket", "path": "events"},
+                "backups": {"bucket": "backup-bucket", "path": "events/backups"}
+            },
+            "sorting_key": []
+        }"#;
+
+        let resp: CreateTableResponse = serde_json::from_str(payload).expect("valid payload");
+        assert!(resp.sorting_key.is_empty());
+        assert_eq!(
+            format_storage(resp.storage.as_ref()).as_deref(),
+            Some("S3 (data s3://data-bucket/events, backups s3://backup-bucket/events/backups)")
+        );
+    }
+
+    #[test]
+    fn create_response_tolerates_unknown_and_missing_storage() {
+        let unknown = r#"{
+            "database": "analytics",
+            "table": "events",
+            "storage": {"type": "gcs", "data": {"bucket": "b"}},
+            "sorting_key": []
+        }"#;
+        let resp: CreateTableResponse = serde_json::from_str(unknown).expect("valid payload");
+        assert!(format_storage(resp.storage.as_ref()).is_none());
+
+        let missing = r#"{"database": "analytics", "table": "events"}"#;
+        let resp: CreateTableResponse = serde_json::from_str(missing).expect("valid payload");
+        assert!(resp.sorting_key.is_empty());
+        assert!(format_storage(resp.storage.as_ref()).is_none());
     }
 }

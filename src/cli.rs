@@ -403,6 +403,17 @@ pub enum TableCommand {
         #[arg(long)]
         database: Option<String>,
     },
+    /// Create an empty table
+    Create {
+        #[arg(long)]
+        database: Option<String>,
+        /// Table name
+        table: String,
+        /// Sorting key columns in key order, comma-separated. Omit to let the
+        /// table pick a key per part from the ingested data.
+        #[arg(long, value_delimiter = ',')]
+        sorting_key: Option<Vec<String>>,
+    },
     /// Describe a table
     Describe {
         #[arg(long)]
@@ -960,5 +971,45 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn table_create_leaves_the_sorting_key_unset_when_the_flag_is_absent() {
+        let cli = Cli::try_parse_from(["rtree", "table", "create", "events"])
+            .expect("table create should parse without a sorting key");
+        match cli.command {
+            Command::Table {
+                action:
+                    TableCommand::Create {
+                        table, sorting_key, ..
+                    },
+            } => {
+                assert_eq!(table, "events");
+                assert!(sorting_key.is_none());
+            }
+            _ => panic!("expected table create command"),
+        }
+    }
+
+    #[test]
+    fn table_create_parses_comma_separated_sorting_key() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "table",
+            "create",
+            "events",
+            "--sorting-key",
+            "region,user.id",
+        ])
+        .expect("table create should parse");
+        match cli.command {
+            Command::Table {
+                action: TableCommand::Create { sorting_key, .. },
+            } => assert_eq!(
+                sorting_key.as_deref(),
+                Some(&["region".to_string(), "user.id".to_string()][..])
+            ),
+            _ => panic!("expected table create command"),
+        }
     }
 }
