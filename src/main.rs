@@ -447,6 +447,38 @@ fn run(cli: Cli) -> Result<()> {
                         json,
                     )
                 }
+                TableCommand::Create {
+                    database,
+                    table,
+                    sorting_key,
+                } => {
+                    let database = resolve_database(database)?;
+                    commands::table::create(
+                        &client,
+                        &database,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        &table,
+                        sorting_key.as_deref(),
+                        json,
+                    )
+                }
+                TableCommand::Update {
+                    database,
+                    table,
+                    sorting_key,
+                } => {
+                    let database = resolve_database(database)?;
+                    commands::table::update(
+                        &client,
+                        &database,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        &table,
+                        &sorting_key,
+                        json,
+                    )
+                }
             }
         }
         Command::Logs {

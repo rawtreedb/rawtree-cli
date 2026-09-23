@@ -410,17 +410,80 @@ pub enum TableCommand {
         /// Table name
         table: String,
     },
+    /// Create an empty table, optionally with a custom sorting key
+    Create {
+        #[arg(long)]
+        database: Option<String>,
+        /// Table name
+        table: String,
+        /// Comma-separated SQL sorting expressions (quote the argument in your shell)
+        #[arg(long)]
+        sorting_key: Option<String>,
+    },
+    /// Change a table's sorting key for new parts and later merges
+    Update {
+        #[arg(long)]
+        database: Option<String>,
+        /// Table name
+        table: String,
+        /// Comma-separated SQL sorting expressions (quote the argument in your shell)
+        #[arg(long)]
+        sorting_key: String,
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand};
+    use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand};
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
     fn root_command_exposes_version_flag() {
         let command = Cli::command();
         assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn table_sorting_key_accepts_one_sql_expression_string() {
+        let expression = "region, ifNull(cityHash64(host, instanceId), 0)";
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "table",
+            "create",
+            "events",
+            "--database",
+            "analytics",
+            "--sorting-key",
+            expression,
+        ])
+        .expect("table create should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Table {
+                action: TableCommand::Create { sorting_key: Some(key), .. }
+            } if key == expression
+        ));
+
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "table",
+            "update",
+            "events",
+            "--sorting-key",
+            expression,
+        ])
+        .expect("table update should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Table {
+                action: TableCommand::Update { sorting_key, .. }
+            } if sorting_key == expression
+        ));
+
+        let err = Cli::try_parse_from(["rtree", "table", "update", "events"])
+            .err()
+            .expect("update requires a sorting key");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

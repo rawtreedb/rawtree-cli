@@ -174,7 +174,11 @@ rtree key create --database analytics --name ci --permission read_write
 
 rtree table list --database analytics
 rtree table describe --database analytics events
+rtree table create --database analytics events --sorting-key 'region, ifNull(cityHash64(host, instanceId), 0)'
+rtree table update --database analytics events --sorting-key 'region, toStartOfHour(timestamp)'
 ```
+
+Omit `--sorting-key` when creating a table to choose a key automatically per part. `table describe` shows the current sorting key as a string. Updating the key affects new parts and later merges; existing parts may keep their previous key until they are merged. A custom sorting key cannot be reset to automatic.
 
 ### Clusters
 
