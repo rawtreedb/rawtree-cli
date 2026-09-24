@@ -558,6 +558,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
         Command::Status => commands::status::status(&url, json),
+        Command::Update => commands::update::update(json),
         Command::Open { database } => {
             let ui_base_url = commands::open::resolve_ui_base_url();
             let effective_org = resolve_effective_org(&client, cli_org);
