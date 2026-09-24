@@ -40,33 +40,26 @@ impl ApiClient {
 
     /// POST without a request body.
     pub fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.post_empty_with_query_id(path).map(|(body, _)| body)
+    }
+
+    /// POST without a body, preserving the native ClickHouse query ID.
+    pub fn post_empty_with_query_id<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<(T, Option<String>)> {
         let url = format!("{}{}", self.base_url, path);
         let mut req = with_client_header(self.client.post(&url));
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
         let resp = req.send().context("failed to connect to server")?;
-        handle_response(resp)
-    }
-
-    /// POST without a body and return a streaming response.
-    pub fn post_empty_stream(&self, path: &str) -> Result<Response> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = self
-            .client
-            .post(&url)
-            .header("accept", "application/x-ndjson");
-        req = with_client_header(req);
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
-        let resp = req.send().context("failed to connect to server")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().context("failed to read response body")?;
-            return Err(format_server_error(&text, status.as_u16()));
-        }
-        Ok(resp)
+        let query_id = resp
+            .headers()
+            .get("x-clickhouse-query-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok((handle_response(resp)?, query_id))
     }
 
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
@@ -186,6 +179,52 @@ fn format_server_error(body: &str, status: u16) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_post_reads_completion_json_and_query_id_or_http_error() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        for (status, body) in [
+            ("200 OK", r#"{"inserted":12}"#),
+            ("200 OK", r#"{"inserted":null}"#),
+            ("400 Bad Request", r#"{"message":"Import failed"}"#),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                assert!(request.starts_with("POST /v1/tables/events?url="));
+                assert!(request
+                    .to_lowercase()
+                    .contains("authorization: bearer test-token"));
+                assert!(!request.contains("application/x-ndjson"));
+                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nX-ClickHouse-Query-Id: import-123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            });
+            let client = ApiClient::new(format!("http://{address}"), Some("test-token".into()));
+            let result = client.post_empty_with_query_id::<Value>(
+                "/v1/tables/events?url=https%3A%2F%2Fexample.com%2Fdata.json",
+            );
+            if status.starts_with("200") {
+                let (value, query_id) = result.unwrap();
+                assert_eq!(value, serde_json::from_str::<Value>(body).unwrap());
+                assert_eq!(query_id.as_deref(), Some("import-123"));
+            } else {
+                assert!(result.unwrap_err().to_string().contains("Import failed"));
+            }
+            server.join().unwrap();
+        }
+    }
 
     #[test]
     fn marks_cli_requests_with_rawtree_client_header() {

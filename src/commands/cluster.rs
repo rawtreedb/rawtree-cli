@@ -5,17 +5,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
-use crate::cli::{
-    ClusterSizeArg, DatabaseS3AccessArgs, DatabaseS3AccessMetadata, S3StorageArgs,
-    S3StorageMetadata,
-};
+use crate::cli::ClusterSizeArg;
 use crate::client::ApiClient;
 use crate::config;
 use crate::output;
+use crate::s3_storage::{
+    format_database_s3_access, format_storage, validate_matching_s3_external_ids,
+    DatabaseS3AccessArgs, DatabaseS3AccessMetadata, S3StorageArgs, S3StorageMetadata,
+};
 
 #[derive(Deserialize)]
 struct ListClustersResponse {
-    organization: OrganizationRef,
+    organization: Option<OrganizationRef>,
     clusters: Vec<ClusterItem>,
 }
 
@@ -235,10 +236,7 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
 
     output::print_result(&value, json_mode, |_| {
         if resp.clusters.is_empty() {
-            println!(
-                "No dedicated clusters found for organization '{}'.",
-                resp.organization.name
-            );
+            println!("{}", empty_list_message(&resp, organization));
             return;
         }
 
@@ -432,6 +430,18 @@ fn delete_output(cluster: &ClusterItem, deleted: bool) -> Value {
     })
 }
 
+fn empty_list_message(resp: &ListClustersResponse, organization: Option<&str>) -> String {
+    let name = resp
+        .organization
+        .as_ref()
+        .map(|org| org.name.as_str())
+        .or(organization);
+    match name {
+        Some(name) => format!("No dedicated clusters found for organization '{name}'."),
+        None => "No dedicated clusters found.".to_string(),
+    }
+}
+
 fn load_dedicated_clusters(
     client: &ApiClient,
     organization: Option<&str>,
@@ -520,23 +530,6 @@ fn create_request_body(
     body
 }
 
-fn validate_matching_s3_external_ids(
-    s3_storage: &S3StorageArgs,
-    database_s3_access: &DatabaseS3AccessArgs,
-) -> Result<()> {
-    if let (Some(storage_external_id), Some(database_external_id)) = (
-        s3_storage.s3_external_id.as_deref(),
-        database_s3_access.database_s3_external_id.as_deref(),
-    ) {
-        if storage_external_id.trim() != database_external_id.trim() {
-            anyhow::bail!(
-                "S3 External IDs do not match. Use the same value for --s3-external-id and --database-s3-external-id."
-            );
-        }
-    }
-    Ok(())
-}
-
 fn resolve_cluster<'a>(clusters: &'a [ClusterItem], name_or_id: &str) -> Result<&'a ClusterItem> {
     clusters
         .iter()
@@ -611,20 +604,6 @@ fn format_idle_timeout(minutes: u64) -> String {
     }
 }
 
-fn format_storage(storage: Option<&S3StorageMetadata>) -> &'static str {
-    if storage.is_some() {
-        "customer-owned S3"
-    } else {
-        "cluster default"
-    }
-}
-
-fn format_database_s3_access(access: Option<&DatabaseS3AccessMetadata>) -> String {
-    access
-        .map(|access| format!("configured ({})", access.database_bucket_tag))
-        .unwrap_or_else(|| "not configured".to_string())
-}
-
 fn format_created_at(created_at: &str) -> String {
     DateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S%.f%#z")
         .map(|timestamp| {
@@ -668,13 +647,12 @@ mod tests {
 
     use super::{
         cluster_path, cluster_size_json, clusters_collection_path, create_request_body,
-        default_cluster_after_delete, delete_output, format_created_at, format_database_s3_access,
-        format_idle_timeout, format_phase, format_size_per_replica, format_storage,
-        renamed_default_cluster, resolve_cluster, resolve_cluster_size,
-        validate_matching_s3_external_ids, ClusterItem, ClusterResources, ClusterSizeItem,
-        ClusterStatus,
+        default_cluster_after_delete, delete_output, empty_list_message, format_created_at,
+        format_idle_timeout, format_phase, format_size_per_replica, renamed_default_cluster,
+        resolve_cluster, resolve_cluster_size, ClusterItem, ClusterResources, ClusterSizeItem,
+        ClusterStatus, ListClustersResponse,
     };
-    use crate::cli::{ClusterSizeArg, DatabaseS3AccessArgs, S3StorageArgs};
+    use crate::cli::ClusterSizeArg;
 
     #[test]
     fn collection_path_encodes_organization() {
@@ -828,6 +806,74 @@ mod tests {
         assert_eq!(cli_error.exit_code(), 4);
     }
 
+    fn cluster_json() -> serde_json::Value {
+        json!({
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "dev",
+            "created_at": "2026-07-14 20:38:33.004347+00",
+            "status": {"phase": "provisioning", "ready": false, "message": null},
+            "resources": null,
+            "can_pause": false,
+            "can_resume": false,
+            "idle_timeout_minutes": 15
+        })
+    }
+
+    #[test]
+    fn clusters_response_resolves_without_organization() {
+        let resp =
+            serde_json::from_value::<ListClustersResponse>(json!({"clusters": [cluster_json()]}))
+                .expect("response without organization");
+        assert!(resp.organization.is_none());
+        assert_eq!(
+            resolve_cluster(&resp.clusters, "dev").expect("cluster").id,
+            "11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    #[test]
+    fn clusters_response_resolves_with_organization() {
+        let resp = serde_json::from_value::<ListClustersResponse>(json!({
+            "organization": {"name": "team_alpha"},
+            "clusters": [cluster_json()]
+        }))
+        .expect("response with organization");
+        assert_eq!(resp.organization.expect("organization").name, "team_alpha");
+        assert_eq!(resp.clusters.len(), 1);
+    }
+
+    #[test]
+    fn clusters_response_still_requires_clusters_array() {
+        assert!(serde_json::from_value::<ListClustersResponse>(
+            json!({"organization": {"name": "a"}})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn empty_list_message_prefers_server_then_effective_organization() {
+        let with_org = serde_json::from_value::<ListClustersResponse>(json!({
+            "organization": {"name": "server_org"},
+            "clusters": []
+        }))
+        .expect("valid");
+        assert_eq!(
+            empty_list_message(&with_org, Some("cli_org")),
+            "No dedicated clusters found for organization 'server_org'."
+        );
+
+        let without_org =
+            serde_json::from_value::<ListClustersResponse>(json!({"clusters": []})).expect("valid");
+        assert_eq!(
+            empty_list_message(&without_org, Some("cli_org")),
+            "No dedicated clusters found for organization 'cli_org'."
+        );
+        assert_eq!(
+            empty_list_message(&without_org, None),
+            "No dedicated clusters found."
+        );
+    }
+
     #[test]
     fn delete_json_output_identifies_the_cluster() {
         assert_eq!(
@@ -910,185 +956,6 @@ mod tests {
     }
 
     #[test]
-    fn cluster_storage_response_deserializes_with_the_new_field_name() {
-        let cluster: ClusterItem = serde_json::from_value(json!({
-            "id": "cluster-id",
-            "name": "production",
-            "created_at": "2026-07-14 20:38:33.004347+00",
-            "status": {"phase": "ready", "ready": true, "message": null},
-            "resources": null,
-            "can_pause": true,
-            "can_resume": false,
-            "s3_storage": {
-                "data": {"bucket": "customer-data", "path": "rawtree/data"},
-                "backups": {"bucket": "customer-backups", "path": "rawtree/backups"}
-            },
-            "idle_timeout_minutes": 15
-        }))
-        .expect("cluster storage response should deserialize");
-
-        assert_eq!(
-            format_storage(cluster.s3_storage.as_ref()),
-            "customer-owned S3"
-        );
-        assert_eq!(
-            cluster.s3_storage.expect("storage metadata").data.bucket,
-            "customer-data"
-        );
-    }
-
-    #[test]
-    fn cluster_database_s3_access_response_deserializes_metadata() {
-        let cluster: ClusterItem = serde_json::from_value(json!({
-            "id": "cluster-id",
-            "name": "production",
-            "created_at": "2026-07-14 20:38:33.004347+00",
-            "status": {"phase": "ready", "ready": true, "message": null},
-            "resources": null,
-            "can_pause": true,
-            "can_resume": false,
-            "s3_storage": null,
-            "database_s3_access": {
-                "external_id": "rawtree-database-access",
-                "database_bucket_tag": "rawtree-customer-database"
-            },
-            "idle_timeout_minutes": 15
-        }))
-        .expect("cluster database S3 access metadata should deserialize");
-
-        let access = cluster
-            .database_s3_access
-            .expect("database S3 access metadata");
-        assert_eq!(access.external_id, "rawtree-database-access");
-        assert_eq!(access.database_bucket_tag, "rawtree-customer-database");
-        assert_eq!(
-            format_database_s3_access(Some(&access)),
-            "configured (rawtree-customer-database)"
-        );
-        assert_eq!(format_database_s3_access(None), "not configured");
-    }
-
-    #[test]
-    fn cluster_create_body_uses_s3_storage() {
-        let storage = S3StorageArgs {
-            s3_data_bucket: Some("customer-data".to_string()),
-            s3_data_path: Some("rawtree/data".to_string()),
-            s3_backups_bucket: Some("customer-backups".to_string()),
-            s3_backups_path: Some("rawtree/backups".to_string()),
-            s3_role_arn: Some("arn:aws:iam::123456789012:role/RawTreeS3Access".to_string()),
-            s3_external_id: Some("rawtree-example".to_string()),
-        };
-        let body = create_request_body(
-            "production",
-            1,
-            ClusterSizeArg {
-                cpu_cores: 2,
-                memory_gib: 8,
-            },
-            ClusterSizeArg {
-                cpu_cores: 2,
-                memory_gib: 8,
-            },
-            None,
-            storage.to_json().expect("valid storage"),
-            None,
-        );
-
-        assert_eq!(
-            body["s3_storage"],
-            json!({
-                "data": {"bucket": "customer-data", "path": "rawtree/data"},
-                "backups": {"bucket": "customer-backups", "path": "rawtree/backups"},
-                "role_arn": "arn:aws:iam::123456789012:role/RawTreeS3Access",
-                "external_id": "rawtree-example"
-            })
-        );
-    }
-
-    #[test]
-    fn cluster_create_body_supports_database_s3_access_without_cluster_storage() {
-        let body = create_request_body(
-            "production",
-            1,
-            ClusterSizeArg {
-                cpu_cores: 2,
-                memory_gib: 8,
-            },
-            ClusterSizeArg {
-                cpu_cores: 2,
-                memory_gib: 8,
-            },
-            None,
-            None,
-            Some(json!({
-                "external_id": "rawtree-database-access",
-                "database_bucket_tag": "rawtree-customer-database"
-            })),
-        );
-
-        assert!(body.get("s3_storage").is_none());
-        assert_eq!(
-            body["database_s3_access"],
-            json!({
-                "external_id": "rawtree-database-access",
-                "database_bucket_tag": "rawtree-customer-database"
-            })
-        );
-    }
-
-    #[test]
-    fn cluster_create_body_supports_matching_storage_and_database_access() {
-        let storage = S3StorageArgs {
-            s3_data_bucket: Some("customer-data".to_string()),
-            s3_backups_bucket: Some("customer-backups".to_string()),
-            s3_role_arn: Some("arn:aws:iam::123456789012:role/RawTreeS3Access".to_string()),
-            s3_external_id: Some("rawtree-example".to_string()),
-            ..S3StorageArgs::default()
-        };
-        let access = DatabaseS3AccessArgs {
-            database_s3_external_id: Some("rawtree-example".to_string()),
-            database_bucket_tag: Some("rawtree-customer-database".to_string()),
-        };
-
-        validate_matching_s3_external_ids(&storage, &access)
-            .expect("matching external IDs should be accepted");
-        let body = create_request_body(
-            "production",
-            1,
-            ClusterSizeArg {
-                cpu_cores: 2,
-                memory_gib: 8,
-            },
-            ClusterSizeArg {
-                cpu_cores: 2,
-                memory_gib: 8,
-            },
-            None,
-            storage.to_json().expect("valid storage"),
-            access.to_json().expect("valid database access"),
-        );
-
-        assert!(body["s3_storage"].is_object());
-        assert!(body["database_s3_access"].is_object());
-    }
-
-    #[test]
-    fn cluster_create_rejects_mismatched_storage_and_database_external_ids() {
-        let storage = S3StorageArgs {
-            s3_external_id: Some("rawtree-cluster".to_string()),
-            ..S3StorageArgs::default()
-        };
-        let access = DatabaseS3AccessArgs {
-            database_s3_external_id: Some("rawtree-database".to_string()),
-            ..DatabaseS3AccessArgs::default()
-        };
-
-        let error = validate_matching_s3_external_ids(&storage, &access)
-            .expect_err("mismatched external IDs should be rejected");
-        assert!(error.to_string().contains("S3 External IDs do not match"));
-    }
-
-    #[test]
     fn timestamp_is_rendered_to_seconds_in_utc() {
         assert_eq!(
             format_created_at("2026-07-14 20:38:33.004347+00"),
@@ -1123,3 +990,6 @@ mod tests {
         assert_eq!(format_phase("rolling_rawtree"), "rolling rawtree");
     }
 }
+
+#[cfg(test)]
+mod storage_tests;

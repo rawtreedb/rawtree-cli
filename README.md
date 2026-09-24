@@ -32,6 +32,18 @@ cargo build --release
 ./target/release/rtree --help
 ```
 
+## Update
+
+If you installed with the GitHub Releases installer, update in place:
+
+```sh
+rtree update
+```
+
+`rtree update --json` prints `{"updated":true,"previous_version":"<old>","version":"<new>"}`,
+or `{"updated":false,"version":"<current>"}` when already on the latest release.
+Source installs aren't managed by the installer; update them with `git pull && cargo install --path .`.
+
 ## Quick Start
 
 ```sh
@@ -64,9 +76,12 @@ Interactive login offers browser-based Rawtree authentication or securely prompt
 for an existing API key. Non-interactive and `--json` login continue to use
 browser-based authentication unless `--api-key` is provided.
 
-When using `--api-key`, the CLI stores the API key directly, resolves organization/database
-defaults from that key, and validates any selected cluster against the key's bound cluster.
-With `--json`, API key login returns:
+When using `--api-key`, the CLI validates the key and any supplied organization/cluster
+selectors with the server before saving it. Explicit selections are saved as defaults.
+If the server omits organization/database metadata and no selection was supplied,
+those settings remain unset. Commands that require a database still need `--database`,
+`RAWTREE_DATABASE`, or a saved default from `rtree database use <name>`.
+With `--json`, API key login returns (unset selections are `null`):
 
 ```json
 {"success":true,"config_path":"<path>","database":"<name>","organization":"<name>","cluster":"<name>"}
@@ -136,6 +151,11 @@ rtree database create analytics
 rtree database use analytics
 ```
 
+Database creation saves the selected organization, cluster, and new database locally.
+With `--json`, creation returns `{"database":{"name":"analytics"}}`; listing returns
+`{"databases":[{"name":"analytics","s3_storage":null}]}`. Database output no longer
+adds organization metadata that is absent from the API response.
+
 ### Querying
 
 ```sh
@@ -162,15 +182,38 @@ rtree insert --table events --file ./events.jsonl
 rtree insert --table events --url https://example.com/events.jsonl
 ```
 
+URL imports wait for completion and print the inserted row count and query ID.
+With `--json`, the result is
+`{"inserted":1000}` (or `{"inserted":null}` when the count is unavailable).
+
 ### Keys and tables
 
 ```sh
-rtree key list --database analytics
-rtree key create --database analytics --name ci --permission read_write
+rtree key list
+rtree key create --name ci --permission read_write
+rtree key create --database analytics --name analytics-ci --permission read_write
 
 rtree table list --database analytics
 rtree table describe --database analytics events
+rtree table create --database analytics events --sorting-key 'region, ifNull(cityHash64(host, instanceId), 0)'
+rtree table update --database analytics events --sorting-key 'region, toStartOfHour(timestamp)'
 ```
+
+Omit `--sorting-key` when creating a table to choose a key automatically per part. `table describe` shows the current sorting key as a string. Updating the key affects new parts and later merges; existing parts may keep their previous key until they are merged. A custom sorting key cannot be reset to automatic.
+
+API keys belong to a cluster. `key list` and `key delete` do not accept `--database`;
+listing includes each key's default database. `key create --database` selects the
+new key's default database, using `RAWTREE_DATABASE` or the saved selection when
+omitted. If none is selected, the server uses `default`.
+
+### Request logs
+
+```sh
+rtree --org team-alpha --cluster production logs --since 1h --status-codes 500
+```
+
+Logs cover the selected cluster. The obsolete `--database` and `--log-databases`
+flags are rejected because the API does not apply database filters.
 
 ### Clusters
 
@@ -232,6 +275,10 @@ rtree database create analytics \
   --s3-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access \
   --s3-external-id rawtree-example
 ```
+
+These options configure new clusters and databases. They do not create S3
+buckets or IAM roles, or migrate existing data. The API verifies access to
+the supplied S3 storage before accepting creation.
 
 If no S3 options are passed, the database inherits the cluster's storage. Use
 `rtree cluster list --json` or `rtree database list --json` to inspect the

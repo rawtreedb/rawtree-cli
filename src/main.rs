@@ -5,6 +5,7 @@ mod config;
 mod constants;
 mod org;
 mod output;
+mod s3_storage;
 
 use std::io::{self, IsTerminal, Read};
 
@@ -386,25 +387,21 @@ fn run(cli: Cli) -> Result<()> {
         Command::Key { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
-                KeyCommand::List { database } => {
-                    let database = resolve_database(database)?;
-                    commands::keys::list(
-                        &client,
-                        &database,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        json,
-                    )
-                }
+                KeyCommand::List => commands::keys::list(
+                    &client,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    json,
+                ),
                 KeyCommand::Create {
                     database,
                     name,
                     permission,
                 } => {
-                    let database = resolve_database(database)?;
+                    let database = resolve_optional_database(database);
                     commands::keys::create(
                         &client,
-                        &database,
+                        database.as_deref(),
                         effective_org.as_deref(),
                         effective_cluster.as_deref(),
                         &name,
@@ -412,20 +409,13 @@ fn run(cli: Cli) -> Result<()> {
                         json,
                     )
                 }
-                KeyCommand::Delete {
-                    database,
-                    id_or_token,
-                } => {
-                    let database = resolve_database(database)?;
-                    commands::keys::delete(
-                        &client,
-                        &database,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        &id_or_token,
-                        json,
-                    )
-                }
+                KeyCommand::Delete { id_or_token } => commands::keys::delete(
+                    &client,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    &id_or_token,
+                    json,
+                ),
             }
         }
         Command::Table { action } => {
@@ -452,10 +442,41 @@ fn run(cli: Cli) -> Result<()> {
                         json,
                     )
                 }
+                TableCommand::Create {
+                    database,
+                    table,
+                    sorting_key,
+                } => {
+                    let database = resolve_database(database)?;
+                    commands::table::create(
+                        &client,
+                        &database,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        &table,
+                        sorting_key.as_deref(),
+                        json,
+                    )
+                }
+                TableCommand::Update {
+                    database,
+                    table,
+                    sorting_key,
+                } => {
+                    let database = resolve_database(database)?;
+                    commands::table::update(
+                        &client,
+                        &database,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        &table,
+                        &sorting_key,
+                        json,
+                    )
+                }
             }
         }
         Command::Logs {
-            database,
             search,
             methods,
             status_codes,
@@ -466,7 +487,6 @@ fn run(cli: Cli) -> Result<()> {
             paths,
             min_duration_ms,
             max_duration_ms,
-            log_databases,
             limit,
             offset,
             since,
@@ -475,10 +495,8 @@ fn run(cli: Cli) -> Result<()> {
             end_time,
         } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let database = resolve_database(database)?;
             commands::logs::logs(
                 &client,
-                &database,
                 effective_org.as_deref(),
                 effective_cluster.as_deref(),
                 search.as_deref(),
@@ -491,7 +509,6 @@ fn run(cli: Cli) -> Result<()> {
                 &paths,
                 min_duration_ms,
                 max_duration_ms,
-                &log_databases,
                 limit,
                 offset,
                 since.as_deref(),
@@ -547,6 +564,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
         Command::Status => commands::status::status(&url, json),
+        Command::Update => commands::update::update(json),
         Command::Open { database } => {
             let ui_base_url = commands::open::resolve_ui_base_url();
             let effective_org = resolve_effective_org(&client, cli_org);
