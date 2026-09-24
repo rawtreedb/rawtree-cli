@@ -124,6 +124,22 @@ struct DatabaseContextResponse {
 }
 
 #[derive(Deserialize)]
+struct ApiKeyValidationResponse {
+    #[serde(rename = "keys")]
+    _keys: Vec<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    context: DatabaseContextResponse,
+}
+
+#[derive(Deserialize)]
+struct TablesValidationResponse {
+    #[serde(rename = "tables")]
+    _tables: Vec<serde::de::IgnoredAny>,
+    #[serde(flatten)]
+    context: DatabaseContextResponse,
+}
+
+#[derive(Deserialize)]
 struct DatabaseContextRef {
     name: String,
 }
@@ -549,16 +565,10 @@ fn auth_selection_from_database_context(
     cluster: Option<&str>,
     cli_database: Option<&str>,
 ) -> Result<AuthSelection> {
-    let organization = context
-        .organization
-        .map(|org| org.name)
-        .ok_or_else(|| anyhow::anyhow!("server response did not include an organization"))?;
-    let database = context
-        .database
-        .map(|database| database.name)
-        .ok_or_else(|| anyhow::anyhow!("server response did not include a database"))?;
+    let organization = context.organization.map(|org| org.name);
+    let database = context.database.map(|database| database.name);
 
-    if let Some(requested_org) = cli_org {
+    if let (Some(requested_org), Some(organization)) = (cli_org, organization.as_deref()) {
         if requested_org != organization {
             anyhow::bail!(
                 "API key belongs to organization '{}', not '{}'.",
@@ -567,7 +577,7 @@ fn auth_selection_from_database_context(
             );
         }
     }
-    if let Some(requested_database) = cli_database {
+    if let (Some(requested_database), Some(database)) = (cli_database, database.as_deref()) {
         if requested_database != database {
             anyhow::bail!(
                 "API key belongs to database '{}', not '{}'.",
@@ -578,9 +588,9 @@ fn auth_selection_from_database_context(
     }
 
     Ok(AuthSelection {
-        organization: Some(organization),
+        organization: organization.or_else(|| cli_org.map(str::to_string)),
         cluster: cluster.map(str::to_string),
-        database: Some(database),
+        database: database.or_else(|| cli_database.map(str::to_string)),
     })
 }
 
@@ -594,14 +604,20 @@ fn resolve_api_key_auth_selection(
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let (keys_path, tables_path) = api_key_context_paths(cli_org, cli_cluster, cli_database);
 
-    match authed_client.get::<DatabaseContextResponse>(&keys_path) {
-        Ok(context) => {
-            auth_selection_from_database_context(context, cli_org, cli_cluster, cli_database)
-        }
-        Err(keys_err) => match authed_client.get::<DatabaseContextResponse>(&tables_path) {
-            Ok(context) => {
-                auth_selection_from_database_context(context, cli_org, cli_cluster, cli_database)
-            }
+    match authed_client.get::<ApiKeyValidationResponse>(&keys_path) {
+        Ok(response) => auth_selection_from_database_context(
+            response.context,
+            cli_org,
+            cli_cluster,
+            cli_database,
+        ),
+        Err(keys_err) => match authed_client.get::<TablesValidationResponse>(&tables_path) {
+            Ok(response) => auth_selection_from_database_context(
+                response.context,
+                cli_org,
+                cli_cluster,
+                cli_database,
+            ),
             Err(tables_err) => Err(anyhow::anyhow!(
                 "failed to resolve API key database context: {}; fallback /v1/tables failed: {}",
                 keys_err,
