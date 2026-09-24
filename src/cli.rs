@@ -140,10 +140,8 @@ pub enum Command {
         #[command(subcommand)]
         action: TableCommand,
     },
-    /// View API request logs for a database
+    /// View API request logs for a cluster
     Logs {
-        #[arg(long)]
-        database: Option<String>,
         #[arg(long)]
         search: Option<String>,
         /// Comma-separated HTTP methods (for example GET,POST)
@@ -173,9 +171,6 @@ pub enum Command {
         /// Maximum request duration in milliseconds
         #[arg(long)]
         max_duration_ms: Option<u64>,
-        /// Comma-separated database names to include on a dedicated cluster
-        #[arg(long, value_delimiter = ',')]
-        log_databases: Vec<String>,
         /// Maximum number of log entries to return (default: 50, max: 200)
         #[arg(long, default_value = "50", value_parser = clap::value_parser!(u64).range(1..=200))]
         limit: u64,
@@ -371,13 +366,11 @@ pub enum ClusterCommand {
 
 #[derive(Subcommand)]
 pub enum KeyCommand {
-    /// List API keys for a database
-    List {
-        #[arg(long)]
-        database: Option<String>,
-    },
+    /// List API keys for a cluster
+    List,
     /// Create a new API key
     Create {
+        /// Default database for the new key (server default when no database is selected)
         #[arg(long)]
         database: Option<String>,
         /// Name for the key
@@ -389,8 +382,6 @@ pub enum KeyCommand {
     },
     /// Delete an API key
     Delete {
-        #[arg(long)]
-        database: Option<String>,
         /// Key ID or full API key token to delete
         id_or_token: String,
     },
@@ -867,16 +858,37 @@ mod tests {
 
     #[test]
     fn key_command_is_singular() {
-        let cli = Cli::try_parse_from(["rtree", "key", "list", "--database", "analytics"]).unwrap();
+        let cli = Cli::try_parse_from(["rtree", "key", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Key {
+                action: KeyCommand::List
+            }
+        ));
+    }
 
-        match cli.command {
-            Command::Key { action } => match action {
-                KeyCommand::List { database } => {
-                    assert_eq!(database.as_deref(), Some("analytics"));
-                }
-                _ => panic!("expected key list command"),
-            },
-            _ => panic!("expected key command"),
+    #[test]
+    fn cluster_scoped_commands_reject_obsolete_database_flags() {
+        for args in [
+            vec!["rtree", "key", "list", "--database", "analytics"],
+            vec![
+                "rtree",
+                "key",
+                "delete",
+                "key-id",
+                "--database",
+                "analytics",
+            ],
+            vec!["rtree", "logs", "--database", "analytics"],
+            vec!["rtree", "logs", "--log-databases", "analytics"],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(args)
+                    .err()
+                    .expect("obsolete flag must fail")
+                    .kind(),
+                ErrorKind::UnknownArgument
+            );
         }
     }
 
@@ -933,8 +945,6 @@ mod tests {
         let cli = Cli::try_parse_from([
             "rtree",
             "logs",
-            "--database",
-            "analytics",
             "--search",
             "request-123",
             "--methods",
@@ -947,8 +957,6 @@ mod tests {
             "cli",
             "--paths",
             "/v1/query,/v1/logs",
-            "--log-databases",
-            "events,audit",
         ])
         .expect("request log filters should parse");
 
@@ -960,7 +968,6 @@ mod tests {
                 levels,
                 sources,
                 paths,
-                log_databases,
                 ..
             } => {
                 assert_eq!(search.as_deref(), Some("request-123"));
@@ -969,7 +976,6 @@ mod tests {
                 assert_eq!(levels, vec!["success", "error"]);
                 assert_eq!(sources, vec!["cli"]);
                 assert_eq!(paths, vec!["/v1/query", "/v1/logs"]);
-                assert_eq!(log_databases, vec!["events", "audit"]);
             }
             _ => panic!("expected logs command"),
         }

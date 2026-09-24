@@ -1,75 +1,20 @@
+mod common;
+
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
-use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::process::Output;
 
 fn login(responses: &[(&str, &str, Value)], selectors: &[&str]) -> (Output, Value, Value) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let responses = responses
-        .iter()
-        .map(|(path, status, body)| (path.to_string(), status.to_string(), body.to_string()))
-        .collect::<Vec<_>>();
-    let server = std::thread::spawn(move || {
-        for (path, status, body) in responses {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "missing request to {path}");
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error) => panic!("accept failed: {error}"),
-                }
-            };
-            socket
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            let mut reader = BufReader::new(socket.try_clone().unwrap());
-            let mut request = String::new();
-            reader.read_line(&mut request).unwrap();
-            assert_eq!(request.trim(), format!("GET {path} HTTP/1.1"));
-            loop {
-                let mut line = String::new();
-                assert!(reader.read_line(&mut line).unwrap() > 0);
-                if line == "\r\n" {
-                    break;
-                }
-            }
-            write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-        }
-    });
-
-    let home = tempfile::tempdir().unwrap();
-    let config_path = home.path().join(".config/rtree/config.json");
-    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     let original = json!({
         "token": "old-test-credential", "email": "old@example.test",
         "default_organization": "old-org", "cluster": "old-cluster", "database": "old-db"
     });
-    std::fs::write(&config_path, original.to_string()).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_rtree"));
-    for (name, _) in std::env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
-        command.env_remove(name);
-    }
-    let output = command
-        .env("HOME", home.path())
-        .args([
-            "--api-url",
-            &url,
-            "--api-key",
-            "rt_login_fixture",
-            "--json",
-            "login",
-        ])
-        .args(selectors)
-        .output()
-        .unwrap();
-    server.join().unwrap();
-    let saved = serde_json::from_slice(&std::fs::read(config_path).unwrap()).unwrap();
+    let responses = responses
+        .iter()
+        .map(|(path, status, body)| (format!("GET {path}"), *status, body.clone()))
+        .collect::<Vec<_>>();
+    let mut args = vec!["--api-key", "rt_login_fixture", "--json", "login"];
+    args.extend_from_slice(selectors);
+    let (output, saved, _) = common::run_cli(&responses, &args, &original);
     (output, saved, original)
 }
 
