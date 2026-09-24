@@ -235,6 +235,8 @@ pub enum Command {
         #[arg(long)]
         database: Option<String>,
     },
+    /// Update rtree to the latest release
+    Update,
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

@@ -32,6 +32,18 @@ cargo build --release
 ./target/release/rtree --help
 ```
 
+## Update
+
+If you installed with the GitHub Releases installer, update in place:
+
+```sh
+rtree update
+```
+
+`rtree update --json` prints `{"updated":true,"previous_version":"<old>","version":"<new>"}`,
+or `{"updated":false,"version":"<current>"}` when already on the latest release.
+Source installs aren't managed by the installer; update them with `git pull && cargo install --path .`.
+
 ## Quick Start
 
 ```sh
