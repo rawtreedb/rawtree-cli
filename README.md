@@ -139,6 +139,11 @@ rtree database create analytics
 rtree database use analytics
 ```
 
+Database creation saves the selected organization, cluster, and new database locally.
+With `--json`, creation returns `{"database":{"name":"analytics"}}`; listing returns
+`{"databases":[{"name":"analytics","s3_storage":null}]}`. Database output no longer
+adds organization metadata that is absent from the API response.
+
 ### Querying
 
 ```sh
@@ -172,8 +177,9 @@ With `--json`, the result is
 ### Keys and tables
 
 ```sh
-rtree key list --database analytics
-rtree key create --database analytics --name ci --permission read_write
+rtree key list
+rtree key create --name ci --permission read_write
+rtree key create --database analytics --name analytics-ci --permission read_write
 
 rtree table list --database analytics
 rtree table describe --database analytics events
@@ -182,6 +188,20 @@ rtree table update --database analytics events --sorting-key 'region, toStartOfH
 ```
 
 Omit `--sorting-key` when creating a table to choose a key automatically per part. `table describe` shows the current sorting key as a string. Updating the key affects new parts and later merges; existing parts may keep their previous key until they are merged. A custom sorting key cannot be reset to automatic.
+
+API keys belong to a cluster. `key list` and `key delete` do not accept `--database`;
+listing includes each key's default database. `key create --database` selects the
+new key's default database, using `RAWTREE_DATABASE` or the saved selection when
+omitted. If none is selected, the server uses `default`.
+
+### Request logs
+
+```sh
+rtree --org team-alpha --cluster production logs --since 1h --status-codes 500
+```
+
+Logs cover the selected cluster. The obsolete `--database` and `--log-databases`
+flags are rejected because the API does not apply database filters.
 
 ### Clusters
 

@@ -190,7 +190,6 @@ fn build_query_string(
     paths: &[String],
     min_duration_ms: Option<u64>,
     max_duration_ms: Option<u64>,
-    log_databases: &[String],
     limit: u64,
     offset: u64,
 ) -> String {
@@ -217,7 +216,6 @@ fn build_query_string(
     if let Some(max_duration_ms) = max_duration_ms {
         append_param(&mut params, "max_duration_ms", &max_duration_ms.to_string());
     }
-    append_csv_param(&mut params, "log_databases", log_databases);
     append_param(&mut params, "limit", &limit.to_string());
     append_param(&mut params, "offset", &offset.to_string());
     params.join("&")
@@ -283,7 +281,6 @@ fn format_log_line(entry: &LogEntry) -> String {
 #[allow(clippy::too_many_arguments)]
 fn fetch_logs(
     client: &ApiClient,
-    database: &str,
     organization: Option<&str>,
     cluster: Option<&str>,
     start_time: &str,
@@ -298,7 +295,6 @@ fn fetch_logs(
     paths: &[String],
     min_duration_ms: Option<u64>,
     max_duration_ms: Option<u64>,
-    log_databases: &[String],
     limit: u64,
     offset: u64,
 ) -> Result<LogsResponse> {
@@ -315,23 +311,16 @@ fn fetch_logs(
         paths,
         min_duration_ms,
         max_duration_ms,
-        log_databases,
         limit,
         offset,
     );
-    let path = org::database_scoped_path(
-        database,
-        &format!("/logs?{query_string}"),
-        organization,
-        cluster,
-    );
+    let path = org::scoped_path(&format!("/v1/logs?{query_string}"), organization, cluster);
     client.get(&path)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn logs(
     client: &ApiClient,
-    database: &str,
     organization: Option<&str>,
     cluster: Option<&str>,
     search: Option<&str>,
@@ -344,7 +333,6 @@ pub fn logs(
     paths: &[String],
     min_duration_ms: Option<u64>,
     max_duration_ms: Option<u64>,
-    log_databases: &[String],
     limit: u64,
     offset: u64,
     since: Option<&str>,
@@ -364,7 +352,6 @@ pub fn logs(
     let (resolved_start, resolved_end) = resolve_time_range(since, until, start_time, end_time)?;
     let resp = fetch_logs(
         client,
-        database,
         organization,
         cluster,
         &resolved_start,
@@ -379,7 +366,6 @@ pub fn logs(
         paths,
         min_duration_ms,
         max_duration_ms,
-        log_databases,
         limit,
         offset,
     )?;
@@ -483,7 +469,6 @@ mod tests {
             &["/v1/query".to_string(), "/v1/logs".to_string()],
             Some(10),
             Some(1000),
-            &["events".to_string()],
             50,
             0,
         );
@@ -498,7 +483,6 @@ mod tests {
         assert!(qs.contains("paths=%2Fv1%2Fquery%2C%2Fv1%2Flogs"));
         assert!(qs.contains("min_duration_ms=10"));
         assert!(qs.contains("max_duration_ms=1000"));
-        assert!(qs.contains("log_databases=events"));
         assert!(qs.contains("limit=50"));
         assert!(qs.contains("offset=0"));
     }
@@ -518,7 +502,6 @@ mod tests {
             &[],
             None,
             None,
-            &[],
             50,
             0,
         );

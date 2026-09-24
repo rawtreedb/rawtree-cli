@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::client::ApiClient;
@@ -7,47 +7,35 @@ use crate::config;
 use crate::org;
 use crate::output;
 
-#[derive(Deserialize)]
-struct DatabaseItem {
+#[derive(Deserialize, Serialize)]
+struct DatabaseRef {
     name: String,
-    #[serde(default)]
-    organization: Option<OrganizationRef>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
+struct DatabaseItem {
+    name: String,
+    s3_storage: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Serialize)]
 struct ListDatabasesResponse {
-    #[serde(default)]
-    organization: Option<OrganizationRef>,
     databases: Vec<DatabaseItem>,
 }
 
-#[derive(Clone, Deserialize)]
-struct OrganizationRef {
-    name: String,
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct CreateDatabaseResponse {
-    name: String,
-    #[serde(default)]
-    organization: Option<OrganizationRef>,
-}
-
-impl CreateDatabaseResponse {
-    fn resolved_organization_name(&self) -> Option<&str> {
-        self.organization
-            .as_ref()
-            .map(|organization| organization.name.as_str())
-    }
+    database: DatabaseRef,
 }
 
 fn apply_database_create_config(
     cfg: &mut config::Config,
     resp: &CreateDatabaseResponse,
+    organization: Option<&str>,
     cluster: Option<&str>,
 ) {
-    cfg.default_database = Some(resp.name.clone());
-    cfg.default_organization = resp.resolved_organization_name().map(ToString::to_string);
+    cfg.default_database = Some(resp.database.name.clone());
+    cfg.default_organization = organization.map(str::to_string);
     if let Some(cluster) = cluster {
         cfg.default_cluster = Some(cluster.to_string());
     }
@@ -75,7 +63,7 @@ fn create_and_persist(
 ) -> Result<CreateDatabaseResponse> {
     let resp = create_database_response(client, name, organization, cluster)?;
     let mut cfg = config::load()?;
-    apply_database_create_config(&mut cfg, &resp, cluster);
+    apply_database_create_config(&mut cfg, &resp, organization, cluster);
     config::save(&cfg)?;
     Ok(resp)
 }
@@ -88,34 +76,15 @@ pub fn list(
 ) -> Result<()> {
     let path = org::databases_collection_path(organization, cluster);
     let resp: ListDatabasesResponse = client.get(&path)?;
-    output::print_result(
-        &json!({
-            "databases": resp.databases.iter().map(|p| json!({
-                "name": p.name,
-                "organization": p
-                    .organization
-                    .as_ref()
-                    .or(resp.organization.as_ref())
-                    .map(|org| json!({"name": org.name})),
-            })).collect::<Vec<_>>()
-        }),
-        json_mode,
-        |_| {
-            if resp.databases.is_empty() {
-                println!("No databases yet. Create one with `rtree database create <name>`.");
-            } else {
-                for p in &resp.databases {
-                    let organization = p
-                        .organization
-                        .as_ref()
-                        .or(resp.organization.as_ref())
-                        .map(|org| org.name.as_str())
-                        .unwrap_or("unknown");
-                    println!("{:<20} org={}", p.name, organization);
-                }
+    output::print_result(&resp, json_mode, |resp| {
+        if resp.databases.is_empty() {
+            println!("No databases yet. Create one with `rtree database create <name>`.");
+        } else {
+            for database in &resp.databases {
+                println!("{}", database.name);
             }
-        },
-    );
+        }
+    });
     Ok(())
 }
 
@@ -127,23 +96,9 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let resp = create_and_persist(client, name, organization, cluster)?;
-
-    output::print_result(
-        &json!({
-            "name": resp.name,
-            "organization": resp
-                .resolved_organization_name()
-                .map(|name| json!({"name": name})),
-        }),
-        json_mode,
-        |_| {
-            let organization_name = resp.resolved_organization_name().unwrap_or("unknown");
-            println!(
-                "Database '{}' created in organization '{}'.",
-                resp.name, organization_name
-            );
-        },
-    );
+    output::print_result(&resp, json_mode, |resp| {
+        println!("Database '{}' created.", resp.database.name);
+    });
     Ok(())
 }
 
@@ -192,10 +147,9 @@ pub fn delete(
 mod tests {
     use super::{
         apply_database_create_config, database_create_collection_path, CreateDatabaseResponse,
-        DatabaseItem, OrganizationRef,
+        DatabaseRef,
     };
     use crate::config::Config;
-    use serde_json::json;
 
     #[test]
     fn apply_database_create_config_preserves_jwt_for_standard_databases() {
@@ -206,31 +160,18 @@ mod tests {
             ..Config::default()
         };
         let resp = CreateDatabaseResponse {
-            name: "analytics".to_string(),
-            organization: Some(OrganizationRef {
-                name: "new_team".to_string(),
-            }),
+            database: DatabaseRef {
+                name: "analytics".to_string(),
+            },
         };
 
-        apply_database_create_config(&mut cfg, &resp, Some("production"));
+        apply_database_create_config(&mut cfg, &resp, Some("new_team"), Some("production"));
 
         assert_eq!(cfg.token.as_deref(), Some("jwt.token.value"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("new_team"));
         assert_eq!(cfg.default_cluster.as_deref(), Some("production"));
         assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
-    }
-
-    #[test]
-    fn database_item_deserializes_nested_organization_field() {
-        let item: DatabaseItem = serde_json::from_value(json!({
-            "name": "analytics",
-            "organization": {"name": "team_alpha"}
-        }))
-        .expect("database item should deserialize");
-
-        assert_eq!(item.name, "analytics");
-        assert_eq!(item.organization.expect("organization").name, "team_alpha");
     }
 
     #[test]
