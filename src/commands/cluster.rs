@@ -413,12 +413,9 @@ fn load_dedicated_clusters(
 ) -> Result<(Value, ListClustersResponse)> {
     let path = clusters_collection_path(organization);
     let value: Value = client.get(&path)?;
-    let resp = parse_clusters_response(&value)?;
+    let resp =
+        serde_json::from_value(value.clone()).context("invalid clusters response from server")?;
     Ok((value, resp))
-}
-
-fn parse_clusters_response(value: &Value) -> Result<ListClustersResponse> {
-    serde_json::from_value(value.clone()).context("invalid clusters response from server")
 }
 
 fn load_cluster_sizes(client: &ApiClient) -> Result<(Value, ClusterSizesResponse)> {
@@ -608,9 +605,9 @@ mod tests {
     use super::{
         cluster_path, cluster_size_json, clusters_collection_path, create_request_body,
         default_cluster_after_delete, delete_output, empty_list_message, format_created_at,
-        format_idle_timeout, format_phase, format_size_per_replica, parse_clusters_response,
-        renamed_default_cluster, resolve_cluster, resolve_cluster_size, ClusterItem,
-        ClusterResources, ClusterSizeItem, ClusterStatus,
+        format_idle_timeout, format_phase, format_size_per_replica, renamed_default_cluster,
+        resolve_cluster, resolve_cluster_size, ClusterItem, ClusterResources, ClusterSizeItem,
+        ClusterStatus, ListClustersResponse,
     };
     use crate::cli::ClusterSizeArg;
 
@@ -777,8 +774,9 @@ mod tests {
 
     #[test]
     fn clusters_response_resolves_without_organization() {
-        let resp = parse_clusters_response(&json!({"clusters": [cluster_json()]}))
-            .expect("response without organization");
+        let resp =
+            serde_json::from_value::<ListClustersResponse>(json!({"clusters": [cluster_json()]}))
+                .expect("response without organization");
         assert!(resp.organization.is_none());
         assert_eq!(
             resolve_cluster(&resp.clusters, "dev").expect("cluster").id,
@@ -788,7 +786,7 @@ mod tests {
 
     #[test]
     fn clusters_response_resolves_with_organization() {
-        let resp = parse_clusters_response(&json!({
+        let resp = serde_json::from_value::<ListClustersResponse>(json!({
             "organization": {"name": "team_alpha"},
             "clusters": [cluster_json()]
         }))
@@ -799,12 +797,15 @@ mod tests {
 
     #[test]
     fn clusters_response_still_requires_clusters_array() {
-        assert!(parse_clusters_response(&json!({"organization": {"name": "a"}})).is_err());
+        assert!(serde_json::from_value::<ListClustersResponse>(
+            json!({"organization": {"name": "a"}})
+        )
+        .is_err());
     }
 
     #[test]
     fn empty_list_message_prefers_server_then_effective_organization() {
-        let with_org = parse_clusters_response(&json!({
+        let with_org = serde_json::from_value::<ListClustersResponse>(json!({
             "organization": {"name": "server_org"},
             "clusters": []
         }))
@@ -814,12 +815,16 @@ mod tests {
             "No dedicated clusters found for organization 'server_org'."
         );
 
-        let without_org = parse_clusters_response(&json!({"clusters": []})).expect("valid");
+        let without_org =
+            serde_json::from_value::<ListClustersResponse>(json!({"clusters": []})).expect("valid");
         assert_eq!(
             empty_list_message(&without_org, Some("cli_org")),
             "No dedicated clusters found for organization 'cli_org'."
         );
-        assert_eq!(empty_list_message(&without_org, None), "No dedicated clusters found.");
+        assert_eq!(
+            empty_list_message(&without_org, None),
+            "No dedicated clusters found."
+        );
     }
 
     #[test]
