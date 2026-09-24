@@ -64,9 +64,12 @@ Interactive login offers browser-based Rawtree authentication or securely prompt
 for an existing API key. Non-interactive and `--json` login continue to use
 browser-based authentication unless `--api-key` is provided.
 
-When using `--api-key`, the CLI stores the API key directly, resolves organization/database
-defaults from that key, and validates any selected cluster against the key's bound cluster.
-With `--json`, API key login returns:
+When using `--api-key`, the CLI validates the key and any supplied organization/cluster
+selectors with the server before saving it. Explicit selections are saved as defaults.
+If the server omits organization/database metadata and no selection was supplied,
+those settings remain unset. Commands that require a database still need `--database`,
+`RAWTREE_DATABASE`, or a saved default from `rtree database use <name>`.
+With `--json`, API key login returns (unset selections are `null`):
 
 ```json
 {"success":true,"config_path":"<path>","database":"<name>","organization":"<name>","cluster":"<name>"}
