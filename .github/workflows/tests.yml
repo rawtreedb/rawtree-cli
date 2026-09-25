@@ -6,7 +6,7 @@ on:
 
 jobs:
   test:
-    name: cargo test
+    name: CLI tests
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -14,9 +14,88 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
       - name: Run tests
         run: cargo test --locked
+
+  platform-integration:
+    name: CLI against Platform Docker Compose
+    if: github.repository == 'rawtreedb/rawtree-cli' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+        with:
+          path: cli
+
+      - name: Require private Platform checkout access
+        env:
+          PLATFORM_REPO_READ_TOKEN: ${{ secrets.PLATFORM_REPO_READ_TOKEN }}
+        run: |
+          if [ -z "$PLATFORM_REPO_READ_TOKEN" ]; then
+            echo '::error::Add a read-only PLATFORM_REPO_READ_TOKEN secret to rawtreedb/rawtree-cli so this job can check out the private Platform repository.'
+            exit 1
+          fi
+
+      - name: Checkout Platform
+        uses: actions/checkout@v6
+        with:
+          repository: rawtreedb/rawtree-platform
+          ref: main
+          path: platform
+          token: ${{ secrets.PLATFORM_REPO_READ_TOKEN }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+
+      - name: Start real Platform
+        working-directory: platform
+        run: |
+          umask 077
+          if ! bash scripts/codex/run-local-compose.sh 18087 > "$RUNNER_TEMP/platform-compose.log" 2>&1; then
+            echo '::error::Platform Docker Compose did not become ready.'
+            bash scripts/codex/run-local-compose.sh 18087 ps || true
+            exit 1
+          fi
+
+      - name: Test CLI against real Platform
+        working-directory: cli
+        run: |
+          token="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_SESSION_TOKEN=//p' ../platform/.env.local)"
+          organization="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_ORGANIZATION=//p' ../platform/.env.local)"
+          cluster="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_CLUSTER=//p' ../platform/.env.local)"
+          if [ -z "$token" ] || [ -z "$organization" ] || [ -z "$cluster" ]; then
+            echo '::error::Platform local bootstrap identity is incomplete.'
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          export RAWTREE_LIVE_API_URL=http://localhost:18087
+          export RAWTREE_LIVE_SESSION_TOKEN="$token"
+          export RAWTREE_LIVE_ORGANIZATION="$organization"
+          export RAWTREE_LIVE_CLUSTER="$cluster"
+          cargo test --locked --test live_platform -- --ignored
+
+      - name: Stop Platform
+        if: always()
+        run: |
+          if [ -f platform/scripts/codex/run-local-compose.sh ]; then
+            cd platform
+            bash scripts/codex/run-local-compose.sh 18087 down --volumes --remove-orphans
+          fi
