@@ -283,7 +283,7 @@ The `Tests` workflow runs the CLI's unit and mock-API contract tests on pushes
 and pull requests. It also runs `tests/live_platform.rs` against the full
 Platform Docker Compose stack on same-repository changes. That test uses the
 Platform launcher to create a local organization and cluster, then checks CLI
-database creation, insertion, querying, and deletion through the real API.
+database creation, insertion, querying, API key login, and deletion through the real API.
 The Platform repository continues to test API endpoints directly.
 
 The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
