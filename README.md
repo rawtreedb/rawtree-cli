@@ -275,8 +275,12 @@ Setup:
 git clone https://github.com/rawtreedb/rawtree-cli.git
 cd rawtree-cli
 cargo check
-cargo test
+cargo fmt --all -- --check
+cargo test --locked
 ```
+
+The `Tests` workflow runs the CLI's unit and mock-API contract tests on pushes
+and pull requests. The Platform repository tests API endpoints directly.
 
 Run locally:
 
