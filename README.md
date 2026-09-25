@@ -44,6 +44,10 @@ rtree update
 or `{"updated":false,"version":"<current>"}` when already on the latest release.
 Source installs aren't managed by the installer; update them with `git pull && cargo install --path .`.
 
+Once a day, interactive commands check GitHub for a newer release and print a one-line notice
+to stderr if one exists. The check is skipped with `--json`, when stderr isn't a terminal, and
+when `CI` is set. Disable it with `RAWTREE_NO_UPDATE_CHECK=1`.
+
 ## Quick Start
 
 ```sh
