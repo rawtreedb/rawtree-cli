@@ -25,7 +25,7 @@ impl LiveCli {
         }
     }
 
-    fn execute(&self, args: &[&str]) -> Output {
+    fn execute(&self, args: &[&str], token: Option<&str>) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rtree"));
         for (name, _) in env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
             command.env_remove(name);
@@ -33,21 +33,25 @@ impl LiveCli {
         command
             .env("HOME", self.home.path())
             .env("RAWTREE_API_URL", &self.url)
-            .env("RAWTREE_API_KEY", &self.token)
             .env("RAWTREE_ORG", &self.organization)
             .env("RAWTREE_CLUSTER", &self.cluster)
             .arg("--json")
-            .args(args)
-            .output()
-            .expect("run rtree")
+            .args(args);
+        if let Some(token) = token {
+            command.env("RAWTREE_API_KEY", token);
+        }
+        command.output().expect("run rtree")
     }
 
     fn json(&self, args: &[&str]) -> Value {
-        let output = self.execute(args);
+        self.json_with_token(args, Some(&self.token))
+    }
+
+    fn json_with_token(&self, args: &[&str], token: Option<&str>) -> Value {
+        let output = self.execute(args, token);
         assert!(
             output.status.success(),
-            "rtree {} failed: {}",
-            args.join(" "),
+            "rtree failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         serde_json::from_slice(&output.stdout).expect("rtree JSON output")
@@ -56,7 +60,7 @@ impl LiveCli {
 
 #[test]
 #[ignore = "requires a bootstrapped Platform Docker Compose stack"]
-fn cli_creates_inserts_queries_and_deletes_through_real_platform() {
+fn cli_data_and_api_key_flow_through_real_platform() {
     let cli = LiveCli::from_environment();
     assert_eq!(cli.json(&["ping"])["status"], "ok");
 
@@ -105,6 +109,46 @@ fn cli_creates_inserts_queries_and_deletes_through_real_platform() {
         queried["data"],
         json!([{"event_id": "cli-live-1", "value": 42}])
     );
+
+    let key = cli.json(&[
+        "key",
+        "create",
+        "--database",
+        &database,
+        "--name",
+        "cli-live",
+        "--permission",
+        "read_only",
+    ]);
+    let key_token = key["token"].as_str().expect("new API key token");
+    assert!(key_token.starts_with("rt_"));
+    let key_id = key["id"].as_str().expect("new API key ID");
+
+    let login = cli.json(&[
+        "--api-key",
+        key_token,
+        "--org",
+        &cli.organization,
+        "--cluster",
+        &cli.cluster,
+        "login",
+        "--database",
+        &database,
+    ]);
+    assert_eq!(login["success"], true);
+    assert_eq!(login["database"], database);
+    // With no token in the environment, the CLI must use the key saved by login.
+    let key_query = cli.json_with_token(
+        &[
+            "query",
+            "--database",
+            &database,
+            "SELECT event_id, value FROM events WHERE event_id = 'cli-live-1'",
+        ],
+        None,
+    );
+    assert_eq!(key_query["data"], queried["data"]);
+    assert_eq!(cli.json(&["key", "delete", key_id])["deleted"], true);
 
     let deleted = cli.json(&["database", "delete", &database]);
     assert_eq!(deleted, json!({"deleted": true, "name": database}));
