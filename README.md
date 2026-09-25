@@ -280,7 +280,23 @@ cargo test --locked
 ```
 
 The `Tests` workflow runs the CLI's unit and mock-API contract tests on pushes
-and pull requests. The Platform repository tests API endpoints directly.
+and pull requests. It also runs `tests/live_platform.rs` against the full
+Platform Docker Compose stack on same-repository changes. That test uses the
+Platform launcher to create a local organization and cluster, then checks CLI
+database creation, insertion, querying, and deletion through the real API.
+The Platform repository continues to test API endpoints directly.
+
+The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
+requires a read-only `PLATFORM_REPO_READ_TOKEN` secret in this repository's
+GitHub Actions settings. Fork pull requests run the unit and mock-API tests;
+GitHub does not pass the private checkout secret to those runs.
+
+To run the real test locally, start Platform from its checkout with
+`bash scripts/codex/run-local-compose.sh 18087`, then set
+`RAWTREE_LIVE_API_URL=http://localhost:18087` and the
+`RAWTREE_LIVE_SESSION_TOKEN`, `RAWTREE_LIVE_ORGANIZATION`, and
+`RAWTREE_LIVE_CLUSTER` values from that checkout's ignored `.env.local`.
+Run `cargo test --locked --test live_platform -- --ignored` in this checkout.
 
 Run locally:
 
