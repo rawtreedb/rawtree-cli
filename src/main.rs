@@ -156,12 +156,21 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.json = effective_json_mode(&cli, io::stdin().is_terminal());
     let json_mode = cli.json;
     if let Err(e) = run(cli) {
+        if let Some(selection) = e.downcast_ref::<commands::auth::LoginSelectionRequired>() {
+            output::print_result(selection, true, |_| {});
+            std::process::exit(2);
+        }
         let code = output::print_error(&e, json_mode);
         std::process::exit(code);
     }
+}
+
+fn effective_json_mode(cli: &Cli, stdin_is_terminal: bool) -> bool {
+    cli.json || (matches!(cli.command, Command::Login { .. }) && !stdin_is_terminal)
 }
 
 fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
@@ -584,12 +593,28 @@ fn run(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::constants::DEFAULT_API_URL;
     use super::{
-        resolve_cluster_from_sources, resolve_database_from_sources, resolve_effective_org_with,
-        resolve_login_cluster_from_sources, resolve_org_from_sources, resolve_token_from_sources,
-        resolve_url_from_sources, should_prompt_for_login_method,
+        effective_json_mode, resolve_cluster_from_sources, resolve_database_from_sources,
+        resolve_effective_org_with, resolve_login_cluster_from_sources, resolve_org_from_sources,
+        resolve_token_from_sources, resolve_url_from_sources, should_prompt_for_login_method, Cli,
     };
+
+    #[test]
+    fn json_is_automatic_only_for_non_terminal_login() {
+        for (args, terminal, expected) in [
+            (vec!["rtree", "login"], false, true),
+            (vec!["rtree", "login"], true, false),
+            (vec!["rtree", "login", "--json"], true, true),
+            (vec!["rtree", "status"], false, false),
+            (vec!["rtree", "status", "--json"], false, true),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(effective_json_mode(&cli, terminal), expected);
+        }
+    }
 
     #[test]
     fn resolve_cluster_uses_cli_first() {

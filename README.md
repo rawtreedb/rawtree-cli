@@ -64,6 +64,40 @@ Interactive login offers browser-based Rawtree authentication or securely prompt
 for an existing API key. Non-interactive and `--json` login continue to use
 browser-based authentication unless `--api-key` is provided.
 
+When stdin is not a terminal, `login` uses JSON automatically. Browser login
+prints a `device_approval_required` JSON event to stderr before waiting for
+approval. Open its `verification_uri_complete` link in a browser on any device.
+JSON mode does not open a browser automatically; interactive terminals can use
+`--no-browser` to print the link without opening it.
+
+```json
+{"event":"device_approval_required","verification_uri":"<approval page>","verification_uri_complete":"<approval link>","user_code":"ABCD-EFGH","expires_in":600}
+```
+
+Read stderr as newline-delimited JSON while the command is running. Stdout
+contains the final JSON result. A successful login exits with code `0`. If a
+selection is needed after approval, stdout contains one of these responses and
+the command exits with code `2`:
+
+```json
+{"needs":"org","orgs":["team-alpha","team-beta"]}
+{"needs":"cluster","organization":"team-alpha","clusters":["production","staging"]}
+{"needs":"database","organization":"team-alpha","cluster":"production","databases":["analytics","billing"]}
+```
+
+Rerun with the corresponding `--org`, `--cluster`, or `--database` flag, retaining
+the selections already made. A single available option is selected automatically.
+An empty choices array means no resources are available at that level. Invalid
+selections and API failures produce a JSON error on stderr and a nonzero exit.
+
+Credentials and defaults are saved only after login completes. An incomplete
+login leaves the existing config unchanged; each retry requires browser approval
+again. Pass all three selectors to avoid selection retries:
+
+```sh
+rtree login --org team-alpha --cluster production --database analytics
+```
+
 When using `--api-key`, the CLI validates the key and any supplied organization/cluster
 selectors with the server before saving it. Explicit selections are saved as defaults.
 If the server omits organization/database metadata and no selection was supplied,

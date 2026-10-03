@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use reqwest::blocking::Client as HttpClient;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::client::ApiClient;
@@ -96,6 +96,36 @@ struct AuthSelection {
     cluster: Option<String>,
     database: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "needs", rename_all = "lowercase")]
+pub enum LoginSelectionRequired {
+    Org {
+        orgs: Vec<String>,
+    },
+    Cluster {
+        organization: String,
+        clusters: Vec<String>,
+    },
+    Database {
+        organization: String,
+        cluster: Option<String>,
+        databases: Vec<String>,
+    },
+}
+
+impl std::fmt::Display for LoginSelectionRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let flag = match self {
+            Self::Org { .. } => "org",
+            Self::Cluster { .. } => "cluster",
+            Self::Database { .. } => "database",
+        };
+        write!(f, "Login requires --{flag} <name>.")
+    }
+}
+
+impl std::error::Error for LoginSelectionRequired {}
 
 #[derive(Deserialize)]
 struct DatabaseItem {
@@ -339,17 +369,34 @@ fn select_or_prompt_organization(
         return select_organization(organizations, cli_org, None, None);
     }
 
+    if json_mode && organizations.len() != 1 {
+        return Err(LoginSelectionRequired::Org {
+            orgs: organizations.iter().map(|org| org.name.clone()).collect(),
+        }
+        .into());
+    }
+
     prompt_for_organization(organizations, json_mode)
 }
 
 fn select_or_prompt_database(
     database_names: &[String],
     selected_org: &str,
+    selected_cluster: Option<&str>,
     cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<Option<String>> {
     if cli_database.is_some() {
         return select_database(database_names, selected_org, cli_database);
+    }
+
+    if json_mode && database_names.len() != 1 {
+        return Err(LoginSelectionRequired::Database {
+            organization: selected_org.to_string(),
+            cluster: selected_cluster.map(str::to_string),
+            databases: database_names.to_vec(),
+        }
+        .into());
     }
 
     select_single_or_prompt("database", database_names, json_mode)
@@ -363,6 +410,14 @@ fn select_or_prompt_cluster(
 ) -> Result<Option<String>> {
     if requested_cluster.is_some() {
         return select_cluster(cluster_names, selected_org, requested_cluster);
+    }
+
+    if json_mode && cluster_names.len() != 1 {
+        return Err(LoginSelectionRequired::Cluster {
+            organization: selected_org.to_string(),
+            clusters: cluster_names.to_vec(),
+        }
+        .into());
     }
 
     select_single_or_prompt("cluster", cluster_names, json_mode)
@@ -383,14 +438,19 @@ fn resolve_selected_database(
 fn resolve_selected_browser_database(
     database_names_result: Result<Vec<String>>,
     selected_org: &str,
+    selected_cluster: Option<&str>,
     cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<Option<String>> {
     match database_names_result {
-        Ok(database_names) => {
-            select_or_prompt_database(&database_names, selected_org, cli_database, json_mode)
-        }
-        Err(err) if cli_database.is_some() => Err(err),
+        Ok(database_names) => select_or_prompt_database(
+            &database_names,
+            selected_org,
+            selected_cluster,
+            cli_database,
+            json_mode,
+        ),
+        Err(err) if json_mode || cli_database.is_some() => Err(err),
         Err(_err) => Ok(None),
     }
 }
@@ -425,7 +485,12 @@ fn resolve_browser_auth_selection(
     let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
     let organizations = match org::list_organizations(&authed_client) {
         Ok(items) => items,
-        Err(err) if cli_org.is_some() || cli_cluster.is_some() || cli_database.is_some() => {
+        Err(err)
+            if json_mode
+                || cli_org.is_some()
+                || cli_cluster.is_some()
+                || cli_database.is_some() =>
+        {
             return Err(err.context("failed to list organizations for auth-time selection"));
         }
         Err(_err) => return Ok(AuthSelection::default()),
@@ -476,6 +541,7 @@ fn resolve_browser_auth_selection(
             )
         }),
         &selected_org.name,
+        selected_cluster.as_deref(),
         cli_database,
         json_mode,
     )?;
@@ -907,7 +973,21 @@ pub fn login_with_browser(
     let total_timeout_seconds = effective_timeout_seconds(timeout_seconds, start.expires_in);
     let poll_interval_seconds = start.interval.max(1);
 
-    if !json_mode {
+    if json_mode {
+        let mut stderr = io::stderr().lock();
+        writeln!(
+            stderr,
+            "{}",
+            json!({
+                "event": "device_approval_required",
+                "verification_uri": start.verification_uri,
+                "verification_uri_complete": start.verification_uri_complete,
+                "user_code": start.user_code,
+                "expires_in": start.expires_in,
+            })
+        )?;
+        stderr.flush()?;
+    } else {
         println!("CLI login code: {}", start.user_code);
         if no_browser {
             println!(
@@ -997,10 +1077,9 @@ mod tests {
     use super::{
         api_key_context_paths, apply_auth_config, auth_selection_from_database_context,
         clear_auth_config, effective_timeout_seconds, parse_login_method, parse_selection_number,
-        prompt_for_selection, resolve_selected_database, select_cluster, select_database,
-        select_or_prompt_cluster, select_or_prompt_database, select_or_prompt_organization,
-        select_organization, AuthResponse, AuthSelection, DatabaseContextResponse, LoginMethod,
-        LOGIN_METHOD_LABELS,
+        resolve_selected_database, select_cluster, select_database, select_or_prompt_cluster,
+        select_or_prompt_database, select_or_prompt_organization, select_organization,
+        AuthResponse, AuthSelection, DatabaseContextResponse, LoginMethod, LOGIN_METHOD_LABELS,
     };
     use crate::config::Config;
     use crate::org::OrganizationItem;
@@ -1157,12 +1236,24 @@ mod tests {
     fn browser_database_selection_prefers_cli_and_fails_when_unknown() {
         let databases = vec!["analytics".to_string(), "billing".to_string()];
 
-        let selected = select_or_prompt_database(&databases, "team_alpha", Some("billing"), true)
-            .expect("selection should succeed")
-            .expect("database should exist");
+        let selected = select_or_prompt_database(
+            &databases,
+            "team_alpha",
+            Some("production"),
+            Some("billing"),
+            true,
+        )
+        .expect("selection should succeed")
+        .expect("database should exist");
         assert_eq!(selected, "billing");
 
-        let err = select_or_prompt_database(&databases, "team_alpha", Some("missing"), true);
+        let err = select_or_prompt_database(
+            &databases,
+            "team_alpha",
+            Some("production"),
+            Some("missing"),
+            true,
+        );
         assert!(err.is_err(), "unknown CLI database should fail");
     }
 
@@ -1170,9 +1261,10 @@ mod tests {
     fn browser_database_selection_uses_only_database_without_prompt() {
         let databases = vec!["analytics".to_string()];
 
-        let selected = select_or_prompt_database(&databases, "team_alpha", None, true)
-            .expect("selection should succeed")
-            .expect("database should exist");
+        let selected =
+            select_or_prompt_database(&databases, "team_alpha", Some("production"), None, true)
+                .expect("selection should succeed")
+                .expect("database should exist");
         assert_eq!(selected, "analytics");
     }
 
@@ -1187,14 +1279,25 @@ mod tests {
     }
 
     #[test]
-    fn browser_selection_requires_prompt_when_json_mode_and_missing() {
+    fn interactive_database_selection_allows_an_empty_list() {
+        assert!(
+            select_or_prompt_database(&[], "team_alpha", Some("production"), None, false)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_selection_reports_choices_when_json_mode_and_missing() {
         let databases = vec!["analytics".to_string(), "billing".to_string()];
 
-        let err = prompt_for_selection("database", &databases, true)
-            .expect_err("json browser login should require an explicit database");
-        assert!(
-            err.to_string().contains("No database specified"),
-            "unexpected error: {err}"
+        let err =
+            select_or_prompt_database(&databases, "team_alpha", Some("production"), None, true)
+                .expect_err("json browser login should require an explicit database");
+        assert_eq!(
+            serde_json::to_value(err.downcast_ref::<super::LoginSelectionRequired>().unwrap())
+                .unwrap(),
+            serde_json::json!({"needs": "database", "organization": "team_alpha", "cluster": "production", "databases": databases})
         );
     }
 
