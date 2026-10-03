@@ -296,6 +296,9 @@ The Platform repository continues to test API endpoints directly.
 The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
 requires a read-only deploy key on the Platform repository, with its private SSH
 key stored as `PLATFORM_REPO_SSH_KEY` in this repository's GitHub Actions secrets.
+The job also requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets to pull
+the private RawTree server and keeper images. Use a read-only Docker Hub token
+with access to those repositories.
 Fork pull requests run the unit and mock-API tests;
 GitHub does not pass the private checkout secret to those runs.
 
