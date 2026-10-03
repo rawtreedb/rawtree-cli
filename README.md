@@ -191,6 +191,7 @@ With `--json`, the result is
 ```sh
 rtree key list
 rtree key create --name ci --permission read_write
+rtree key create --name temporary-ci --permission read_only --expires-at 2027-01-01T00:00:00Z
 rtree key create --database analytics --name analytics-ci --permission read_write
 
 rtree table list --database analytics
@@ -205,6 +206,12 @@ API keys belong to a cluster. `key list` and `key delete` do not accept `--datab
 listing includes each key's default database. `key create --database` selects the
 new key's default database, using `RAWTREE_DATABASE` or the saved selection when
 omitted. If none is selected, the server uses `default`.
+
+`key create --expires-at` accepts a future RFC 3339 timestamp with a timezone.
+The server validates and normalizes it to UTC. Omit the flag for a key that never
+expires. Create/list output includes expiration (`never` in text, `null` in JSON);
+older servers that omit the field are also supported. Expiration is fixed at
+creation; create a replacement key to change it. There is no `key update` command.
 
 ### Request logs
 

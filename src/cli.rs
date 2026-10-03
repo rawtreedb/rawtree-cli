@@ -381,6 +381,9 @@ pub enum KeyCommand {
         /// Permission level: admin, read_write, write_only, read_only
         #[arg(long)]
         permission: String,
+        /// Expiration as an RFC 3339 timestamp with timezone; omit to never expire
+        #[arg(long)]
+        expires_at: Option<String>,
     },
     /// Delete an API key
     Delete {

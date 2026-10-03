@@ -391,6 +391,7 @@ fn run(cli: Cli) -> Result<()> {
                     database,
                     name,
                     permission,
+                    expires_at,
                 } => {
                     let database = resolve_optional_database(database);
                     commands::keys::create(
@@ -398,8 +399,11 @@ fn run(cli: Cli) -> Result<()> {
                         database.as_deref(),
                         effective_org.as_deref(),
                         effective_cluster.as_deref(),
-                        &name,
-                        &permission,
+                        commands::keys::CreateApiKeyRequest {
+                            name: &name,
+                            permission: &permission,
+                            expires_at: expires_at.as_deref(),
+                        },
                         json,
                     )
                 }
