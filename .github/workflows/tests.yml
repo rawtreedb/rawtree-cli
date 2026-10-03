@@ -41,10 +41,10 @@ jobs:
 
       - name: Require private Platform checkout access
         env:
-          PLATFORM_REPO_READ_TOKEN: ${{ secrets.PLATFORM_REPO_READ_TOKEN }}
+          PLATFORM_REPO_SSH_KEY: ${{ secrets.PLATFORM_REPO_SSH_KEY }}
         run: |
-          if [ -z "$PLATFORM_REPO_READ_TOKEN" ]; then
-            echo '::error::Add a read-only PLATFORM_REPO_READ_TOKEN secret to rawtreedb/rawtree-cli so this job can check out the private Platform repository.'
+          if [ -z "$PLATFORM_REPO_SSH_KEY" ]; then
+            echo '::error::Add the private SSH key for a read-only Platform deploy key as PLATFORM_REPO_SSH_KEY in rawtreedb/rawtree-cli.'
             exit 1
           fi
 
@@ -54,7 +54,7 @@ jobs:
           repository: rawtreedb/rawtree-platform
           ref: main
           path: platform
-          token: ${{ secrets.PLATFORM_REPO_READ_TOKEN }}
+          ssh-key: ${{ secrets.PLATFORM_REPO_SSH_KEY }}
           persist-credentials: false
 
       - name: Install Rust toolchain
