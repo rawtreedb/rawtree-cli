@@ -66,14 +66,30 @@ jobs:
           workspaces: cli
 
       - name: Start real Platform
+        id: start-platform
         working-directory: platform
+        env:
+          DIAGNOSTIC_CERT: ${{ vars.PLATFORM_CI_DIAGNOSTIC_CERT }}
         run: |
           umask 077
           if ! bash scripts/codex/run-local-compose.sh 18087 > "$RUNNER_TEMP/platform-compose.log" 2>&1; then
             echo '::error::Platform Docker Compose did not become ready.'
+            printf '%s' "$DIAGNOSTIC_CERT" > "$RUNNER_TEMP/diagnostic-cert.pem"
+            openssl cms -encrypt -binary -aes-256-cbc \
+              -in "$RUNNER_TEMP/platform-compose.log" \
+              -out "$RUNNER_TEMP/platform-compose.enc" -outform DER \
+              "$RUNNER_TEMP/diagnostic-cert.pem"
             bash scripts/codex/run-local-compose.sh 18087 ps || true
             exit 1
           fi
+
+      - name: Upload encrypted startup diagnostic
+        if: failure() && steps.start-platform.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-startup-encrypted
+          path: ${{ runner.temp }}/platform-compose.enc
+          retention-days: 1
 
       - name: Test CLI against real Platform
         working-directory: cli
