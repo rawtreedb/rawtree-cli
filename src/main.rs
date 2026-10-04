@@ -158,9 +158,13 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
 fn main() {
     let cli = Cli::parse();
     let json_mode = cli.json;
+    let check_for_update = !matches!(cli.command, Command::Update | Command::Completions { .. });
     if let Err(e) = run(cli) {
         let code = output::print_error(&e, json_mode);
         std::process::exit(code);
+    }
+    if check_for_update {
+        commands::update::notify_if_outdated(json_mode);
     }
 }
 
