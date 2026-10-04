@@ -97,8 +97,8 @@ fn database_list_preserves_current_metadata_without_obsolete_organization() {
 fn key_list_and_delete_are_cluster_scoped_even_with_a_saved_database() {
     let config = json!({"database": "irrelevant"});
     let response = json!({"keys": [
-        {"id": "key-1", "token": "rt_***hint", "name": "ci", "permission": "admin", "database": {"name": "default"}, "created_at": "2026-09-24"},
-        {"id": "key-2", "token": "rt_***hint", "name": "analytics", "permission": "read_only", "database": {"name": "analytics"}, "created_at": "2026-09-24"}
+        {"id": "key-1", "token": "rt_***hint", "name": "ci", "permission": "admin", "expires_at": null, "database": {"name": "default"}, "created_at": "2026-09-24"},
+        {"id": "key-2", "token": "rt_***hint", "name": "analytics", "permission": "read_only", "expires_at": null, "database": {"name": "analytics"}, "created_at": "2026-09-24"}
     ]});
     for config in [json!({}), config] {
         let (result, _, _) = run(
@@ -142,7 +142,7 @@ fn key_create_uses_server_default_or_an_explicit_or_saved_database() {
             "saved-db",
         ),
     ] {
-        let response = json!({"id": "key-1", "token": "rt_fixture", "name": "ci", "permission": "read_write", "database": {"name": database}});
+        let response = json!({"id": "key-1", "token": "rt_fixture", "name": "ci", "permission": "read_write", "expires_at": null, "database": {"name": database}});
         let mut args = vec![
             "key",
             "create",

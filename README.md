@@ -32,6 +32,18 @@ cargo build --release
 ./target/release/rtree --help
 ```
 
+## Update
+
+If you installed with the GitHub Releases installer, update in place:
+
+```sh
+rtree update
+```
+
+`rtree update --json` prints `{"updated":true,"previous_version":"<old>","version":"<new>"}`,
+or `{"updated":false,"version":"<current>"}` when already on the latest release.
+Source installs aren't managed by the installer; update them with `git pull && cargo install --path .`.
+
 ## Quick Start
 
 ```sh
@@ -213,6 +225,7 @@ With `--json`, the result is
 ```sh
 rtree key list
 rtree key create --name ci --permission read_write
+rtree key create --name temporary-ci --permission read_only --expires-at 2027-01-01T00:00:00Z
 rtree key create --database analytics --name analytics-ci --permission read_write
 
 rtree table list --database analytics
@@ -227,6 +240,12 @@ API keys belong to a cluster. `key list` and `key delete` do not accept `--datab
 listing includes each key's default database. `key create --database` selects the
 new key's default database, using `RAWTREE_DATABASE` or the saved selection when
 omitted. If none is selected, the server uses `default`.
+
+`key create --expires-at` accepts a future RFC 3339 timestamp with a timezone.
+The server validates and normalizes it to UTC. Omit the flag for a key that never
+expires. Create/list output includes expiration (`never` in text, `null` in JSON);
+older servers that omit the field are also supported. Expiration is fixed at
+creation; create a replacement key to change it. There is no `key update` command.
 
 ### Request logs
 
@@ -297,8 +316,41 @@ Setup:
 git clone https://github.com/rawtreedb/rawtree-cli.git
 cd rawtree-cli
 cargo check
-cargo test
+cargo fmt --all -- --check
+cargo test --locked
 ```
+
+The `Tests` workflow runs the CLI's unit and mock-API contract tests on pushes
+to `main` and pull requests. New PR updates cancel obsolete runs. It also runs `tests/live_platform.rs` against the full
+Platform Docker Compose stack on same-repository changes. That test uses the
+Platform launcher to create a local organization and cluster, then checks CLI
+database creation, insertion, querying, API key login, and deletion through the real API.
+The Platform repository continues to test API endpoints directly.
+
+The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
+requires a read-only deploy key on the Platform repository, with its private SSH
+key stored as `PLATFORM_REPO_SSH_KEY` in this repository's GitHub Actions secrets.
+The job also requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets to pull
+the private RawTree server, keeper, and backend images. Use a read-only Docker Hub
+token with access to those repositories.
+
+The integration job uses an ARM64 runner and reuses the published backend image
+only when its source revision is an ancestor of the checked-out Platform `main`
+and its backend release inputs are unchanged. It pulls the verified image by
+digest; if the inputs differ or revision metadata is missing, it builds from
+source. The frontend is built for the local test URL. Compose still starts the
+full stack, waits for healthy services, and bootstraps the test identity. Build
+and startup timings appear as separate CI steps. Private Platform layers are
+never stored in the public CLI repository's Actions cache.
+Fork pull requests run the unit and mock-API tests;
+GitHub does not pass the private checkout secret to those runs.
+
+To run the real test locally, start Platform from its checkout with
+`bash scripts/codex/run-local-compose.sh 18087`, then set
+`RAWTREE_LIVE_API_URL=http://localhost:18087` and the
+`RAWTREE_LIVE_SESSION_TOKEN`, `RAWTREE_LIVE_ORGANIZATION`, and
+`RAWTREE_LIVE_CLUSTER` values from that checkout's ignored `.env.local`.
+Run `cargo test --locked --test live_platform -- --ignored` in this checkout.
 
 Run locally:
 

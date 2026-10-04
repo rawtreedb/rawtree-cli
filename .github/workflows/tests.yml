@@ -3,10 +3,15 @@ name: Tests
 on:
   pull_request:
   push:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    name: cargo test
+    name: CLI tests
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -14,9 +19,148 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
       - name: Run tests
         run: cargo test --locked
+
+  platform-integration:
+    name: CLI against Platform Docker Compose
+    if: github.repository == 'rawtreedb/rawtree-cli' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+        with:
+          path: cli
+
+      - name: Require private Platform checkout access
+        env:
+          PLATFORM_REPO_SSH_KEY: ${{ secrets.PLATFORM_REPO_SSH_KEY }}
+        run: |
+          if [ -z "$PLATFORM_REPO_SSH_KEY" ]; then
+            echo '::error::Add the private SSH key for a read-only Platform deploy key as PLATFORM_REPO_SSH_KEY in rawtreedb/rawtree-cli.'
+            exit 1
+          fi
+
+      - name: Checkout Platform
+        uses: actions/checkout@v6
+        with:
+          repository: rawtreedb/rawtree-platform
+          ref: main
+          path: platform
+          fetch-depth: 0
+          ssh-key: ${{ secrets.PLATFORM_REPO_SSH_KEY }}
+          persist-credentials: false
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v2
+        with:
+          version: v5.5.1
+
+      - name: Reuse published Platform backend
+        id: backend
+        working-directory: platform
+        run: |
+          umask 077
+          docker buildx imagetools inspect rawtree/backend:latest --format '{{json .Manifest}}' > "$RUNNER_TEMP/backend-manifest.json"
+          revision="$(jq -r '.annotations["org.opencontainers.image.revision"] // ""' "$RUNNER_TEMP/backend-manifest.json")"
+          digest="$(jq -r '.digest // ""' "$RUNNER_TEMP/backend-manifest.json")"
+          # Match the backend release inputs, including its build workflow.
+          if [[ "$revision" =~ ^[0-9a-f]{40}$ ]] &&
+             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] &&
+             git merge-base --is-ancestor "$revision" HEAD &&
+             git diff --quiet "$revision" HEAD -- backend .github/workflows/release.yaml scripts/promote_image.py scripts/test_promote_image.py; then
+            docker pull "rawtree/backend@$digest"
+            local_image="$(bash scripts/codex/run-local-compose.sh 18087 config --format json | jq -er '.services.backend.image')"
+            docker tag "rawtree/backend@$digest" "$local_image"
+            echo 'reused=true' >> "$GITHUB_OUTPUT"
+            echo "Reusing published backend from $revision for Platform $(git rev-parse HEAD)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'reused=false' >> "$GITHUB_OUTPUT"
+            echo 'Published backend does not match Platform main; building from source.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build Platform images
+        working-directory: platform
+        env:
+          REUSED_BACKEND: ${{ steps.backend.outputs.reused }}
+        run: |
+          umask 077
+          services=()
+          if [ "$REUSED_BACKEND" = true ]; then
+            services=(frontend)
+          fi
+          if ! bash scripts/codex/run-local-compose.sh 18087 build "${services[@]}" > "$RUNNER_TEMP/platform-build.log" 2>&1; then
+            echo '::error::Platform image build failed.'
+            exit 1
+          fi
+
+      - name: Create Platform containers
+        working-directory: platform
+        run: bash scripts/codex/run-local-compose.sh 18087 create --no-build
+
+      - name: Start real Platform
+        working-directory: platform
+        run: bash scripts/codex/run-local-compose.sh 18087 start --wait --wait-timeout 300
+
+      - name: Bootstrap Platform test identity
+        working-directory: platform
+        run: |
+          umask 077
+          # The bootstrap prints credentials; keep its output private.
+          bash scripts/codex/bootstrap-local-user.sh http://localhost:18087 > "$RUNNER_TEMP/platform-bootstrap.log" 2>&1
+
+      - name: Report Platform startup failure
+        if: failure()
+        working-directory: platform
+        run: bash scripts/codex/run-local-compose.sh 18087 ps --all
+
+      - name: Test CLI against real Platform
+        working-directory: cli
+        run: |
+          token="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_SESSION_TOKEN=//p' ../platform/.env.local)"
+          organization="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_ORGANIZATION=//p' ../platform/.env.local)"
+          cluster="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_CLUSTER=//p' ../platform/.env.local)"
+          if [ -z "$token" ] || [ -z "$organization" ] || [ -z "$cluster" ]; then
+            echo '::error::Platform local bootstrap identity is incomplete.'
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          export RAWTREE_LIVE_API_URL=http://localhost:18087
+          export RAWTREE_LIVE_SESSION_TOKEN="$token"
+          export RAWTREE_LIVE_ORGANIZATION="$organization"
+          export RAWTREE_LIVE_CLUSTER="$cluster"
+          cargo test --locked --test live_platform -- --ignored
+
+      - name: Stop Platform
+        if: always()
+        run: |
+          if [ -f platform/scripts/codex/run-local-compose.sh ]; then
+            cd platform
+            bash scripts/codex/run-local-compose.sh 18087 down --volumes --remove-orphans
+          fi

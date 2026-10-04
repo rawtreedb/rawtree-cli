@@ -400,6 +400,7 @@ fn run(cli: Cli) -> Result<()> {
                     database,
                     name,
                     permission,
+                    expires_at,
                 } => {
                     let database = resolve_optional_database(database);
                     commands::keys::create(
@@ -407,8 +408,11 @@ fn run(cli: Cli) -> Result<()> {
                         database.as_deref(),
                         effective_org.as_deref(),
                         effective_cluster.as_deref(),
-                        &name,
-                        &permission,
+                        commands::keys::CreateApiKeyRequest {
+                            name: &name,
+                            permission: &permission,
+                            expires_at: expires_at.as_deref(),
+                        },
                         json,
                     )
                 }
@@ -567,6 +571,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
         Command::Status => commands::status::status(&url, json),
+        Command::Update => commands::update::update(json),
         Command::Open { database } => {
             let ui_base_url = commands::open::resolve_ui_base_url();
             let effective_org = resolve_effective_org(&client, cli_org);
