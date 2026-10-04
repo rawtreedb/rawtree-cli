@@ -34,18 +34,6 @@ fn renamed_default_org(
     }
 }
 
-fn default_org_after_delete(
-    current_default_organization: Option<&str>,
-    deleted_name: &str,
-    next_available_organization: Option<String>,
-) -> Option<String> {
-    match current_default_organization {
-        Some(current) if current == deleted_name => next_available_organization,
-        Some(current) => Some(current.to_string()),
-        None => None,
-    }
-}
-
 pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
     let organizations = org::list_organizations(client)?;
     output::print_result(
@@ -85,7 +73,7 @@ pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
 
 pub fn use_organization(name: &str, json_mode: bool) -> Result<()> {
     let mut cfg = config::load()?;
-    cfg.default_organization = Some(name.to_string());
+    cfg.set_organization(Some(name.to_string()));
     config::save(&cfg)?;
 
     output::print_result(&json!({"default_organization": name}), json_mode, |_| {
@@ -119,12 +107,7 @@ pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
     if resp.deleted {
         let mut cfg = config::load()?;
         if cfg.default_organization.as_deref() == Some(name) {
-            let next = org::list_organizations(client)?
-                .into_iter()
-                .next()
-                .map(|item| item.name);
-            cfg.default_organization =
-                default_org_after_delete(cfg.default_organization.as_deref(), name, next);
+            cfg.set_organization(None);
             config::save(&cfg)?;
         }
     }
@@ -143,7 +126,7 @@ pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_org_after_delete, renamed_default_org};
+    use super::renamed_default_org;
 
     #[test]
     fn renamed_default_org_updates_matching_default() {
@@ -155,28 +138,5 @@ mod tests {
     fn renamed_default_org_preserves_non_matching_default() {
         let updated = renamed_default_org(Some("team_other"), "team_old", "team_new");
         assert_eq!(updated.as_deref(), Some("team_other"));
-    }
-
-    #[test]
-    fn default_org_after_delete_promotes_next_org() {
-        let updated =
-            default_org_after_delete(Some("team_old"), "team_old", Some("team_next".to_string()));
-        assert_eq!(updated.as_deref(), Some("team_next"));
-    }
-
-    #[test]
-    fn default_org_after_delete_keeps_non_matching_default() {
-        let updated = default_org_after_delete(
-            Some("team_other"),
-            "team_old",
-            Some("team_next".to_string()),
-        );
-        assert_eq!(updated.as_deref(), Some("team_other"));
-    }
-
-    #[test]
-    fn default_org_after_delete_clears_when_no_next_org() {
-        let updated = default_org_after_delete(Some("team_old"), "team_old", None);
-        assert_eq!(updated, None);
     }
 }

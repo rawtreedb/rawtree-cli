@@ -137,7 +137,7 @@ fn key_create_uses_server_default_or_an_explicit_or_saved_database() {
         ),
         (
             vec![],
-            json!({"database": "saved-db"}),
+            json!({"database": "saved-db", "default_organization": "team alpha", "cluster":"prod/eu"}),
             "database=saved-db&organization=team%20alpha&cluster=prod%2Feu",
             "saved-db",
         ),

@@ -197,12 +197,14 @@ pub fn update(
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
     if name.is_some() {
         let mut cfg = config::load()?;
-        cfg.default_cluster = renamed_default_cluster(
-            cfg.default_cluster.as_deref(),
-            &cluster.name,
-            &cluster.id,
-            &updated.name,
-        );
+        if cfg.default_organization.as_deref() == organization {
+            cfg.default_cluster = renamed_default_cluster(
+                cfg.default_cluster.as_deref(),
+                &cluster.name,
+                &cluster.id,
+                &updated.name,
+            );
+        }
         config::save(&cfg)?;
     }
 
@@ -289,9 +291,10 @@ pub fn sizes(client: &ApiClient, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn use_cluster(name: &str, json_mode: bool) -> Result<()> {
+pub fn use_cluster(name: &str, organization: Option<&str>, json_mode: bool) -> Result<()> {
     let mut cfg = config::load()?;
-    cfg.default_cluster = Some(name.to_string());
+    cfg.check_parent_overrides(organization, None)?;
+    cfg.set_cluster(Some(name.to_string()));
     config::save(&cfg)?;
 
     output::print_result(&json!({"default_cluster": name}), json_mode, |_| {
@@ -368,11 +371,14 @@ pub fn delete(
     let value = delete_output(&cluster, result.deleted);
     if result.deleted {
         let mut cfg = config::load()?;
-        cfg.default_cluster = default_cluster_after_delete(
-            cfg.default_cluster.as_deref(),
-            &cluster.name,
-            &cluster.id,
-        );
+        if cfg.default_organization.as_deref() == organization {
+            let next = default_cluster_after_delete(
+                cfg.default_cluster.as_deref(),
+                &cluster.name,
+                &cluster.id,
+            );
+            cfg.set_cluster(next);
+        }
         config::save(&cfg)?;
     }
 

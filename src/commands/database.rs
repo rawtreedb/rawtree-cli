@@ -34,11 +34,9 @@ fn apply_database_create_config(
     organization: Option<&str>,
     cluster: Option<&str>,
 ) {
+    cfg.set_organization(organization.map(str::to_string));
+    cfg.set_cluster(cluster.map(str::to_string));
     cfg.default_database = Some(resp.database.name.clone());
-    cfg.default_organization = organization.map(str::to_string);
-    if let Some(cluster) = cluster {
-        cfg.default_cluster = Some(cluster.to_string());
-    }
 }
 
 fn database_create_collection_path(organization: Option<&str>, cluster: Option<&str>) -> String {
@@ -102,8 +100,14 @@ pub fn create(
     Ok(())
 }
 
-pub fn use_database(name: &str, json_mode: bool) -> Result<()> {
+pub fn use_database(
+    name: &str,
+    organization: Option<&str>,
+    cluster: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
     let mut cfg = config::load()?;
+    cfg.check_parent_overrides(organization, cluster)?;
     cfg.default_database = Some(name.to_string());
     config::save(&cfg)?;
 
@@ -131,6 +135,16 @@ pub fn delete(
         cluster,
     );
     let resp: DeleteDatabaseResponse = client.delete(&path)?;
+    if resp.deleted {
+        let mut cfg = config::load()?;
+        if cfg.default_organization.as_deref() == organization
+            && cfg.default_cluster.as_deref() == cluster
+            && cfg.default_database.as_deref() == Some(name)
+        {
+            cfg.default_database = None;
+            config::save(&cfg)?;
+        }
+    }
     output::print_result(
         &json!({"deleted": resp.deleted, "name": name}),
         json_mode,

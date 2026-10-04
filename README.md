@@ -76,39 +76,61 @@ Interactive login offers browser-based Rawtree authentication or securely prompt
 for an existing API key. Non-interactive and `--json` login continue to use
 browser-based authentication unless `--api-key` is provided.
 
-When stdin is not a terminal, `login` uses JSON automatically. Browser login
-prints a `device_approval_required` JSON event to stderr before waiting for
-approval. Open its `verification_uri_complete` link in a browser on any device.
-JSON mode does not open a browser automatically; interactive terminals can use
-`--no-browser` to print the link without opening it.
+When stdin is not a terminal, `rtree login` uses JSON automatically. Other
+commands require `--json` for JSON output. Use `--json` to select JSON output in
+a terminal.
+
+Browser login emits a `device_approval_required` event on stderr before
+approval. Read stderr as newline-delimited JSON while the command runs. Open the
+`verification_uri_complete` link in a browser on any device. JSON mode does not
+open a browser automatically. Interactive terminals can use `--no-browser` to
+show the link without a browser launch.
 
 ```json
 {"event":"device_approval_required","verification_uri":"<approval page>","verification_uri_complete":"<approval link>","user_code":"ABCD-EFGH","expires_in":600}
 ```
 
-Read stderr as newline-delimited JSON while the command is running. Stdout
-contains the final JSON result. A successful login exits with code `0`. If a
-selection is needed after approval, stdout contains one of these responses and
-the command exits with code `2`:
+The CLI saves authentication immediately after approval. Bare JSON login leaves
+resource defaults unset, writes this result to stdout, and exits with code `0`:
 
 ```json
-{"needs":"org","orgs":["team-alpha","team-beta"]}
-{"needs":"cluster","organization":"team-alpha","clusters":["production","staging"]}
-{"needs":"database","organization":"team-alpha","cluster":"production","databases":["analytics","billing"]}
+{"email":"user@example.com","status":"logged_in","method":"browser","selected_organization":null,"selected_cluster":null,"selected_database":null}
 ```
 
-Rerun with the corresponding `--org`, `--cluster`, or `--database` flag, retaining
-the selections already made. A single available option is selected automatically.
-An empty choices array means no resources are available at that level. Invalid
-selections and API failures produce a JSON error on stderr and a nonzero exit.
-
-Credentials and defaults are saved only after login completes. An incomplete
-login leaves the existing config unchanged; each retry requires browser approval
-again. Pass all three selectors to avoid selection retries:
+Use separate commands to list resources and save defaults. This sequence
+requires only one approval:
 
 ```sh
+rtree login
+rtree organization list --json
+rtree organization use team-alpha --json
+rtree cluster list --json
+rtree cluster use production --json
+rtree database list --json
+rtree database use analytics --json
+```
+
+You can also select defaults during login:
+
+```sh
+rtree login --org team-alpha
 rtree login --org team-alpha --cluster production --database analytics
 ```
+
+The CLI checks requested selectors before it saves defaults. JSON login leaves
+unrequested child defaults unset. If a requested child has no parent selector,
+the CLI uses a parent only when exactly one choice exists. Otherwise, it returns
+a selection error with the choices and exit code `2`.
+
+ Selection and discovery errors after approval retain the saved session. Their
+JSON errors appear on stderr with `authentication_saved: true`. Use the resource
+commands to continue without another login. Approval failures return a JSON
+error on stderr and a nonzero exit. They retain the previous config.
+
+API-key login skips device approval.
+
+Interactive login retains its selection prompts. If a prompt stops or discovery
+fails after approval, the session remains saved.
 
 When using `--api-key`, the CLI validates the key and any supplied organization/cluster
 selectors with the server before saving it. Explicit selections are saved as defaults.
@@ -151,6 +173,22 @@ Resolution priority by setting:
 - Cluster: `--cluster` -> `RAWTREE_CLUSTER` -> config file default cluster
 
 API keys remain restricted to their bound cluster regardless of which selector source is used.
+
+Changing the saved organization clears the cluster and database defaults.
+Changing the saved cluster clears the database default. Selecting the same
+parent retains its child defaults. Ordinary flags override environment variables
+and saved defaults for one command. They do not change the config. A different
+parent override prevents the command from reusing saved child defaults.
+
+A child `use` command rejects parent overrides that differ from the saved
+defaults. Set the saved parent first. The `use` commands change local defaults.
+They do not check whether resources exist.
+
+With user credentials, commands can use the only available organization or
+cluster without saving it. If context is missing or ambiguous, the CLI returns a
+structured error on stderr with exit code `2`. The error includes `needs`,
+available parent choices, and instructions to select a default or pass a flag.
+API-key commands retain the scope and defaults supplied by the server.
 
 ## Commands
 

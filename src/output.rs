@@ -47,6 +47,70 @@ pub fn coded_error(
     CliError::new(code, message, exit_code).into()
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "needs", rename_all = "lowercase")]
+pub enum SelectionRequired {
+    Org {
+        orgs: Vec<String>,
+    },
+    Cluster {
+        organization: String,
+        clusters: Vec<String>,
+    },
+    Database,
+}
+
+impl fmt::Display for SelectionRequired {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::Org { .. } => "Select an organization. List choices with `rtree organization list`. Save a default with `rtree organization use <name>`, or pass --org <name>.",
+            Self::Cluster { .. } => "Select a cluster. List choices with `rtree cluster list`. Save a default with `rtree cluster use <name>`, or pass --cluster <name>.",
+            Self::Database => "Select a database. List choices with `rtree database list`. Save a default with `rtree database use <name>`, or pass --database <name>.",
+        };
+        f.write_str(message)
+    }
+}
+
+impl std::error::Error for SelectionRequired {}
+
+#[derive(Debug)]
+pub struct AuthenticationSavedError(pub anyhow::Error);
+
+impl fmt::Display for AuthenticationSavedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "The CLI saved authentication. {:#}", self.0)
+    }
+}
+
+impl std::error::Error for AuthenticationSavedError {}
+
+fn error_result(err: &anyhow::Error) -> (serde_json::Value, i32) {
+    if let Some(saved) = err.downcast_ref::<AuthenticationSavedError>() {
+        let (mut result, code) = error_result(&saved.0);
+        result["authentication_saved"] = json!(true);
+        result["hint"] = json!("The CLI saved authentication. Use the resource commands to select defaults without another login.");
+        return (result, code);
+    }
+    if let Some(selection) = err.downcast_ref::<SelectionRequired>() {
+        let mut result = serde_json::to_value(selection).unwrap();
+        result["error"] = json!({"code": "selection_required", "message": selection.to_string()});
+        result["exit_code"] = json!(2);
+        return (result, 2);
+    }
+    if let Some(cli_err) = err.downcast_ref::<CliError>() {
+        return (
+            json!({"error": {"message": cli_err.message(), "code": cli_err.code()}}),
+            cli_err.exit_code(),
+        );
+    }
+    let msg = format!("{:#}", err);
+    let code = exit_code_for(&msg);
+    (
+        json!({"error": {"message": msg, "code": error_code_for(code)}, "exit_code": code}),
+        code,
+    )
+}
+
 /// Print a value: as JSON when json_mode is true, otherwise run the human formatter.
 pub fn print_result<T: Serialize, F: FnOnce(&T)>(value: &T, json_mode: bool, human: F) {
     if json_mode {
@@ -59,36 +123,15 @@ pub fn print_result<T: Serialize, F: FnOnce(&T)>(value: &T, json_mode: bool, hum
 /// Print an error. In JSON mode, outputs structured JSON to stderr.
 /// Returns an appropriate exit code based on the error message.
 pub fn print_error(err: &anyhow::Error, json_mode: bool) -> i32 {
-    if let Some(cli_err) = err.downcast_ref::<CliError>() {
-        if json_mode {
-            eprintln!(
-                "{}",
-                json!({"error": {"message": cli_err.message(), "code": cli_err.code()}})
-            );
-        } else {
-            eprintln!("Error: {}", cli_err.message());
-        }
-        return cli_err.exit_code();
-    }
-
-    let msg = format!("{:#}", err);
-    let code = exit_code_for(&msg);
-
+    let (result, code) = error_result(err);
     if json_mode {
-        eprintln!(
-            "{}",
-            json!({
-                "error": {
-                    "message": msg,
-                    "code": error_code_for(code),
-                },
-                "exit_code": code
-            })
-        );
+        eprintln!("{}", result);
     } else {
-        eprintln!("Error: {}", msg);
+        eprintln!("Error: {:#}", err);
+        if let Some(hint) = result.get("hint").and_then(|value| value.as_str()) {
+            eprintln!("{}", hint);
+        }
     }
-
     code
 }
 

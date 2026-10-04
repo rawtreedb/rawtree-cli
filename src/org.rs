@@ -19,12 +19,21 @@ pub fn list_organizations(client: &ApiClient) -> Result<Vec<OrganizationItem>> {
     Ok(resp.organizations)
 }
 
-pub fn first_organization_name(client: &ApiClient) -> Option<String> {
-    list_organizations(client)
-        .ok()?
+pub fn list_cluster_names(client: &ApiClient, organization: &str) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Cluster {
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct Response {
+        clusters: Vec<Cluster>,
+    }
+    let response: Response = client.get(&scoped_path("/v1/clusters", Some(organization), None))?;
+    Ok(response
+        .clusters
         .into_iter()
-        .next()
-        .map(|org| org.name)
+        .map(|cluster| cluster.name)
+        .collect())
 }
 
 pub fn databases_collection_path(organization: Option<&str>, cluster: Option<&str>) -> String {

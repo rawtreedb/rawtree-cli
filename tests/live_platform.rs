@@ -1,5 +1,6 @@
 use std::env;
-use std::process::{Command, Output};
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -152,4 +153,87 @@ fn cli_data_and_api_key_flow_through_real_platform() {
 
     let deleted = cli.json(&["database", "delete", &database]);
     assert_eq!(deleted, json!({"deleted": true, "name": database}));
+}
+
+#[test]
+#[ignore = "requires a bootstrapped Platform Docker Compose stack"]
+fn one_device_approval_supports_resource_selection_with_saved_credentials() {
+    let cli = LiveCli::from_environment();
+    let mut login = Command::new(env!("CARGO_BIN_EXE_rtree"));
+    for (name, _) in env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
+        login.env_remove(name);
+    }
+    let mut child = login
+        .env("HOME", cli.home.path())
+        .args(["--api-url", &cli.url, "login", "--timeout-seconds", "30"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start login");
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut line = String::new();
+    stderr.read_line(&mut line).expect("read approval event");
+    let event: Value = serde_json::from_str(&line).expect("approval event JSON");
+    assert_eq!(event["event"], "device_approval_required");
+    let approval = reqwest::blocking::Client::new()
+        .post(format!("{}/v1/auth/cli/device/approve", cli.url))
+        .bearer_auth(&cli.token)
+        .json(&json!({"user_code":event["user_code"]}))
+        .send()
+        .expect("approve device login");
+    assert!(approval.status().is_success(), "device approval failed");
+    let output = child.wait_with_output().expect("finish login");
+    assert!(output.status.success(), "login failed");
+    let result: Value = serde_json::from_slice(&output.stdout).expect("login JSON");
+    for field in [
+        "selected_organization",
+        "selected_cluster",
+        "selected_database",
+    ] {
+        assert!(result[field].is_null());
+    }
+    let saved_command = |args: &[&str]| -> Value {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rtree"));
+        for (name, _) in env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
+            command.env_remove(name);
+        }
+        let output = command
+            .env("HOME", cli.home.path())
+            .arg("--json")
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .expect("run saved-session command");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("command JSON")
+    };
+    let organizations = saved_command(&["organization", "list"]);
+    assert!(organizations["organizations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|org| org["name"] == cli.organization));
+    saved_command(&["organization", "use", &cli.organization]);
+    let clusters = saved_command(&["cluster", "list"]);
+    assert!(clusters["clusters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|cluster| cluster["name"] == cli.cluster));
+    saved_command(&["cluster", "use", &cli.cluster]);
+    let databases = saved_command(&["database", "list"]);
+    let database = databases["databases"]
+        .as_array()
+        .unwrap()
+        .first()
+        .expect("bootstrap database")["name"]
+        .as_str()
+        .unwrap();
+    saved_command(&["database", "use", database]);
+    saved_command(&["table", "list"]);
 }

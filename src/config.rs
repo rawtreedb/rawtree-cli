@@ -20,6 +20,37 @@ pub struct Config {
     pub default_cluster: Option<String>,
 }
 
+impl Config {
+    pub fn set_organization(&mut self, organization: Option<String>) {
+        if self.default_organization != organization {
+            self.default_cluster = None;
+            self.default_database = None;
+        }
+        self.default_organization = organization;
+    }
+
+    pub fn set_cluster(&mut self, cluster: Option<String>) {
+        if self.default_cluster != cluster {
+            self.default_database = None;
+        }
+        self.default_cluster = cluster;
+    }
+
+    pub fn check_parent_overrides(
+        &self,
+        organization: Option<&str>,
+        cluster: Option<&str>,
+    ) -> Result<()> {
+        if organization.is_some() && organization != self.default_organization.as_deref() {
+            return Err(crate::output::coded_error("context_conflict", "The organization override differs from the saved default. Run `rtree organization use <name>` first.", 2));
+        }
+        if cluster.is_some() && cluster != self.default_cluster.as_deref() {
+            return Err(crate::output::coded_error("context_conflict", "The cluster override differs from the saved default. Run `rtree cluster use <name>` first.", 2));
+        }
+        Ok(())
+    }
+}
+
 fn config_path() -> Result<PathBuf> {
     let dir = dirs_fallback().context("cannot determine config directory")?;
     Ok(dir.join("config.json"))
