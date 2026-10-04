@@ -60,6 +60,68 @@ impl LiveCli {
 
 #[test]
 #[ignore = "requires a bootstrapped Platform Docker Compose stack"]
+fn logout_removes_saved_authentication_against_real_platform() {
+    let cli = LiveCli::from_environment();
+    let config_path = cli.home.path().join(".config/rtree/config.json");
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config directory");
+    std::fs::write(
+        &config_path,
+        json!({
+            "token": cli.token,
+            "email": "logout@example.test",
+            "url": cli.url,
+            "database": "logout_fixture",
+            "default_organization": cli.organization,
+            "cluster": cli.cluster
+        })
+        .to_string(),
+    )
+    .expect("seed saved session");
+
+    // No environment token: successful API access must use the saved session.
+    assert!(cli.json_with_token(&["database", "list"], None)["databases"].is_array());
+    assert_eq!(
+        cli.json_with_token(&["logout"], None),
+        json!({"status": "logged_out"})
+    );
+    let saved: Value = serde_json::from_slice(&std::fs::read(&config_path).expect("read config"))
+        .expect("parse config");
+    for field in [
+        "token",
+        "email",
+        "url",
+        "database",
+        "default_organization",
+        "cluster",
+    ] {
+        // Do not print credential values if a regression leaves them behind.
+        assert!(
+            matches!(saved.get(field), Some(Value::Null)),
+            "logout retained {field}"
+        );
+    }
+    assert_eq!(
+        cli.json_with_token(&["status"], None)["authenticated"],
+        false
+    );
+
+    let denied = cli.execute(&["database", "list"], None);
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(denied.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&denied.stderr).expect("authentication error JSON");
+    assert_eq!(error["error"]["code"], "auth_error");
+
+    assert_eq!(
+        cli.json_with_token(&["logout"], None),
+        json!({"status": "logged_out"})
+    );
+    // Logout clears local credentials; the independent seed session stays usable.
+    assert!(cli.json(&["database", "list"])["databases"].is_array());
+}
+
+#[test]
+#[ignore = "requires a bootstrapped Platform Docker Compose stack"]
 fn cli_data_and_api_key_flow_through_real_platform() {
     let cli = LiveCli::from_environment();
     assert_eq!(cli.json(&["ping"])["status"], "ok");
