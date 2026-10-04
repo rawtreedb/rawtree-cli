@@ -62,22 +62,40 @@ impl LiveCli {
 #[ignore = "requires a bootstrapped Platform Docker Compose stack"]
 fn logout_removes_saved_authentication_against_real_platform() {
     let cli = LiveCli::from_environment();
+    let email = env::var("RAWTREE_LIVE_EMAIL").expect("RAWTREE_LIVE_EMAIL is required");
+    let password = env::var("RAWTREE_LIVE_PASSWORD").expect("RAWTREE_LIVE_PASSWORD is required");
     let config_path = cli.home.path().join(".config/rtree/config.json");
-    std::fs::create_dir_all(config_path.parent().expect("config parent"))
-        .expect("create config directory");
-    std::fs::write(
-        &config_path,
-        json!({
-            "token": cli.token,
-            "email": "logout@example.test",
-            "url": cli.url,
-            "database": "logout_fixture",
-            "default_organization": cli.organization,
-            "cluster": cli.cluster
-        })
-        .to_string(),
-    )
-    .expect("seed saved session");
+    assert!(!config_path.exists());
+    let login = cli.json_with_token(
+        &[
+            "--org",
+            &cli.organization,
+            "--cluster",
+            &cli.cluster,
+            "login",
+            "--email",
+            &email,
+            "--password",
+            &password,
+        ],
+        None,
+    );
+    assert_eq!(login["status"], "logged_in");
+    assert_eq!(login["email"], email);
+
+    let saved: Value = serde_json::from_slice(&std::fs::read(&config_path).expect("read config"))
+        .expect("parse config");
+    assert!(saved["token"]
+        .as_str()
+        .is_some_and(|token| !token.is_empty()));
+    assert_eq!(saved["email"], email);
+    assert_eq!(saved["url"], cli.url);
+    assert_eq!(saved["default_organization"], cli.organization);
+    assert_eq!(saved["cluster"], cli.cluster);
+    assert_eq!(
+        cli.json_with_token(&["status"], None)["authenticated"],
+        true
+    );
 
     // No environment token: successful API access must use the saved session.
     assert!(cli.json_with_token(&["database", "list"], None)["databases"].is_array());

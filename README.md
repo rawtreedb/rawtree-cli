@@ -291,6 +291,9 @@ to `main` and pull requests. New PR updates cancel obsolete runs. It also runs `
 Platform Docker Compose stack on same-repository changes. That test uses the
 Platform launcher to create a local organization and cluster, then checks CLI
 database creation, insertion, querying, API key login, and deletion through the real API.
+It also logs in with the local test user's email and password, verifies API access
+using the saved session, logs out, and checks that credentials are cleared and API
+access requires authentication again.
 The Platform repository continues to test API endpoints directly.
 
 The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
@@ -316,6 +319,8 @@ To run the real test locally, start Platform from its checkout with
 `RAWTREE_LIVE_API_URL=http://localhost:18087` and the
 `RAWTREE_LIVE_SESSION_TOKEN`, `RAWTREE_LIVE_ORGANIZATION`, and
 `RAWTREE_LIVE_CLUSTER` values from that checkout's ignored `.env.local`.
+Also set `RAWTREE_LIVE_EMAIL` and `RAWTREE_LIVE_PASSWORD` from
+`RAWTREE_LOCAL_BOOTSTRAP_EMAIL` and `RAWTREE_LOCAL_BOOTSTRAP_PASSWORD` in the same file.
 Run `cargo test --locked --test live_platform -- --ignored` in this checkout.
 
 Run locally:
