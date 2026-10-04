@@ -400,6 +400,21 @@ fn run(cli: Cli) -> Result<()> {
             }
         },
         Command::Cluster { action } => {
+            if let ClusterCommand::Status {
+                name_or_id: Some(name),
+            } = &action
+            {
+                if cli_cluster
+                    .as_deref()
+                    .is_some_and(|cluster| cluster != name)
+                {
+                    return Err(output::coded_error(
+                        "context_conflict",
+                        "The positional cluster and --cluster values differ. Use one cluster selector, or supply the same value for both.",
+                        2,
+                    ));
+                }
+            }
             let effective_org = match &action {
                 ClusterCommand::Use { .. } | ClusterCommand::Sizes => None,
                 _ => resolve_effective_org(&client, cli_org.clone())?,
@@ -431,7 +446,13 @@ fn run(cli: Cli) -> Result<()> {
                     json,
                 ),
                 ClusterCommand::Status { name_or_id } => {
-                    commands::cluster::status(&client, &name_or_id, effective_org.as_deref(), json)
+                    let name_or_id = name_or_id.or(effective_cluster);
+                    commands::cluster::status(
+                        &client,
+                        name_or_id.as_deref(),
+                        effective_org.as_deref(),
+                        json,
+                    )
                 }
                 ClusterCommand::Update {
                     name_or_id,

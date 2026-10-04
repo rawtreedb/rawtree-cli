@@ -59,13 +59,19 @@ pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
 pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
     let resp: CreateOrganizationResponse =
         client.post("/v1/organizations", &json!({"organization_name": name}))?;
+    let hint = format!(
+        "Saved defaults did not change. Select this organization with `rtree organization use {}`.",
+        output::command_argument(&resp.name)
+    );
     output::print_result(
         &json!({
             "name": resp.name,
+            "hint": hint,
         }),
         json_mode,
         |_| {
             println!("Organization '{}' created.", resp.name);
+            println!("{hint}");
         },
     );
     Ok(())

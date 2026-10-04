@@ -305,12 +305,33 @@ pub fn use_cluster(name: &str, organization: Option<&str>, json_mode: bool) -> R
 
 pub fn status(
     client: &ApiClient,
-    name_or_id: &str,
+    name_or_id: Option<&str>,
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
     let (_, resp) = load_dedicated_clusters(client, organization)?;
-    let cluster = resolve_cluster(&resp.clusters, name_or_id)?;
+    let cluster = match name_or_id {
+        Some(name_or_id) => resolve_cluster(&resp.clusters, name_or_id)?,
+        None => match resp.clusters.as_slice() {
+            [cluster] => cluster,
+            _ => {
+                return Err(output::SelectionRequired::Cluster {
+                    organization: resp
+                        .organization
+                        .as_ref()
+                        .map(|org| org.name.clone())
+                        .or_else(|| organization.map(str::to_string))
+                        .unwrap_or_default(),
+                    clusters: resp
+                        .clusters
+                        .iter()
+                        .map(|cluster| cluster.name.clone())
+                        .collect(),
+                }
+                .into())
+            }
+        },
+    };
 
     output::print_result(cluster, json_mode, |cluster| {
         println!("Cluster: {}", cluster.name);
@@ -407,10 +428,7 @@ fn empty_list_message(resp: &ListClustersResponse, organization: Option<&str>) -
         .as_ref()
         .map(|org| org.name.as_str())
         .or(organization);
-    match name {
-        Some(name) => format!("No dedicated clusters found for organization '{name}'."),
-        None => "No dedicated clusters found.".to_string(),
-    }
+    output::empty_cluster_message(name)
 }
 
 fn load_dedicated_clusters(
@@ -818,18 +836,18 @@ mod tests {
         .expect("valid");
         assert_eq!(
             empty_list_message(&with_org, Some("cli_org")),
-            "No dedicated clusters found for organization 'server_org'."
+            "Organization 'server_org' has no clusters. Create a cluster with `rtree cluster create --org server_org`."
         );
 
         let without_org =
             serde_json::from_value::<ListClustersResponse>(json!({"clusters": []})).expect("valid");
         assert_eq!(
             empty_list_message(&without_org, Some("cli_org")),
-            "No dedicated clusters found for organization 'cli_org'."
+            "Organization 'cli_org' has no clusters. Create a cluster with `rtree cluster create --org cli_org`."
         );
         assert_eq!(
             empty_list_message(&without_org, None),
-            "No dedicated clusters found."
+            "No clusters found. Create a cluster with `rtree cluster create`."
         );
     }
 

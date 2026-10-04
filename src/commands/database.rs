@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::client::ApiClient;
+use crate::client::{with_cluster_status_hint, ApiClient};
 use crate::config;
 use crate::org;
 use crate::output;
@@ -50,7 +50,9 @@ fn create_database_response(
     cluster: Option<&str>,
 ) -> Result<CreateDatabaseResponse> {
     let path = database_create_collection_path(organization, cluster);
-    client.post(&path, &json!({ "name": name }))
+    client
+        .post(&path, &json!({ "name": name }))
+        .map_err(|error| with_cluster_status_hint(error, organization, cluster))
 }
 
 fn create_and_persist(
@@ -73,7 +75,9 @@ pub fn list(
     json_mode: bool,
 ) -> Result<()> {
     let path = org::databases_collection_path(organization, cluster);
-    let resp: ListDatabasesResponse = client.get(&path)?;
+    let resp: ListDatabasesResponse = client
+        .get(&path)
+        .map_err(|error| with_cluster_status_hint(error, organization, cluster))?;
     output::print_result(&resp, json_mode, |resp| {
         if resp.databases.is_empty() {
             println!("No databases yet. Create one with `rtree database create <name>`.");
