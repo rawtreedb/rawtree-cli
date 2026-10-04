@@ -115,16 +115,20 @@ jobs:
             exit 1
           fi
 
+      - name: Create Platform containers
+        working-directory: platform
+        run: bash scripts/codex/run-local-compose.sh 18087 create --no-build
+
       - name: Start real Platform
+        working-directory: platform
+        run: bash scripts/codex/run-local-compose.sh 18087 start --wait --wait-timeout 300
+
+      - name: Bootstrap Platform test identity
         working-directory: platform
         run: |
           umask 077
-          # Images are ready; retain the launcher's isolation and bootstrap.
-          {
-            bash scripts/codex/run-local-compose.sh 18087 create --no-build
-            bash scripts/codex/run-local-compose.sh 18087 start --wait --wait-timeout 300
-            bash scripts/codex/bootstrap-local-user.sh http://localhost:18087
-          } > "$RUNNER_TEMP/platform-compose.log" 2>&1
+          # The bootstrap prints credentials; keep its output private.
+          bash scripts/codex/bootstrap-local-user.sh http://localhost:18087 > "$RUNNER_TEMP/platform-bootstrap.log" 2>&1
 
       - name: Report Platform startup failure
         if: failure()
