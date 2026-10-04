@@ -335,8 +335,8 @@ pub enum ClusterCommand {
     },
     /// Show the current state of a dedicated cluster
     Status {
-        /// Cluster name or ID
-        name_or_id: String,
+        /// Cluster name or ID. If omitted, use --cluster, RAWTREE_CLUSTER, or the saved default.
+        name_or_id: Option<String>,
     },
     /// Update dedicated cluster settings
     Update {
@@ -650,7 +650,7 @@ mod tests {
             status.command,
             Command::Cluster {
                 action: ClusterCommand::Status { name_or_id }
-            } if name_or_id == "production"
+            } if name_or_id.as_deref() == Some("production")
         ));
 
         let stop = Cli::try_parse_from(["rtree", "cluster", "stop", "production"])

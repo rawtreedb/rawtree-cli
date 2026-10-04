@@ -21,7 +21,7 @@ pub fn run_cli_with_progress(
     let (mut outputs, mut configs, bodies) = if on_progress.is_none() {
         run_cli_sequence(responses, &[args], original)
     } else {
-        run_sequence_with_progress(responses, &[args], original, on_progress)
+        run_sequence_with_progress(responses, &[args], original, on_progress, &[])
     };
     (outputs.remove(0), configs.remove(0), bodies)
 }
@@ -31,7 +31,19 @@ pub fn run_cli_sequence(
     commands: &[&[&str]],
     original: &Value,
 ) -> (Vec<Output>, Vec<Value>, Vec<Value>) {
-    run_sequence_with_progress(responses, commands, original, None)
+    run_sequence_with_progress(responses, commands, original, None, &[])
+}
+
+#[allow(dead_code)]
+pub fn run_cli_with_env(
+    responses: &[(String, &str, Value)],
+    args: &[&str],
+    original: &Value,
+    environment: &[(&str, &str)],
+) -> (Output, Value, Vec<Value>) {
+    let (mut outputs, mut configs, bodies) =
+        run_sequence_with_progress(responses, &[args], original, None, environment);
+    (outputs.remove(0), configs.remove(0), bodies)
 }
 
 fn run_sequence_with_progress(
@@ -39,6 +51,7 @@ fn run_sequence_with_progress(
     commands: &[&[&str]],
     original: &Value,
     on_progress: Option<fn(&str)>,
+    environment: &[(&str, &str)],
 ) -> (Vec<Output>, Vec<Value>, Vec<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -128,6 +141,7 @@ fn run_sequence_with_progress(
         for (name, _) in std::env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
             command.env_remove(name);
         }
+        command.envs(environment.iter().copied());
         let mut child = command
             .env("HOME", home.path())
             .args(["--api-url", &url])

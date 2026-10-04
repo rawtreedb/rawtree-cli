@@ -62,6 +62,15 @@ pub enum SelectionRequired {
 
 impl fmt::Display for SelectionRequired {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Cluster {
+            organization,
+            clusters,
+        } = self
+        {
+            if clusters.is_empty() {
+                return f.write_str(&empty_cluster_message(Some(organization)));
+            }
+        }
         let message = match self {
             Self::Org { .. } => "Select an organization. List choices with `rtree organization list`. Save a default with `rtree organization use <name>`, or pass --org <name>.",
             Self::Cluster { .. } => "Select a cluster. List choices with `rtree cluster list`. Save a default with `rtree cluster use <name>`, or pass --cluster <name>.",
@@ -72,6 +81,28 @@ impl fmt::Display for SelectionRequired {
 }
 
 impl std::error::Error for SelectionRequired {}
+
+pub fn command_argument(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
+pub fn empty_cluster_message(organization: Option<&str>) -> String {
+    match organization {
+        Some(name) => format!(
+            "Organization '{name}' has no clusters. Create a cluster with `rtree cluster create --org {}`.",
+            command_argument(name)
+        ),
+        None => "No clusters found. Create a cluster with `rtree cluster create`.".to_string(),
+    }
+}
 
 #[derive(Debug)]
 pub struct AuthenticationSavedError(pub anyhow::Error);
@@ -102,6 +133,16 @@ fn error_result(err: &anyhow::Error) -> (serde_json::Value, i32) {
             json!({"error": {"message": cli_err.message(), "code": cli_err.code()}}),
             cli_err.exit_code(),
         );
+    }
+    if let Some(cluster_err) = err.downcast_ref::<crate::client::ClusterNotReadyError>() {
+        let mut result = json!({
+            "error": {"message": cluster_err.message, "code": "cluster_not_ready"},
+            "exit_code": 3
+        });
+        if let Some(hint) = &cluster_err.hint {
+            result["hint"] = json!(hint);
+        }
+        return (result, 3);
     }
     let msg = format!("{:#}", err);
     let code = exit_code_for(&msg);

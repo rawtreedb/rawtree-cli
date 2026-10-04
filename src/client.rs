@@ -13,6 +13,48 @@ const RAWTREE_CLIENT_VERSION_HEADER: &str = "x-rawtree-client-version";
 const RAWTREE_CLIENT_VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
 const RAWTREE_USER_AGENT: &str = concat!("rawtree-cli/", env!("CARGO_PKG_VERSION"));
 
+#[derive(Debug)]
+pub struct ClusterNotReadyError {
+    pub message: String,
+    pub hint: Option<String>,
+}
+
+impl std::fmt::Display for ClusterNotReadyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Server error (503): {}", self.message)
+    }
+}
+
+impl std::error::Error for ClusterNotReadyError {}
+
+pub fn with_cluster_status_hint(
+    mut error: anyhow::Error,
+    organization: Option<&str>,
+    cluster: Option<&str>,
+) -> anyhow::Error {
+    if let (Some(cluster_error), Some(cluster)) =
+        (error.downcast_mut::<ClusterNotReadyError>(), cluster)
+    {
+        let mut command = "rtree cluster status".to_string();
+        if let Some(organization) = organization {
+            command.push_str(&format!(
+                " --org {}",
+                crate::output::command_argument(organization)
+            ));
+        }
+        command.push_str(&format!(
+            " --cluster {}",
+            crate::output::command_argument(cluster)
+        ));
+        let status_hint = format!("Check the cluster with `{command}`.");
+        cluster_error.hint = Some(match cluster_error.hint.take() {
+            Some(hint) => format!("{hint} {status_hint}"),
+            None => status_hint,
+        });
+    }
+    error
+}
+
 pub struct ApiClient {
     pub base_url: String,
     pub token: Option<String>,
@@ -166,6 +208,13 @@ fn format_server_error(body: &str, status: u16) -> anyhow::Error {
     if let Ok(json) = serde_json::from_str::<Value>(body) {
         let message = json["message"].as_str().unwrap_or("Unknown error");
         let hint = json["hint"].as_str().unwrap_or("");
+        if status == 503 && json["error"].as_str() == Some("cluster_not_ready") {
+            return ClusterNotReadyError {
+                message: message.to_string(),
+                hint: (!hint.is_empty()).then(|| hint.to_string()),
+            }
+            .into();
+        }
         if hint.is_empty() {
             anyhow::anyhow!("Server error ({}): {}", status, message)
         } else {

@@ -223,6 +223,15 @@ rtree database create analytics
 rtree database use analytics
 ```
 
+Organization creation retains your saved defaults. Text and JSON output include
+a hint to select the new organization with `rtree organization use <name>`.
+
+With `--json`, creation returns:
+
+```json
+{"name":"team-alpha","hint":"Saved defaults did not change. Select this organization with `rtree organization use team-alpha`."}
+```
+
 Database creation saves the selected organization, cluster, and new database locally.
 With `--json`, creation returns `{"database":{"name":"analytics"}}`; listing returns
 `{"databases":[{"name":"analytics","s3_storage":null}]}`. Database output no longer
@@ -328,6 +337,30 @@ Cluster lifecycle and provisioning changes are asynchronous. The `create`,
 request; they do not wait for the infrastructure operation to finish. After
 creating, stopping, or resuming a cluster, run `rtree cluster status
 <name-or-id>` to follow its current state.
+
+`cluster status` accepts an optional name or ID. Without a positional selector,
+it uses `--cluster`, then `RAWTREE_CLUSTER`, then a saved default for the selected
+organization. A positional selector overrides environment variables and saved
+defaults. If the positional selector and `--cluster` differ, the command returns
+`context_conflict` with exit code `2`. Without a selector, the CLI uses the only
+available cluster. Multiple choices require selection. These commands do not
+change saved defaults.
+
+```sh
+rtree cluster status --org team-alpha --cluster production
+rtree cluster status --org team-alpha
+```
+
+If an organization has no clusters, commands that need a cluster return
+`selection_required` with exit code `2`, `needs: "cluster"`, and an empty
+`clusters` list. The error names the organization and gives a cluster creation
+command. A named cluster that does not exist remains a not-found error.
+
+Database list/create return exit code `3` when the API reports an unready
+cluster. JSON stderr retains the API code `cluster_not_ready` and its hint.
+When the cluster is known, the hint also includes a scoped `rtree cluster status`
+command. The CLI does not make an extra readiness request. Older API errors
+retain their existing behavior.
 
 ## Shell Completions
 
