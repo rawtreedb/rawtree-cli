@@ -77,6 +77,11 @@ jobs:
         with:
           workspaces: cli
 
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v2
+        with:
+          version: v5.6.0
+
       - name: Reuse published Platform backend
         id: backend
         working-directory: platform
@@ -133,7 +138,7 @@ jobs:
       - name: Report Platform startup failure
         if: failure()
         working-directory: platform
-        run: bash scripts/codex/run-local-compose.sh 18087 ps
+        run: bash scripts/codex/run-local-compose.sh 18087 ps --all
 
       - name: Test CLI against real Platform
         working-directory: cli
