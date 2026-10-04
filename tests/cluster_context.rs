@@ -362,6 +362,53 @@ fn old_and_unrelated_server_errors_keep_their_existing_output() {
 }
 
 #[test]
+fn status_transport_errors_keep_the_generic_server_contract() {
+    for (status, server_code, message, hint) in [
+        (
+            "503 Service Unavailable",
+            "cluster_status_unavailable",
+            "Cluster status is temporarily unavailable.",
+            "Try again shortly.",
+        ),
+        (
+            "500 Internal Server Error",
+            "internal_error",
+            "Internal server error",
+            "Try again or contact support.",
+        ),
+    ] {
+        let original = configured();
+        // The CLI reads status from the cluster list.
+        // This fixture checks transport errors, not the explicit status route.
+        let (output, saved, _) = common::run_cli(
+            &[(
+                "GET /v1/clusters?organization=team".into(),
+                status,
+                json!({"error": server_code, "message": message, "hint": hint}),
+            )],
+            &["cluster", "status", "production", "--json"],
+            &original,
+        );
+        assert_eq!(output.status.code(), Some(3));
+        assert!(output.stdout.is_empty());
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        let status_code = status.split_whitespace().next().unwrap();
+        assert_eq!(
+            error,
+            json!({
+                "error": {
+                    "code": "server_error",
+                    "message": format!("Server error ({status_code}): {message}\nHint: {hint}"),
+                },
+                "exit_code": 3,
+            })
+        );
+        assert_ne!(error["error"]["code"], "cluster_not_ready");
+        assert_eq!(saved, original);
+    }
+}
+
+#[test]
 fn organization_creation_keeps_defaults_and_gives_a_safe_selection_hint() {
     for json_mode in [false, true] {
         let original = configured();
