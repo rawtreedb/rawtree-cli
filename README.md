@@ -287,7 +287,7 @@ cargo test --locked
 ```
 
 The `Tests` workflow runs the CLI's unit and mock-API contract tests on pushes
-and pull requests. It also runs `tests/live_platform.rs` against the full
+to `main` and pull requests. New PR updates cancel obsolete runs. It also runs `tests/live_platform.rs` against the full
 Platform Docker Compose stack on same-repository changes. That test uses the
 Platform launcher to create a local organization and cluster, then checks CLI
 database creation, insertion, querying, API key login, and deletion through the real API.
@@ -297,8 +297,17 @@ The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
 requires a read-only deploy key on the Platform repository, with its private SSH
 key stored as `PLATFORM_REPO_SSH_KEY` in this repository's GitHub Actions secrets.
 The job also requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets to pull
-the private RawTree server and keeper images. Use a read-only Docker Hub token
-with access to those repositories.
+the private RawTree server, keeper, and backend images. Use a read-only Docker Hub
+token with access to those repositories.
+
+The integration job uses an ARM64 runner and reuses the published backend image
+only when its source revision is an ancestor of the checked-out Platform `main`
+and its backend release inputs are unchanged. It pulls the verified image by
+digest; if the inputs differ or revision metadata is missing, it builds from
+source. The frontend is built for the local test URL. Compose still starts the
+full stack, waits for healthy services, and bootstraps the test identity. Build
+and startup timings appear as separate CI steps. Private Platform layers are
+never stored in the public CLI repository's Actions cache.
 Fork pull requests run the unit and mock-API tests;
 GitHub does not pass the private checkout secret to those runs.
 
