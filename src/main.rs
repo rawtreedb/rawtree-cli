@@ -7,6 +7,7 @@ mod org;
 mod output;
 
 use std::io::{self, IsTerminal, Read};
+use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -155,13 +156,18 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
     }
 }
 
-fn main() {
-    let cli = Cli::parse();
+fn main() -> ExitCode {
+    let mut cli = Cli::parse();
+    cli.json = effective_json_mode(&cli, io::stdin().is_terminal());
     let json_mode = cli.json;
-    if let Err(e) = run(cli) {
-        let code = output::print_error(&e, json_mode);
-        std::process::exit(code);
+    match run(cli) {
+        Ok(code) => code,
+        Err(error) => ExitCode::from(output::print_error(&error, json_mode) as u8),
     }
+}
+
+fn effective_json_mode(cli: &Cli, stdin_is_terminal: bool) -> bool {
+    cli.json || (matches!(cli.command, Command::Login { .. }) && !stdin_is_terminal)
 }
 
 fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
@@ -186,7 +192,7 @@ fn should_prompt_for_login_method(
     email.is_none() && !json_mode && stdin_is_terminal && stdout_is_terminal
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<ExitCode> {
     let Cli {
         api_key: cli_api_key,
         api_url: cli_url,
@@ -231,15 +237,17 @@ fn run(cli: Cli) -> Result<()> {
                 io::stdout().is_terminal(),
             ) {
                 match commands::auth::prompt_for_login_method()? {
-                    commands::auth::LoginMethod::Rawtree => commands::auth::login_with_browser(
-                        &client,
-                        no_browser,
-                        timeout_seconds,
-                        cli_org.clone(),
-                        login_cluster.clone(),
-                        database,
-                        json,
-                    ),
+                    commands::auth::LoginMethod::Rawtree => {
+                        return commands::auth::login_with_browser(
+                            &client,
+                            no_browser,
+                            timeout_seconds,
+                            cli_org.clone(),
+                            login_cluster.clone(),
+                            database,
+                            json,
+                        )
+                    }
                     commands::auth::LoginMethod::ManualApiKey => {
                         let api_key = commands::auth::prompt_for_api_key()?;
                         commands::auth::login_with_api_key(
@@ -264,7 +272,7 @@ fn run(cli: Cli) -> Result<()> {
                     json,
                 )
             } else {
-                commands::auth::login_with_browser(
+                return commands::auth::login_with_browser(
                     &client,
                     no_browser,
                     timeout_seconds,
@@ -272,7 +280,7 @@ fn run(cli: Cli) -> Result<()> {
                     login_cluster.clone(),
                     database,
                     json,
-                )
+                );
             }
         }
         Command::Logout => commands::auth::logout(json),
@@ -584,17 +592,34 @@ fn run(cli: Cli) -> Result<()> {
             generate(shell, &mut Cli::command(), "rtree", &mut io::stdout());
             Ok(())
         }
-    }
+    }?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::constants::DEFAULT_API_URL;
     use super::{
-        resolve_cluster_from_sources, resolve_database_from_sources, resolve_effective_org_with,
-        resolve_login_cluster_from_sources, resolve_org_from_sources, resolve_token_from_sources,
-        resolve_url_from_sources, should_prompt_for_login_method,
+        effective_json_mode, resolve_cluster_from_sources, resolve_database_from_sources,
+        resolve_effective_org_with, resolve_login_cluster_from_sources, resolve_org_from_sources,
+        resolve_token_from_sources, resolve_url_from_sources, should_prompt_for_login_method, Cli,
     };
+
+    #[test]
+    fn json_is_automatic_only_for_non_terminal_login() {
+        for (args, terminal, expected) in [
+            (vec!["rtree", "login"], false, true),
+            (vec!["rtree", "login"], true, false),
+            (vec!["rtree", "login", "--json"], true, true),
+            (vec!["rtree", "status"], false, false),
+            (vec!["rtree", "status", "--json"], false, true),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(effective_json_mode(&cli, terminal), expected);
+        }
+    }
 
     #[test]
     fn resolve_cluster_uses_cli_first() {
