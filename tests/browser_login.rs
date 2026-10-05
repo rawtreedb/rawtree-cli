@@ -149,8 +149,16 @@ fn missing_database_returns_choices_in_the_selected_cluster() {
 }
 
 #[test]
-fn approval_is_reported_before_the_server_completes_login() {
+fn approval_is_reported_before_polling_completes_and_only_once() {
     let mut responses = approved_login();
+    responses.insert(
+        1,
+        (
+            "POST /v1/auth/cli/device/token".into(),
+            "428 Precondition Required",
+            json!({"error": "authorization_pending"}),
+        ),
+    );
     responses.extend([
         organizations(&["team"]),
         clusters(&["production"]),
@@ -160,11 +168,14 @@ fn approval_is_reported_before_the_server_completes_login() {
         &responses,
         &["login"],
         &original_config(),
-        Some(|line| {
-            assert_eq!(
-                serde_json::from_str::<Value>(line).unwrap(),
-                approval_event(600)
-            );
+        Some(common::ProgressExpectation {
+            before_response: "POST /v1/auth/cli/device/token",
+            observe: |line| {
+                assert_eq!(
+                    serde_json::from_str::<Value>(line).unwrap(),
+                    approval_event(600)
+                );
+            },
         }),
     );
     assert!(

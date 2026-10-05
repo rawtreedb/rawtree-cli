@@ -7,6 +7,7 @@ mod org;
 mod output;
 
 use std::io::{self, IsTerminal, Read};
+use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -155,17 +156,13 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
     }
 }
 
-fn main() {
+fn main() -> ExitCode {
     let mut cli = Cli::parse();
     cli.json = effective_json_mode(&cli, io::stdin().is_terminal());
     let json_mode = cli.json;
-    if let Err(e) = run(cli) {
-        if let Some(selection) = e.downcast_ref::<commands::auth::LoginSelectionRequired>() {
-            output::print_result(selection, true, |_| {});
-            std::process::exit(2);
-        }
-        let code = output::print_error(&e, json_mode);
-        std::process::exit(code);
+    match run(cli) {
+        Ok(code) => code,
+        Err(error) => ExitCode::from(output::print_error(&error, json_mode) as u8),
     }
 }
 
@@ -195,7 +192,7 @@ fn should_prompt_for_login_method(
     email.is_none() && !json_mode && stdin_is_terminal && stdout_is_terminal
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<ExitCode> {
     let Cli {
         api_key: cli_api_key,
         api_url: cli_url,
@@ -240,15 +237,17 @@ fn run(cli: Cli) -> Result<()> {
                 io::stdout().is_terminal(),
             ) {
                 match commands::auth::prompt_for_login_method()? {
-                    commands::auth::LoginMethod::Rawtree => commands::auth::login_with_browser(
-                        &client,
-                        no_browser,
-                        timeout_seconds,
-                        cli_org.clone(),
-                        login_cluster.clone(),
-                        database,
-                        json,
-                    ),
+                    commands::auth::LoginMethod::Rawtree => {
+                        return commands::auth::login_with_browser(
+                            &client,
+                            no_browser,
+                            timeout_seconds,
+                            cli_org.clone(),
+                            login_cluster.clone(),
+                            database,
+                            json,
+                        )
+                    }
                     commands::auth::LoginMethod::ManualApiKey => {
                         let api_key = commands::auth::prompt_for_api_key()?;
                         commands::auth::login_with_api_key(
@@ -273,7 +272,7 @@ fn run(cli: Cli) -> Result<()> {
                     json,
                 )
             } else {
-                commands::auth::login_with_browser(
+                return commands::auth::login_with_browser(
                     &client,
                     no_browser,
                     timeout_seconds,
@@ -281,7 +280,7 @@ fn run(cli: Cli) -> Result<()> {
                     login_cluster.clone(),
                     database,
                     json,
-                )
+                );
             }
         }
         Command::Logout => commands::auth::logout(json),
@@ -588,7 +587,8 @@ fn run(cli: Cli) -> Result<()> {
             generate(shell, &mut Cli::command(), "rtree", &mut io::stdout());
             Ok(())
         }
-    }
+    }?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
