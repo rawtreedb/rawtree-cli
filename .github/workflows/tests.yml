@@ -146,15 +146,20 @@ jobs:
           token="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_SESSION_TOKEN=//p' ../platform/.env.local)"
           organization="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_ORGANIZATION=//p' ../platform/.env.local)"
           cluster="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_CLUSTER=//p' ../platform/.env.local)"
-          if [ -z "$token" ] || [ -z "$organization" ] || [ -z "$cluster" ]; then
+          email="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_EMAIL=//p' ../platform/.env.local)"
+          password="$(sed -n 's/^RAWTREE_LOCAL_BOOTSTRAP_PASSWORD=//p' ../platform/.env.local)"
+          if [ -z "$token" ] || [ -z "$organization" ] || [ -z "$cluster" ] || [ -z "$email" ] || [ -z "$password" ]; then
             echo '::error::Platform local bootstrap identity is incomplete.'
             exit 1
           fi
           echo "::add-mask::$token"
+          echo "::add-mask::$password"
           export RAWTREE_LIVE_API_URL=http://localhost:18087
           export RAWTREE_LIVE_SESSION_TOKEN="$token"
           export RAWTREE_LIVE_ORGANIZATION="$organization"
           export RAWTREE_LIVE_CLUSTER="$cluster"
+          export RAWTREE_LIVE_EMAIL="$email"
+          export RAWTREE_LIVE_PASSWORD="$password"
           cargo test --locked --test live_platform -- --ignored
 
       - name: Stop Platform
