@@ -89,7 +89,7 @@ fn database_list_preserves_current_metadata_without_obsolete_organization() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "default\nanalytics\n"
+        "default              storage=cluster default\nanalytics            storage=customer-owned S3\n"
     );
 }
 

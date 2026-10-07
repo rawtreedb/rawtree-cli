@@ -6,6 +6,7 @@ use crate::client::ApiClient;
 use crate::config;
 use crate::org;
 use crate::output;
+use crate::s3_storage::{format_storage, S3StorageArgs, S3StorageMetadata};
 
 #[derive(Deserialize, Serialize)]
 struct DatabaseRef {
@@ -15,7 +16,7 @@ struct DatabaseRef {
 #[derive(Deserialize, Serialize)]
 struct DatabaseItem {
     name: String,
-    s3_storage: Option<serde_json::Value>,
+    s3_storage: Option<S3StorageMetadata>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -45,29 +46,6 @@ fn database_create_collection_path(organization: Option<&str>, cluster: Option<&
     org::databases_collection_path(organization, cluster)
 }
 
-fn create_database_response(
-    client: &ApiClient,
-    name: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-) -> Result<CreateDatabaseResponse> {
-    let path = database_create_collection_path(organization, cluster);
-    client.post(&path, &json!({ "name": name }))
-}
-
-fn create_and_persist(
-    client: &ApiClient,
-    name: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-) -> Result<CreateDatabaseResponse> {
-    let resp = create_database_response(client, name, organization, cluster)?;
-    let mut cfg = config::load()?;
-    apply_database_create_config(&mut cfg, &resp, organization, cluster);
-    config::save(&cfg)?;
-    Ok(resp)
-}
-
 pub fn list(
     client: &ApiClient,
     organization: Option<&str>,
@@ -81,7 +59,11 @@ pub fn list(
             println!("No databases yet. Create one with `rtree database create <name>`.");
         } else {
             for database in &resp.databases {
-                println!("{}", database.name);
+                println!(
+                    "{:<20} storage={}",
+                    database.name,
+                    format_storage(database.s3_storage.as_ref())
+                );
             }
         }
     });
@@ -93,11 +75,25 @@ pub fn create(
     name: &str,
     organization: Option<&str>,
     cluster: Option<&str>,
+    s3_storage: S3StorageArgs,
     json_mode: bool,
 ) -> Result<()> {
-    let resp = create_and_persist(client, name, organization, cluster)?;
+    let s3_storage = s3_storage.to_json()?;
+    let storage_configured = s3_storage.is_some();
+    let mut body = json!({ "name": name });
+    if let Some(storage) = s3_storage {
+        body["s3_storage"] = storage;
+    }
+    let path = database_create_collection_path(organization, cluster);
+    let resp: CreateDatabaseResponse = client.post(&path, &body)?;
+    let mut cfg = config::load()?;
+    apply_database_create_config(&mut cfg, &resp, organization, cluster);
+    config::save(&cfg)?;
     output::print_result(&resp, json_mode, |resp| {
         println!("Database '{}' created.", resp.database.name);
+        if storage_configured {
+            println!("Using customer-owned S3 storage.");
+        }
     });
     Ok(())
 }
