@@ -15,7 +15,7 @@ use clap_complete::generate;
 
 use cli::{
     Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType,
-    TableCommand,
+    TableCommand, WorkflowCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -154,6 +154,34 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
             }
         }
     }
+}
+
+fn read_sql_arg(sql: String) -> Result<String> {
+    if sql == "-" {
+        read_stdin()
+    } else {
+        Ok(sql)
+    }
+}
+
+fn require_workflow_scope<'a>(
+    organization: Option<&'a str>,
+    cluster: Option<&'a str>,
+) -> Result<commands::workflow::WorkflowScope<'a>> {
+    let organization = organization.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No organization specified. Use --org, RAWTREE_ORG env, or `rtree organization use <name>`"
+        )
+    })?;
+    let cluster = cluster.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No cluster specified. Use --cluster, RAWTREE_CLUSTER env, or `rtree cluster use <name>`"
+        )
+    })?;
+    Ok(commands::workflow::WorkflowScope {
+        organization,
+        cluster,
+    })
 }
 
 fn main() -> ExitCode {
@@ -479,6 +507,91 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         &sorting_key,
                         json,
                     )
+                }
+            }
+        }
+        Command::Workflow { action } => {
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            let scope =
+                require_workflow_scope(effective_org.as_deref(), effective_cluster.as_deref())?;
+            match action {
+                WorkflowCommand::List => commands::workflow::list(&client, &scope, json),
+                WorkflowCommand::Get { id } => commands::workflow::get(&client, &scope, &id, json),
+                WorkflowCommand::Create {
+                    name,
+                    database,
+                    sql,
+                    interval_seconds,
+                    disabled,
+                    sinks,
+                } => commands::workflow::create(
+                    &client,
+                    &scope,
+                    commands::workflow::CreateWorkflow {
+                        name,
+                        database: resolve_database(database)?,
+                        sql: read_sql_arg(sql)?,
+                        interval_seconds,
+                        disabled,
+                        sinks,
+                    },
+                    json,
+                ),
+                WorkflowCommand::Update {
+                    id,
+                    name,
+                    database,
+                    sql,
+                    interval_seconds,
+                    enable,
+                    disable,
+                    sinks,
+                    clear_sinks,
+                } => commands::workflow::update(
+                    &client,
+                    &scope,
+                    &id,
+                    commands::workflow::UpdateWorkflow {
+                        name,
+                        database,
+                        sql: sql.map(read_sql_arg).transpose()?,
+                        interval_seconds,
+                        enabled: (enable || disable).then_some(enable),
+                        sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
+                    },
+                    json,
+                ),
+                WorkflowCommand::Delete { id } => {
+                    commands::workflow::delete(&client, &scope, &id, json)
+                }
+                WorkflowCommand::Run {
+                    id,
+                    idempotency_key,
+                } => {
+                    commands::workflow::run(&client, &scope, &id, idempotency_key.as_deref(), json)
+                }
+                WorkflowCommand::Runs { id, limit, cursor } => {
+                    commands::workflow::runs(&client, &scope, &id, limit, cursor.as_deref(), json)
+                }
+                WorkflowCommand::Cancel { id, run_id } => {
+                    commands::workflow::cancel(&client, &scope, &id, &run_id, json)
+                }
+                WorkflowCommand::Logs {
+                    id,
+                    range,
+                    limit,
+                    cursor,
+                } => commands::workflow::logs(
+                    &client,
+                    &scope,
+                    &id,
+                    &range,
+                    limit,
+                    cursor.as_deref(),
+                    json,
+                ),
+                WorkflowCommand::Metrics { id, range } => {
+                    commands::workflow::metrics(&client, &scope, &id, &range, json)
                 }
             }
         }

@@ -157,7 +157,7 @@ API keys remain restricted to their bound cluster regardless of which selector s
 Top-level commands:
 
 - `login`, `logout`
-- `database`, `organization`, `cluster`, `key`, `table`
+- `database`, `organization`, `cluster`, `key`, `table`, `workflow`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -246,6 +246,45 @@ The server validates and normalizes it to UTC. Omit the flag for a key that neve
 expires. Create/list output includes expiration (`never` in text, `null` in JSON);
 older servers that omit the field are also supported. Expiration is fixed at
 creation; create a replacement key to change it. There is no `key update` command.
+
+### Workflows
+
+Workflows run saved SQL on a schedule and deliver results to sinks.
+
+```sh
+rtree workflow list
+rtree workflow create --name errors --database analytics --interval-seconds 60 \
+  --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
+rtree workflow create --name alerts --disabled --sql - \
+  --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
+  < alerts.sql
+rtree workflow get <id>
+rtree workflow update <id> --interval-seconds 300
+rtree workflow update <id> --disable
+rtree workflow update <id> --clear-sinks
+rtree workflow delete <id>
+
+rtree workflow run <id> --idempotency-key deploy-42
+rtree workflow runs <id>
+rtree workflow cancel <id> <run-id>
+rtree workflow logs <id> --since 1h
+rtree workflow metrics <id> --since 7d
+```
+
+Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
+the environment, or the saved defaults). API keys must have admin permission.
+`create` uses the selected database when `--database` is omitted.
+
+Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
+nested `settings` object: `{"database","table"}` for `table` sinks and
+`{"url","headers"}` for `http` sinks. On `update`, `--sink` replaces the whole
+list. Include each existing sink's `id` to keep it; an existing HTTP sink may omit
+`settings`, or its `url` or `headers`, to retain them.
+
+`run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
+same run instead of starting another. Logs and metrics cover the last 24 hours by
+default, at most 7 days. Use `--since`/`--until` or `--start-time`/`--end-time`
+to change the window.
 
 ### Request logs
 

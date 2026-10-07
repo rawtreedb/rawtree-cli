@@ -140,6 +140,11 @@ pub enum Command {
         #[command(subcommand)]
         action: TableCommand,
     },
+    /// Manage scheduled SQL workflows
+    Workflow {
+        #[command(subcommand)]
+        action: WorkflowCommand,
+    },
     /// View API request logs for a cluster
     Logs {
         #[arg(long)]
@@ -428,9 +433,158 @@ pub enum TableCommand {
     },
 }
 
+const SINK_HELP: &str = "Sinks are JSON objects with a type and its settings:\n  {\"type\":\"table\",\"settings\":{\"database\":\"analytics\",\"table\":\"alerts\"}}\n  {\"type\":\"http\",\"settings\":{\"url\":\"https://example.com/hook\",\"headers\":{\"Authorization\":\"Bearer ...\"}}}";
+
+const SINK_UPDATE_HELP: &str = r#"Sinks are JSON objects with a type and its settings. --sink replaces the whole
+list; include the "id" of existing sinks to keep them. An existing HTTP sink may
+omit "settings", or its "url" or "headers", to retain them, and a null header
+value keeps the stored value:
+  {"type":"table","id":"<sink-id>","settings":{"database":"analytics","table":"alerts"}}
+  {"type":"http","id":"<sink-id>"}
+  {"type":"http","settings":{"url":"https://example.com/hook"}}
+
+Example: keep an HTTP sink unchanged and point a table sink at another table.
+Find the sink IDs with `rtree workflow get <id>`, then pass every sink to keep:
+  rtree workflow update <id> \
+    --sink '{"type":"http","id":"<http-sink-id>"}' \
+    --sink '{"type":"table","id":"<table-sink-id>","settings":{"database":"analytics","table":"alerts_v2"}}'"#;
+
+#[derive(Subcommand)]
+pub enum WorkflowCommand {
+    /// List workflows in the selected cluster
+    List,
+    /// Show a workflow
+    Get {
+        /// Workflow ID
+        id: String,
+    },
+    /// Create a workflow that runs SQL on a schedule
+    #[command(after_help = SINK_HELP)]
+    Create {
+        /// Workflow name (letters, digits, '-' and '_')
+        #[arg(long)]
+        name: String,
+        /// Database the SQL runs in (defaults to RAWTREE_DATABASE/config default)
+        #[arg(long)]
+        database: Option<String>,
+        /// SQL to run: a SELECT or INSERT INTO ... SELECT. Use "-" to read from stdin.
+        #[arg(long)]
+        sql: String,
+        /// Seconds between runs (server default: 1)
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
+        interval_seconds: Option<u32>,
+        /// Create the workflow paused
+        #[arg(long)]
+        disabled: bool,
+        /// Sink as a JSON object; repeat for up to five sinks
+        #[arg(long = "sink", value_name = "JSON")]
+        sinks: Vec<String>,
+    },
+    /// Update a workflow; omitted fields are left unchanged
+    #[command(after_help = SINK_UPDATE_HELP)]
+    Update {
+        /// Workflow ID
+        id: String,
+        /// New workflow name
+        #[arg(long)]
+        name: Option<String>,
+        /// Database the SQL runs in
+        #[arg(long)]
+        database: Option<String>,
+        /// New SQL. Use "-" to read from stdin.
+        #[arg(long)]
+        sql: Option<String>,
+        /// Seconds between runs
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
+        interval_seconds: Option<u32>,
+        /// Resume scheduled runs
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Pause scheduled runs
+        #[arg(long)]
+        disable: bool,
+        /// Sink as a JSON object; replaces all sinks. Repeat for up to five.
+        #[arg(long = "sink", value_name = "JSON", conflicts_with = "clear_sinks")]
+        sinks: Vec<String>,
+        /// Remove all sinks
+        #[arg(long)]
+        clear_sinks: bool,
+    },
+    /// Delete a workflow and stop its schedule
+    Delete {
+        /// Workflow ID
+        id: String,
+    },
+    /// Run a workflow once, independently of its schedule
+    Run {
+        /// Workflow ID
+        id: String,
+        /// Retry key; reusing it returns the same run instead of starting another
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// List manual and scheduled runs of a workflow
+    Runs {
+        /// Workflow ID
+        id: String,
+        /// Maximum runs to return (default: 20, max: 100)
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=100))]
+        limit: Option<u16>,
+        /// Cursor from a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Request cancellation of a workflow run
+    Cancel {
+        /// Workflow ID
+        id: String,
+        /// Run ID
+        run_id: String,
+    },
+    /// Show workflow execution and sink delivery logs
+    Logs {
+        /// Workflow ID
+        id: String,
+        #[command(flatten)]
+        range: WorkflowTimeRange,
+        /// Maximum log entries to return (default: 100, max: 200)
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=200))]
+        limit: Option<u16>,
+        /// Cursor from a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Show workflow execution, match, delivery, and error counts
+    Metrics {
+        /// Workflow ID
+        id: String,
+        #[command(flatten)]
+        range: WorkflowTimeRange,
+    },
+}
+
+/// Time window for workflow logs and metrics. Defaults to the last 24 hours; at most 7 days.
+#[derive(clap::Args, Debug, Default)]
+pub struct WorkflowTimeRange {
+    /// Start this long ago (e.g., 1h, 30m, 7d)
+    #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
+    pub since: Option<String>,
+    /// End this long ago (e.g., 30m)
+    #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
+    pub until: Option<String>,
+    /// Start time as RFC 3339 (e.g., "2026-03-28T18:00:00Z")
+    #[arg(long)]
+    pub start_time: Option<String>,
+    /// End time as RFC 3339 (e.g., "2026-03-28T19:00:00Z")
+    #[arg(long)]
+    pub end_time: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand};
+    use super::{
+        Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand, WorkflowCommand,
+    };
     use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
@@ -990,5 +1144,91 @@ mod tests {
     fn logs_status_codes_must_be_http_statuses() {
         let result = Cli::try_parse_from(["rtree", "logs", "--status-codes", "99"]);
         assert!(result.is_err(), "status codes below 100 should be rejected");
+    }
+
+    #[test]
+    fn workflow_create_collects_repeated_sinks() {
+        let cli = Cli::try_parse_from([
+            "rtree",
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--interval-seconds",
+            "60",
+            "--disabled",
+            "--sink",
+            r#"{"type":"table","settings":{"database":"a","table":"b"}}"#,
+            "--sink",
+            r#"{"type":"http","settings":{"url":"https://example.com"}}"#,
+        ])
+        .expect("workflow create should parse");
+        match cli.command {
+            Command::Workflow {
+                action:
+                    WorkflowCommand::Create {
+                        interval_seconds,
+                        disabled,
+                        sinks,
+                        database,
+                        ..
+                    },
+            } => {
+                assert_eq!(interval_seconds, Some(60));
+                assert!(disabled);
+                assert_eq!(sinks.len(), 2);
+                assert!(database.is_none());
+            }
+            _ => panic!("expected workflow create command"),
+        }
+    }
+
+    #[test]
+    fn workflow_update_rejects_conflicting_flags() {
+        for args in [
+            vec!["--enable", "--disable"],
+            vec!["--clear-sinks", "--sink", "{}"],
+        ] {
+            let mut command = vec!["rtree", "workflow", "update", "wf-1"];
+            command.extend(args);
+            assert!(Cli::try_parse_from(command).is_err());
+        }
+    }
+
+    #[test]
+    fn workflow_interval_and_time_ranges_are_validated() {
+        assert!(Cli::try_parse_from([
+            "rtree",
+            "workflow",
+            "create",
+            "--name",
+            "a",
+            "--sql",
+            "SELECT 1",
+            "--interval-seconds",
+            "86401",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "rtree",
+            "workflow",
+            "logs",
+            "wf-1",
+            "--since",
+            "1h",
+            "--start-time",
+            "2026-01-01T00:00:00Z",
+        ])
+        .is_err());
+        let cli = Cli::try_parse_from(["rtree", "workflow", "metrics", "wf-1", "--since", "2h"])
+            .expect("workflow metrics should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Workflow {
+                action: WorkflowCommand::Metrics { range, .. }
+            } if range.since.as_deref() == Some("2h")
+        ));
     }
 }
