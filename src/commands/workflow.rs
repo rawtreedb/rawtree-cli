@@ -232,6 +232,11 @@ fn resolve_window(
             .as_deref()
             .map(|value| rfc3339_to_ms(value, "--end-time"))
             .transpose()?;
+        if let (Some(from), Some(to)) = (from, to) {
+            if from >= to {
+                bail!("invalid time range: --start-time must be before --end-time");
+            }
+        }
         return Ok((from, to));
     }
     let from = range
@@ -718,6 +723,16 @@ mod tests {
             ..Default::default()
         };
         assert!(resolve_window(&reversed, now).is_err());
+
+        let reversed_absolute = WorkflowTimeRange {
+            start_time: Some("2026-10-07T11:00:00Z".into()),
+            end_time: Some("2026-10-07T10:00:00Z".into()),
+            ..Default::default()
+        };
+        assert!(resolve_window(&reversed_absolute, now)
+            .unwrap_err()
+            .to_string()
+            .contains("--start-time must be before --end-time"));
 
         let absolute = WorkflowTimeRange {
             start_time: Some("2026-10-07T10:00:00.250Z".into()),
