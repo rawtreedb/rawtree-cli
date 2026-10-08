@@ -470,12 +470,9 @@ pub enum WorkflowCommand {
         /// SQL to run: a SELECT or INSERT INTO ... SELECT. Use "-" to read from stdin.
         #[arg(long)]
         sql: String,
-        /// Seconds between runs (server default: 1)
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
-        interval_seconds: Option<u32>,
-        /// Run only on demand with `rtree workflow run`, with no schedule
-        #[arg(long, conflicts_with = "interval_seconds")]
-        manual: bool,
+        /// Seconds between automatic runs (1–86400); null or omitted means manual-only
+        #[arg(long, value_name = "SECONDS|null")]
+        interval_seconds: Option<WorkflowIntervalArg>,
         /// Create the workflow paused
         #[arg(long)]
         disabled: bool,
@@ -497,12 +494,9 @@ pub enum WorkflowCommand {
         /// New SQL. Use "-" to read from stdin.
         #[arg(long)]
         sql: Option<String>,
-        /// Seconds between runs; also restores the schedule of a manual workflow
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
-        interval_seconds: Option<u32>,
-        /// Remove the schedule so the workflow only runs with `rtree workflow run`
-        #[arg(long, conflicts_with = "interval_seconds")]
-        manual: bool,
+        /// Seconds between automatic runs (1–86400); null removes the schedule
+        #[arg(long, value_name = "SECONDS|null")]
+        interval_seconds: Option<WorkflowIntervalArg>,
         /// Resume scheduled runs
         #[arg(long, conflicts_with = "disable")]
         enable: bool,
@@ -567,6 +561,23 @@ pub enum WorkflowCommand {
         #[command(flatten)]
         range: WorkflowTimeRange,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkflowIntervalArg(pub Option<u32>);
+
+impl FromStr for WorkflowIntervalArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "null" {
+            return Ok(Self(None));
+        }
+        match value.parse::<u32>() {
+            Ok(seconds) if (1..=86400).contains(&seconds) => Ok(Self(Some(seconds))),
+            _ => Err("expected a whole number from 1 to 86400, or null".into()),
+        }
+    }
 }
 
 /// Time window for workflow logs and metrics. Defaults to the last 24 hours; at most 7 days.
@@ -1182,7 +1193,7 @@ mod tests {
                         ..
                     },
             } => {
-                assert_eq!(interval_seconds, Some(60));
+                assert_eq!(interval_seconds.map(|interval| interval.0), Some(Some(60)));
                 assert!(disabled);
                 assert_eq!(sinks.len(), 2);
                 assert!(database.is_none());
@@ -1196,7 +1207,6 @@ mod tests {
         for args in [
             vec!["--enable", "--disable"],
             vec!["--clear-sinks", "--sink", "{}"],
-            vec!["--manual", "--interval-seconds", "60"],
         ] {
             let mut command = vec!["rtree", "workflow", "update", "wf-1"];
             command.extend(args);
@@ -1216,19 +1226,6 @@ mod tests {
             "SELECT 1",
             "--interval-seconds",
             "86401",
-        ])
-        .is_err());
-        assert!(Cli::try_parse_from([
-            "rtree",
-            "workflow",
-            "create",
-            "--name",
-            "a",
-            "--sql",
-            "SELECT 1",
-            "--manual",
-            "--interval-seconds",
-            "60",
         ])
         .is_err());
         assert!(Cli::try_parse_from([

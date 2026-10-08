@@ -40,7 +40,6 @@ fn with_workflow(sql: &str, test: impl FnOnce(&LiveCli, &str, &str)) {
             &database,
             "--sql",
             sql,
-            "--manual",
         ]);
         let id = created["id"].as_str().expect("workflow ID").to_string();
         workflow_id = Some(id.clone());
@@ -158,7 +157,7 @@ fn workflow_scheduled_runs_can_be_paused_and_switched_to_manual() {
         assert_eq!(paused["enabled"], false);
         assert_eq!(paused["interval_seconds"], 1);
         assert_eq!(paused["next_run_at"], Value::Null);
-        let manual = cli.json(&["workflow", "update", id, "--manual"]);
+        let manual = cli.json(&["workflow", "update", id, "--interval-seconds", "null"]);
         assert_eq!(manual["interval_seconds"], Value::Null);
         assert_eq!(manual["next_run_at"], Value::Null);
         let run = cli.json(&["workflow", "run", id]);
@@ -222,7 +221,7 @@ fn workflow_query_and_schedule_round_trip_through_real_platform() {
             created["query"],
             json!({"database": "default", "sql": "SELECT 1"})
         );
-        assert_eq!(created["interval_seconds"], 1);
+        assert_eq!(created["interval_seconds"], Value::Null);
         assert_eq!(created["next_run_at"], Value::Null);
         assert_eq!(created["enabled"], false);
         let listed = cli.json(&["workflow", "list"]);
@@ -238,7 +237,7 @@ fn workflow_query_and_schedule_round_trip_through_real_platform() {
             updated["query"],
             json!({"database": "default", "sql": "SELECT 2"})
         );
-        assert_eq!(updated["interval_seconds"], 1);
+        assert_eq!(updated["interval_seconds"], Value::Null);
         let updated = cli.json(&["workflow", "update", id, "--database", "default"]);
         assert_eq!(
             updated["query"],
@@ -257,7 +256,7 @@ fn workflow_query_and_schedule_round_trip_through_real_platform() {
         ]);
         assert_eq!(renamed["interval_seconds"], 300);
         assert_eq!(renamed["query"], updated["query"]);
-        let manual = cli.json(&["workflow", "update", id, "--manual"]);
+        let manual = cli.json(&["workflow", "update", id, "--interval-seconds", "null"]);
         assert_eq!(manual["interval_seconds"], Value::Null);
         assert_eq!(manual["next_run_at"], Value::Null);
         assert_eq!(manual["query"], updated["query"]);

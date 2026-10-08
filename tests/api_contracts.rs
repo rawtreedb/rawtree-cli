@@ -357,7 +357,7 @@ fn workflow_query_updates_preserve_unspecified_fields() {
 fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
     for (flags, interval) in [
         (vec![], None),
-        (vec!["--manual"], Some(Value::Null)),
+        (vec!["--interval-seconds", "null"], Some(Value::Null)),
         (vec!["--interval-seconds", "300"], Some(json!(300))),
     ] {
         let mut create = vec![
@@ -371,7 +371,10 @@ fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
             workflow_response(),
             json!({"database": "analytics"}),
         );
-        assert_eq!(body.get("interval_seconds"), interval.as_ref());
+        assert_eq!(
+            body.get("interval_seconds"),
+            Some(interval.as_ref().unwrap_or(&Value::Null))
+        );
         assert_eq!(body["enabled"], true);
 
         let mut update = vec!["workflow", "update", "wf-1", "--name", "renamed"];
@@ -469,4 +472,37 @@ fn workflow_commands_require_a_cluster() {
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("No cluster specified"));
+}
+
+#[test]
+fn workflow_invalid_intervals_are_rejected_before_sending_requests() {
+    for args in [
+        vec![
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
+        ],
+        vec!["workflow", "update", "wf-1"],
+    ] {
+        for value in ["0", "86401", "1.5", "manual", ""] {
+            let mut command = args.clone();
+            command.extend(["--interval-seconds", value]);
+            let (output, _, _) = common::run_cli(&[], &command, &json!({}));
+            assert_eq!(output.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("expected a whole number"));
+        }
+    }
+}
+
+#[test]
+fn workflow_manual_flag_is_rejected() {
+    for mut args in [
+        vec![
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
+        ],
+        vec!["workflow", "update", "wf-1"],
+    ] {
+        args.push("--manual");
+        let (output, _, _) = common::run_cli(&[], &args, &json!({}));
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--manual'"));
+    }
 }

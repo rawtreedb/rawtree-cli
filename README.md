@@ -255,13 +255,13 @@ Workflows run saved SQL on demand or on a schedule and deliver results to sinks.
 rtree workflow list
 rtree workflow create --name errors --database analytics --interval-seconds 60 \
   --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
-rtree workflow create --name on-demand --database analytics --manual --sql "SELECT 1"
+rtree workflow create --name on-demand --database analytics --sql "SELECT 1"
 rtree workflow create --name alerts --disabled --sql - \
   --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
   < alerts.sql
 rtree workflow get <id>
 rtree workflow update <id> --interval-seconds 300
-rtree workflow update <id> --manual
+rtree workflow update <id> --interval-seconds null
 rtree workflow update <id> --disable
 rtree workflow update <id> --clear-sinks
 rtree workflow delete <id>
@@ -279,11 +279,13 @@ the environment, or the saved defaults). API keys must have admin permission.
 The CLI sends `--database` and `--sql` inside the API's `query` object. On `update`,
 each flag changes only that query field; the other field stays unchanged.
 
-Use `--manual` on `create` or `update` for manual-only execution
-(`interval_seconds: null`). It cannot be combined with `--interval-seconds`.
+Creating a workflow without `--interval-seconds` makes it manual-only. The CLI
+explicitly sends `interval_seconds: null`, so the API's default interval is not used.
+Use `--interval-seconds null` to remove an existing schedule, matching the API's
+`interval_seconds: null`. The same value is accepted on `create`.
 An interval restores recurring execution, subject to the enabled state; use
-`--enable` as well if the workflow is paused. Omitting both flags on `create`
-uses the server default of one second; on `update` it preserves the current mode.
+`--enable` as well if the workflow is paused. Omitting `--interval-seconds` on `update`
+preserves the current mode.
 `--disable` pauses scheduled runs while retaining the interval. Manual runs remain
 available in either mode, including while paused. Text output shows the next
 scheduled run when available and HTTP sink URLs.
