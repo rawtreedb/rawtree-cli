@@ -47,7 +47,12 @@ pub fn run_cli_with_progress(
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut socket = loop {
                 match listener.accept() {
-                    Ok((socket, _)) => break socket,
+                    Ok((socket, _)) => {
+                        // On macOS accepted sockets inherit the listener's
+                        // non-blocking mode, which makes reads fail with WouldBlock.
+                        socket.set_nonblocking(false).unwrap();
+                        break socket;
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         assert!(Instant::now() < deadline, "missing request to {path}");
                         std::thread::sleep(Duration::from_millis(10));

@@ -60,7 +60,7 @@ pub struct LogsResponse {
     pub next_offset: Option<u64>,
 }
 
-fn parse_duration(s: &str) -> Result<chrono::Duration> {
+pub(super) fn parse_duration(s: &str) -> Result<chrono::Duration> {
     let s = s.trim();
     if s.len() < 2 {
         bail!(

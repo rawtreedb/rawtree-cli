@@ -177,3 +177,123 @@ fn logs_use_cluster_scope_without_a_database_or_with_a_stale_saved_database() {
         assert_eq!(result, response);
     }
 }
+
+const WORKFLOW_SCOPE: &str = "organization=team%20alpha&cluster=prod%2Feu";
+
+fn workflow_response() -> Value {
+    json!({"id": "wf-1", "name": "alerts", "database": "analytics", "sql": "SELECT 1",
+        "enabled": true, "revision": 1, "interval_seconds": 60,
+        "created_at": "2026-10-07 10:00:00+00", "updated_at": "2026-10-07 10:00:00+00",
+        "sinks": [{"type": "table", "id": "sink-1", "settings": {"database": "analytics", "table": "out"}}]})
+}
+
+#[test]
+fn workflow_create_uses_saved_database_and_sends_sinks() {
+    let (result, _, body) = run(
+        &[
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--interval-seconds",
+            "60",
+            "--sink",
+            r#"{"type":"table","settings":{"database":"analytics","table":"out"}}"#,
+        ],
+        "POST",
+        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({"database": "analytics"}),
+    );
+    assert_eq!(result, workflow_response());
+    assert_eq!(
+        body,
+        json!({"name": "alerts", "database": "analytics", "sql": "SELECT 1", "enabled": true,
+            "interval_seconds": 60,
+            "sinks": [{"type": "table", "settings": {"database": "analytics", "table": "out"}}]})
+    );
+}
+
+#[test]
+fn workflow_update_sends_only_changed_fields() {
+    let (_, _, body) = run(
+        &["workflow", "update", "wf-1", "--disable", "--clear-sinks"],
+        "PATCH",
+        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({}),
+    );
+    assert_eq!(body, json!({"enabled": false, "sinks": []}));
+}
+
+#[test]
+fn workflow_delete_and_cancel_accept_empty_responses() {
+    let (result, _, _) = run(
+        &["workflow", "delete", "wf-1"],
+        "DELETE",
+        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        Value::Null,
+        json!({}),
+    );
+    assert_eq!(result, json!({"id": "wf-1", "deleted": true}));
+
+    let (result, _, body) = run(
+        &["workflow", "cancel", "wf-1", "run-1"],
+        "POST",
+        &format!("/v1/workflows/wf-1/runs/run-1/cancel?{WORKFLOW_SCOPE}"),
+        Value::Null,
+        json!({}),
+    );
+    assert_eq!(body, Value::Null);
+    assert_eq!(
+        result,
+        json!({"workflow_id": "wf-1", "run_id": "run-1", "cancel_requested": true})
+    );
+}
+
+#[test]
+fn workflow_runs_and_logs_pass_pagination_and_time_window() {
+    let response = json!({"runs": [], "next_cursor": null});
+    let (result, _, _) = run(
+        &[
+            "workflow", "runs", "wf-1", "--limit", "5", "--cursor", "a+b",
+        ],
+        "GET",
+        &format!("/v1/workflows/wf-1/runs?{WORKFLOW_SCOPE}&limit=5&cursor=a%2Bb"),
+        response.clone(),
+        json!({}),
+    );
+    assert_eq!(result, response);
+
+    let response =
+        json!({"logs": [], "next_cursor": null, "from": 1790812800000i64, "to": 1790816400000i64});
+    let (result, _, _) = run(
+        &[
+            "workflow",
+            "logs",
+            "wf-1",
+            "--start-time",
+            "2026-10-01T00:00:00Z",
+            "--end-time",
+            "2026-10-01T01:00:00Z",
+        ],
+        "GET",
+        &format!("/v1/workflows/wf-1/logs?{WORKFLOW_SCOPE}&from=1790812800000&to=1790816400000"),
+        response.clone(),
+        json!({}),
+    );
+    assert_eq!(result, response);
+}
+
+#[test]
+fn workflow_commands_require_a_cluster() {
+    let (output, _, _) = common::run_cli(
+        &[],
+        &["--json", "--org", "team", "workflow", "list"],
+        &json!({}),
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("No cluster specified"));
+}
