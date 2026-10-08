@@ -34,7 +34,7 @@ jobs:
   platform-integration:
     name: CLI against Platform Docker Compose
     if: github.repository == 'rawtreedb/rawtree-cli' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-24.04-arm
+    runs-on: [arc-runner-set-platform-arm64]
     timeout-minutes: 90
     permissions:
       contents: read

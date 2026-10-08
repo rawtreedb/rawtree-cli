@@ -395,7 +395,8 @@ The job also requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets to pull
 the private RawTree server, keeper, and backend images. Use a read-only Docker Hub
 token with access to those repositories.
 
-The integration job uses an ARM64 runner and reuses the published backend image
+The integration job uses Platform's `arc-runner-set-platform-arm64` runner pool.
+It reuses the published backend image
 only when its source revision is an ancestor of the checked-out Platform `main`
 and its backend release inputs are unchanged. It pulls the verified image by
 digest; if the inputs differ or revision metadata is missing, it builds from
