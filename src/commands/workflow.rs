@@ -34,14 +34,20 @@ impl WorkflowScope<'_> {
 }
 
 #[derive(Deserialize)]
+struct WorkflowQuery {
+    database: String,
+    sql: String,
+}
+
+#[derive(Deserialize)]
 struct Workflow {
     id: String,
     name: String,
-    database: String,
-    sql: String,
+    query: WorkflowQuery,
     enabled: bool,
     revision: i64,
-    interval_seconds: i64,
+    /// `None` for manual-only workflows, which have no schedule.
+    interval_seconds: Option<i64>,
     created_at: String,
     updated_at: String,
     #[serde(default)]
@@ -168,8 +174,7 @@ fn parse_sinks(sinks: &[String]) -> Result<Vec<Value>> {
 fn create_body(request: CreateWorkflow) -> Result<Value> {
     let mut body = json!({
         "name": request.name,
-        "database": request.database,
-        "sql": request.sql,
+        "query": {"database": request.database, "sql": request.sql},
         "enabled": !request.disabled,
         "sinks": parse_sinks(&request.sinks)?,
     });
@@ -184,11 +189,15 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
     if let Some(name) = request.name {
         body.insert("name".into(), json!(name));
     }
+    let mut query = Map::new();
     if let Some(database) = request.database {
-        body.insert("database".into(), json!(database));
+        query.insert("database".into(), json!(database));
     }
     if let Some(sql) = request.sql {
-        body.insert("sql".into(), json!(sql));
+        query.insert("sql".into(), json!(sql));
+    }
+    if !query.is_empty() {
+        body.insert("query".into(), Value::Object(query));
     }
     if let Some(enabled) = request.enabled {
         body.insert("enabled".into(), json!(enabled));
@@ -281,11 +290,12 @@ fn format_ms(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
-fn format_interval(seconds: i64) -> String {
+fn format_interval(seconds: Option<i64>) -> String {
     match seconds {
-        s if s % 3600 == 0 => format!("{}h", s / 3600),
-        s if s % 60 == 0 => format!("{}m", s / 60),
-        s => format!("{s}s"),
+        None => "manual".into(),
+        Some(s) if s % 3600 == 0 => format!("{}h", s / 3600),
+        Some(s) if s % 60 == 0 => format!("{}m", s / 60),
+        Some(s) => format!("{s}s"),
     }
 }
 
@@ -322,7 +332,7 @@ fn describe_sink(sink: &Value) -> String {
 fn print_workflow(workflow: &Workflow) {
     println!("  id:       {}", workflow.id);
     println!("  name:     {}", workflow.name);
-    println!("  database: {}", workflow.database);
+    println!("  database: {}", workflow.query.database);
     println!(
         "  status:   {}",
         if workflow.enabled {
@@ -344,7 +354,7 @@ fn print_workflow(workflow: &Workflow) {
         }
     }
     println!("  sql:");
-    for line in workflow.sql.lines() {
+    for line in workflow.query.sql.lines() {
         println!("    {line}");
     }
 }
@@ -363,7 +373,7 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
         for workflow in &resp.workflows {
             table.add_row(vec![
                 Cell::new(&workflow.name),
-                Cell::new(&workflow.database),
+                Cell::new(&workflow.query.database),
                 Cell::new(if workflow.enabled {
                     "enabled"
                 } else {
@@ -652,8 +662,7 @@ mod tests {
             body,
             json!({
                 "name": "alerts",
-                "database": "analytics",
-                "sql": "SELECT 1",
+                "query": {"database": "analytics", "sql": "SELECT 1"},
                 "enabled": false,
                 "sinks": [{"type": "table", "settings": {"database": "a", "table": "b"}}],
             })
@@ -696,6 +705,25 @@ mod tests {
             body,
             json!({"interval_seconds": 30, "enabled": false, "sinks": []})
         );
+
+        let body = update_body(UpdateWorkflow {
+            name: None,
+            database: None,
+            sql: Some("SELECT 2".into()),
+            interval_seconds: None,
+            enabled: None,
+            sinks: None,
+        })
+        .unwrap();
+        assert_eq!(body, json!({"query": {"sql": "SELECT 2"}}));
+    }
+
+    #[test]
+    fn format_interval_marks_manual_workflows() {
+        assert_eq!(format_interval(None), "manual");
+        assert_eq!(format_interval(Some(7200)), "2h");
+        assert_eq!(format_interval(Some(120)), "2m");
+        assert_eq!(format_interval(Some(45)), "45s");
     }
 
     #[test]

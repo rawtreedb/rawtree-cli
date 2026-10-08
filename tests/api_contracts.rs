@@ -181,7 +181,7 @@ fn logs_use_cluster_scope_without_a_database_or_with_a_stale_saved_database() {
 const WORKFLOW_SCOPE: &str = "organization=team%20alpha&cluster=prod%2Feu";
 
 fn workflow_response() -> Value {
-    json!({"id": "wf-1", "name": "alerts", "database": "analytics", "sql": "SELECT 1",
+    json!({"id": "wf-1", "name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"},
         "enabled": true, "revision": 1, "interval_seconds": 60,
         "created_at": "2026-10-07 10:00:00+00", "updated_at": "2026-10-07 10:00:00+00",
         "sinks": [{"type": "table", "id": "sink-1", "settings": {"database": "analytics", "table": "out"}}]})
@@ -210,10 +210,84 @@ fn workflow_create_uses_saved_database_and_sends_sinks() {
     assert_eq!(result, workflow_response());
     assert_eq!(
         body,
-        json!({"name": "alerts", "database": "analytics", "sql": "SELECT 1", "enabled": true,
+        json!({"name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"}, "enabled": true,
             "interval_seconds": 60,
             "sinks": [{"type": "table", "settings": {"database": "analytics", "table": "out"}}]})
     );
+}
+
+fn run_workflow_human(args: &[&str], method: &str, path: &str, response: Value) -> String {
+    let mut command = vec!["--org", "team alpha", "--cluster", "prod/eu"];
+    command.extend_from_slice(args);
+    let (output, _, _) = common::run_cli(
+        &[(format!("{method} {path}"), "200 OK", response)],
+        &command,
+        &json!({}),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn workflow_list_renders_empty_and_populated_responses() {
+    let path = format!("/v1/workflows?{WORKFLOW_SCOPE}");
+    let stdout = run_workflow_human(
+        &["workflow", "list"],
+        "GET",
+        &path,
+        json!({"workflows": []}),
+    );
+    assert!(stdout.contains("No workflows yet"), "{stdout}");
+
+    let mut manual = workflow_response();
+    manual["id"] = json!("wf-2");
+    manual["name"] = json!("backfill");
+    manual["interval_seconds"] = Value::Null;
+    let stdout = run_workflow_human(
+        &["workflow", "list"],
+        "GET",
+        &path,
+        json!({"workflows": [workflow_response(), manual]}),
+    );
+    for expected in [
+        "alerts",
+        "analytics",
+        "1m",
+        "wf-1",
+        "backfill",
+        "manual",
+        "wf-2",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected}: {stdout}");
+    }
+}
+
+#[test]
+fn workflow_get_renders_query() {
+    let stdout = run_workflow_human(
+        &["workflow", "get", "wf-1"],
+        "GET",
+        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+    );
+    assert!(stdout.contains("database: analytics"), "{stdout}");
+    assert!(stdout.contains("SELECT 1"), "{stdout}");
+}
+
+#[test]
+fn workflow_update_nests_query_fields() {
+    let (_, _, body) = run(
+        &["workflow", "update", "wf-1", "--sql", "SELECT 2"],
+        "PATCH",
+        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({}),
+    );
+    assert_eq!(body, json!({"query": {"sql": "SELECT 2"}}));
 }
 
 #[test]
