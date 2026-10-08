@@ -15,7 +15,7 @@ use clap_complete::generate;
 
 use cli::{
     Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType,
-    TableCommand, WorkflowCommand,
+    TableCommand, WorkflowCommand, WorkflowSinkCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -162,6 +162,17 @@ fn read_sql_arg(sql: String) -> Result<String> {
     } else {
         Ok(sql)
     }
+}
+
+fn ensure_single_stdin_reader(sql: Option<&str>, sinks: &[String]) -> Result<()> {
+    if sql == Some("-") && sinks.iter().any(|sink| sink == "-") {
+        return Err(output::coded_error(
+            "validation_error",
+            "--sql - and --sink - both read stdin; pass the sinks with --sink @<path> instead",
+            2,
+        ));
+    }
+    Ok(())
 }
 
 fn require_workflow_scope<'a>(
@@ -510,6 +521,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         }
+        Command::Workflow {
+            action:
+                WorkflowCommand::Sink {
+                    action: WorkflowSinkCommand::Schema { sink_type },
+                },
+        } => commands::workflow::sink::schema(sink_type, json),
         Command::Workflow { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             let scope =
@@ -523,20 +540,31 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     sql,
                     interval_seconds,
                     disabled,
+                    sink_tables,
+                    sink_urls,
+                    sink_headers,
                     sinks,
-                } => commands::workflow::create(
-                    &client,
-                    &scope,
-                    commands::workflow::CreateWorkflow {
-                        name,
-                        database: resolve_database(database)?,
-                        sql: read_sql_arg(sql)?,
-                        interval_seconds: interval_seconds.and_then(|interval| interval.0),
-                        disabled,
-                        sinks,
-                    },
-                    json,
-                ),
+                } => {
+                    ensure_single_stdin_reader(Some(&sql), &sinks)?;
+                    commands::workflow::create(
+                        &client,
+                        &scope,
+                        commands::workflow::CreateWorkflow {
+                            name,
+                            database: resolve_database(database)?,
+                            sql: read_sql_arg(sql)?,
+                            interval_seconds: interval_seconds.and_then(|interval| interval.0),
+                            disabled,
+                            sinks: commands::workflow::sink::SinkArgs {
+                                tables: sink_tables,
+                                urls: sink_urls,
+                                headers: sink_headers,
+                                json: sinks,
+                            },
+                        },
+                        json,
+                    )
+                }
                 WorkflowCommand::Update {
                     id,
                     name,
@@ -547,20 +575,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     disable,
                     sinks,
                     clear_sinks,
-                } => commands::workflow::update(
-                    &client,
-                    &scope,
-                    &id,
-                    commands::workflow::UpdateWorkflow {
-                        name,
-                        database,
-                        sql: sql.map(read_sql_arg).transpose()?,
-                        interval_seconds: interval_seconds.map(|interval| interval.0),
-                        enabled: (enable || disable).then_some(enable),
-                        sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
-                    },
-                    json,
-                ),
+                } => {
+                    ensure_single_stdin_reader(sql.as_deref(), &sinks)?;
+                    commands::workflow::update(
+                        &client,
+                        &scope,
+                        &id,
+                        commands::workflow::UpdateWorkflow {
+                            name,
+                            database,
+                            sql: sql.map(read_sql_arg).transpose()?,
+                            interval_seconds: interval_seconds.map(|interval| interval.0),
+                            enabled: (enable || disable).then_some(enable),
+                            sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
+                        },
+                        json,
+                    )
+                }
                 WorkflowCommand::Delete { id } => {
                     commands::workflow::delete(&client, &scope, &id, json)
                 }
@@ -593,6 +624,62 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 WorkflowCommand::Metrics { id, range } => {
                     commands::workflow::metrics(&client, &scope, &id, &range, json)
                 }
+                WorkflowCommand::Sink { action } => match action {
+                    WorkflowSinkCommand::List { workflow_id } => {
+                        commands::workflow::sink::list(&client, &scope, &workflow_id, json)
+                    }
+                    WorkflowSinkCommand::Create {
+                        workflow_id,
+                        table,
+                        http,
+                        headers,
+                    } => commands::workflow::sink::create(
+                        &client,
+                        &scope,
+                        &workflow_id,
+                        match (table, http) {
+                            (Some(table), _) => commands::workflow::sink::NewSink::Table(table),
+                            (None, Some(url)) => {
+                                commands::workflow::sink::NewSink::Http { url, headers }
+                            }
+                            (None, None) => unreachable!("clap requires --table or --http"),
+                        },
+                        json,
+                    ),
+                    WorkflowSinkCommand::Update {
+                        workflow_id,
+                        sink_id,
+                        table,
+                        url,
+                        headers,
+                        remove_headers,
+                    } => commands::workflow::sink::update(
+                        &client,
+                        &scope,
+                        &workflow_id,
+                        &sink_id,
+                        commands::workflow::sink::SinkChanges {
+                            table,
+                            url,
+                            headers,
+                            remove_headers,
+                        },
+                        json,
+                    ),
+                    WorkflowSinkCommand::Delete {
+                        workflow_id,
+                        sink_id,
+                    } => commands::workflow::sink::delete(
+                        &client,
+                        &scope,
+                        &workflow_id,
+                        &sink_id,
+                        json,
+                    ),
+                    WorkflowSinkCommand::Schema { .. } => {
+                        unreachable!("sink schema needs no workflow scope")
+                    }
+                },
             }
         }
         Command::Logs {

@@ -421,6 +421,189 @@ fn workflow_update_sends_only_changed_fields() {
 }
 
 #[test]
+fn workflow_create_builds_typed_sinks_with_the_workflow_database() {
+    let (_, _, body) = run(
+        &[
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--database",
+            "analytics",
+            "--sql",
+            "SELECT 1",
+            "--sink-table",
+            "alerts",
+            "--sink-http",
+            "https://example.com/hook",
+            "--sink-header",
+            "Authorization: Bearer token",
+        ],
+        "POST",
+        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({}),
+    );
+    assert_eq!(
+        body["sinks"],
+        json!([
+            {"type": "table", "settings": {"database": "analytics", "table": "alerts"}},
+            {"type": "http", "settings": {"url": "https://example.com/hook",
+                "headers": {"Authorization": "Bearer token"}}},
+        ])
+    );
+}
+
+#[test]
+fn invalid_sinks_fail_before_any_request() {
+    let (output, _, _) = common::run_cli(
+        &[],
+        &[
+            "--org",
+            "team alpha",
+            "--cluster",
+            "prod/eu",
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--database",
+            "analytics",
+            "--sql",
+            "SELECT 1",
+            "--sink",
+            r#"{"type":"http","settings":{"headers":{}}}"#,
+        ],
+        &json!({}),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("settings.url is required"), "{stderr}");
+    assert!(
+        stderr.contains("rtree workflow sink schema --type http"),
+        "{stderr}"
+    );
+}
+
+fn workflow_with_sinks() -> Value {
+    let mut workflow = workflow_response();
+    workflow["sinks"] = json!([
+        {"type": "table", "id": "sink-table", "settings": {"database": "analytics", "table": "out"}},
+        {"type": "http", "id": "sink-http", "settings": {"url": "https://example.com/hook",
+            "url_configured": true, "header_names": ["Authorization", "X-Team"]}},
+    ]);
+    workflow
+}
+
+/// Runs a `workflow sink` command that reads the workflow and then patches its
+/// sinks, returning the JSON output and the PATCH body.
+fn run_sink_change(args: &[&str], patched: Value) -> (Value, Value) {
+    let path = format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}");
+    let mut command = vec!["--org", "team alpha", "--cluster", "prod/eu", "--json"];
+    command.extend_from_slice(args);
+    let (output, _, bodies) = common::run_cli(
+        &[
+            (format!("GET {path}"), "200 OK", workflow_with_sinks()),
+            (format!("PATCH {path}"), "200 OK", patched),
+        ],
+        &command,
+        &json!({}),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        serde_json::from_slice(&output.stdout).unwrap(),
+        bodies[1].clone(),
+    )
+}
+
+#[test]
+fn sink_create_keeps_existing_sinks_and_returns_the_new_one() {
+    let mut patched = workflow_with_sinks();
+    let added = json!({"type": "table", "id": "sink-new",
+        "settings": {"database": "analytics", "table": "copy"}});
+    patched["sinks"].as_array_mut().unwrap().push(added.clone());
+    let (result, body) = run_sink_change(
+        &["workflow", "sink", "create", "wf-1", "--table", "copy"],
+        patched,
+    );
+    assert_eq!(result, added);
+    assert_eq!(
+        body,
+        json!({"sinks": [
+            {"type": "table", "id": "sink-table", "settings": {"database": "analytics", "table": "out"}},
+            {"type": "http", "id": "sink-http"},
+            {"type": "table", "settings": {"database": "analytics", "table": "copy"}},
+        ]})
+    );
+}
+
+#[test]
+fn sink_update_changes_one_header_and_keeps_the_rest() {
+    let (result, body) = run_sink_change(
+        &[
+            "workflow",
+            "sink",
+            "update",
+            "wf-1",
+            "sink-http",
+            "--header",
+            "Authorization: Bearer new",
+        ],
+        workflow_with_sinks(),
+    );
+    assert_eq!(result["id"], "sink-http");
+    assert_eq!(
+        body,
+        json!({"sinks": [
+            {"type": "table", "id": "sink-table", "settings": {"database": "analytics", "table": "out"}},
+            {"type": "http", "id": "sink-http", "settings": {"headers": {
+                "Authorization": "Bearer new", "X-Team": null}}},
+        ]})
+    );
+}
+
+#[test]
+fn sink_delete_sends_the_remaining_sinks() {
+    let mut patched = workflow_with_sinks();
+    patched["sinks"].as_array_mut().unwrap().remove(0);
+    let (result, body) = run_sink_change(
+        &["workflow", "sink", "delete", "wf-1", "sink-table"],
+        patched,
+    );
+    assert_eq!(
+        result,
+        json!({"workflow_id": "wf-1", "sink_id": "sink-table", "deleted": true})
+    );
+    assert_eq!(
+        body,
+        json!({"sinks": [{"type": "http", "id": "sink-http"}]})
+    );
+}
+
+#[test]
+fn sink_list_prints_targets_and_header_names() {
+    let stdout = run_workflow_human(
+        &["workflow", "sink", "list", "wf-1"],
+        "GET",
+        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        workflow_with_sinks(),
+    );
+    for expected in [
+        "analytics.out",
+        "sink-table",
+        "https://example.com/hook",
+        "Authorization, X-Team",
+        "sink-http",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected}: {stdout}");
+    }
+}
+
+#[test]
 fn workflow_delete_and_cancel_accept_empty_responses() {
     let (result, _, _) = run(
         &["workflow", "delete", "wf-1"],

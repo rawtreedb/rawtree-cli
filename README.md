@@ -257,7 +257,8 @@ rtree workflow create --name errors --database analytics --interval-seconds 60 \
   --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
 rtree workflow create --name on-demand --database analytics --sql "SELECT 1"
 rtree workflow create --name alerts --disabled --sql - \
-  --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
+  --sink-table analytics.alerts \
+  --sink-http https://example.com/hook --sink-header 'Authorization: Bearer ...' \
   < alerts.sql
 rtree workflow get <id>
 rtree workflow update <id> --interval-seconds 300
@@ -271,6 +272,12 @@ rtree workflow runs <id>
 rtree workflow cancel <id> <run-id>
 rtree workflow logs <id> --since 1h
 rtree workflow metrics <id> --since 7d
+
+rtree workflow sink list <id>
+rtree workflow sink create <id> --table analytics.alerts_v2
+rtree workflow sink update <id> <sink-id> --header 'Authorization: Bearer ...'
+rtree workflow sink delete <id> <sink-id>
+rtree workflow sink schema --type http
 ```
 
 Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
@@ -291,11 +298,26 @@ available in either mode, including while paused. Text output shows status as
 `active`, `paused`, or `manual`, the next scheduled run when available, and HTTP
 sink URLs.
 
-Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
-nested `settings` object: `{"database","table"}` for `table` sinks and
-`{"url","headers"}` for `http` sinks. On `update`, `--sink` replaces the whole
-list. Include each existing sink's `id` to keep it; an existing HTTP sink may omit
-`settings`, or its `url` or `headers`, to retain them.
+A workflow has up to five sinks. `rtree workflow sink schema` lists each sink type's
+fields, rules, and examples, in JSON with `--json`.
+
+On `create`, `--sink-table [DATABASE.]TABLE` adds a table sink (the database defaults
+to the workflow's) and `--sink-http URL` an HTTP sink; `--sink-header 'Name: value'`
+applies when there is exactly one `--sink-http`. `--sink` takes the API's JSON for
+anything else: an object, an array of objects, `@path` to read a file, or `-` to
+read stdin. Sink files keep header credentials out of shell history.
+The CLI validates sinks before sending them and names the failing field.
+
+`rtree workflow sink` changes one sink at a time. `create` takes `--table` or
+`--http` with `--header`; `update` takes `--table` for table sinks, or `--url`,
+`--header`, and `--remove-header` for HTTP sinks, keeping the other stored headers.
+The API replaces the whole list on each change, so the CLI reads the current sinks
+and sends the others back by ID; a concurrent edit to the same workflow's sinks can
+be overwritten.
+
+On `update`, `--sink` replaces the whole list. Include each existing sink's `id` to
+keep it; an existing HTTP sink may omit `settings`, or its `url` or `headers`, to
+retain them.
 
 `run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
 same run instead of starting another. Logs and metrics cover the last 24 hours by
@@ -384,7 +406,8 @@ It also logs in with the local test user's email and password, verifies API acce
 using the saved session, logs out, and checks that credentials are cleared and API
 access requires authentication again.
 Workflow tests cover definition updates, manual and scheduled execution,
-pause/resume, cancellation, idempotency, table sink delivery, logs, and metrics.
+pause/resume, cancellation, idempotency, table sink delivery, per-sink changes,
+logs, and metrics.
 They run through the real CLI and clean up their workflows and databases.
 The Platform repository continues to test API endpoints directly.
 
