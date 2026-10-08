@@ -183,6 +183,7 @@ const WORKFLOW_SCOPE: &str = "organization=team%20alpha&cluster=prod%2Feu";
 fn workflow_response() -> Value {
     json!({"id": "wf-1", "name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"},
         "enabled": true, "revision": 1, "interval_seconds": 60,
+        "next_run_at": "2026-10-07T10:01:00Z",
         "created_at": "2026-10-07 10:00:00+00", "updated_at": "2026-10-07 10:00:00+00",
         "sinks": [{"type": "table", "id": "sink-1", "settings": {"database": "analytics", "table": "out"}}]})
 }
@@ -247,6 +248,7 @@ fn workflow_list_renders_empty_and_populated_responses() {
     manual["id"] = json!("wf-2");
     manual["name"] = json!("backfill");
     manual["interval_seconds"] = Value::Null;
+    manual["next_run_at"] = Value::Null;
     let stdout = run_workflow_human(
         &["workflow", "list"],
         "GET",
@@ -261,57 +263,130 @@ fn workflow_list_renders_empty_and_populated_responses() {
         "backfill",
         "manual",
         "wf-2",
+        "2026-10-07T10:01:00Z",
+        "—",
     ] {
         assert!(stdout.contains(expected), "missing {expected}: {stdout}");
     }
 }
 
 #[test]
-fn workflow_get_renders_query() {
-    let stdout = run_workflow_human(
-        &["workflow", "get", "wf-1"],
-        "GET",
-        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
-        workflow_response(),
-    );
-    assert!(stdout.contains("database: analytics"), "{stdout}");
-    assert!(stdout.contains("SELECT 1"), "{stdout}");
+fn workflow_human_output_reads_query_and_optional_metadata() {
+    for (interval, enabled, status, next_run) in [
+        (Value::Null, true, "manual", Value::Null),
+        (Value::Null, false, "manual", Value::Null),
+        (json!(60), false, "paused", Value::Null),
+        (json!(60), true, "enabled", json!("2026-10-07T10:01:00Z")),
+    ] {
+        let mut response = workflow_response();
+        response["interval_seconds"] = interval;
+        response["enabled"] = json!(enabled);
+        response["next_run_at"] = next_run.clone();
+        response["sinks"] = json!([{"id": "sink-http", "type": "http", "settings": {
+            "url": "https://example.com/hook", "url_configured": true, "header_names": ["Authorization"]
+        }}]);
+        for (args, method, suffix) in [
+            (vec!["workflow", "get", "wf-1"], "GET", "/wf-1"),
+            (
+                vec![
+                    "workflow",
+                    "create",
+                    "--name",
+                    "alerts",
+                    "--database",
+                    "analytics",
+                    "--sql",
+                    "SELECT 1",
+                ],
+                "POST",
+                "",
+            ),
+            (
+                vec!["workflow", "update", "wf-1", "--name", "alerts"],
+                "PATCH",
+                "/wf-1",
+            ),
+        ] {
+            let text = run_workflow_human(
+                &args,
+                method,
+                &format!("/v1/workflows{suffix}?{WORKFLOW_SCOPE}"),
+                response.clone(),
+            );
+            assert!(text.contains("analytics"), "{text}");
+            assert!(text.contains(status), "{text}");
+            assert!(text.contains(next_run.as_str().unwrap_or("—")), "{text}");
+            assert!(text.contains("SELECT 1"), "{text}");
+            assert!(text.contains("https://example.com/hook"), "{text}");
+            assert!(text.contains("headers=Authorization"), "{text}");
+        }
+    }
 }
 
 #[test]
-fn workflow_update_nests_query_fields() {
-    let (_, _, body) = run(
-        &["workflow", "update", "wf-1", "--sql", "SELECT 2"],
-        "PATCH",
-        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
-        workflow_response(),
-        json!({}),
-    );
-    assert_eq!(body, json!({"query": {"sql": "SELECT 2"}}));
+fn workflow_query_updates_preserve_unspecified_fields() {
+    for (flags, expected) in [
+        (
+            vec!["--sql", "SELECT 2"],
+            json!({"query": {"sql": "SELECT 2"}}),
+        ),
+        (
+            vec!["--database", "other"],
+            json!({"query": {"database": "other"}}),
+        ),
+        (
+            vec!["--database", "other", "--sql", "SELECT 2"],
+            json!({"query": {"database": "other", "sql": "SELECT 2"}}),
+        ),
+        (vec!["--name", "renamed"], json!({"name": "renamed"})),
+    ] {
+        let mut args = vec!["workflow", "update", "wf-1"];
+        args.extend(flags);
+        let (_, _, body) = run(
+            &args,
+            "PATCH",
+            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({"database": "saved-db"}),
+        );
+        assert_eq!(body, expected);
+    }
 }
 
 #[test]
-fn workflow_manual_sends_null_interval() {
-    let (_, _, body) = run(
-        &[
-            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1", "--manual",
-        ],
-        "POST",
-        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
-        workflow_response(),
-        json!({"database": "analytics"}),
-    );
-    assert_eq!(body["interval_seconds"], Value::Null);
-    assert!(body.as_object().unwrap().contains_key("interval_seconds"));
+fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
+    for (flags, interval) in [
+        (vec![], None),
+        (vec!["--manual"], Some(Value::Null)),
+        (vec!["--interval-seconds", "300"], Some(json!(300))),
+    ] {
+        let mut create = vec![
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
+        ];
+        create.extend_from_slice(&flags);
+        let (_, _, body) = run(
+            &create,
+            "POST",
+            &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({"database": "analytics"}),
+        );
+        assert_eq!(body.get("interval_seconds"), interval.as_ref());
+        assert_eq!(body["enabled"], true);
 
-    let (_, _, body) = run(
-        &["workflow", "update", "wf-1", "--manual"],
-        "PATCH",
-        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
-        workflow_response(),
-        json!({}),
-    );
-    assert_eq!(body, json!({"interval_seconds": null}));
+        let mut update = vec!["workflow", "update", "wf-1", "--name", "renamed"];
+        update.extend_from_slice(&flags);
+        let (_, _, body) = run(
+            &update,
+            "PATCH",
+            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({}),
+        );
+        assert_eq!(body.get("interval_seconds"), interval.as_ref());
+        assert!(body.get("enabled").is_none());
+        assert!(body.get("query").is_none());
+    }
 }
 
 #[test]

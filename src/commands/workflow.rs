@@ -48,6 +48,7 @@ struct Workflow {
     revision: i64,
     /// `None` for manual-only workflows, which have no schedule.
     interval_seconds: Option<i64>,
+    next_run_at: Option<String>,
     created_at: String,
     updated_at: String,
     #[serde(default)]
@@ -315,6 +316,7 @@ fn describe_sink(sink: &Value) -> String {
             settings["table"].as_str().unwrap_or("?")
         ),
         Some("http") => {
+            let url = settings["url"].as_str().unwrap_or("URL unavailable");
             let headers = settings["header_names"]
                 .as_array()
                 .map(|names| {
@@ -326,9 +328,9 @@ fn describe_sink(sink: &Value) -> String {
                 })
                 .unwrap_or_default();
             if headers.is_empty() {
-                format!("http  id={id}")
+                format!("http {url}  id={id}")
             } else {
-                format!("http  id={id}  headers={headers}")
+                format!("http {url}  id={id}  headers={headers}")
             }
         }
         _ => sink.to_string(),
@@ -348,6 +350,10 @@ fn print_workflow(workflow: &Workflow) {
         }
     );
     println!("  interval: {}", format_interval(workflow.interval_seconds));
+    println!(
+        "  next run: {}",
+        workflow.next_run_at.as_deref().unwrap_or("—")
+    );
     println!("  revision: {}", workflow.revision);
     println!("  created:  {}", workflow.created_at);
     println!("  updated:  {}", workflow.updated_at);
@@ -374,7 +380,7 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
         }
         let mut table = new_cli_table();
         table.set_header(vec![
-            "name", "database", "status", "interval", "sinks", "updated", "id",
+            "name", "database", "status", "interval", "next run", "sinks", "updated", "id",
         ]);
         for workflow in &resp.workflows {
             table.add_row(vec![
@@ -387,6 +393,7 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
                 }),
                 Cell::new(format_interval(workflow.interval_seconds))
                     .set_alignment(CellAlignment::Right),
+                Cell::new(workflow.next_run_at.as_deref().unwrap_or("—")),
                 Cell::new(workflow.sinks.len()).set_alignment(CellAlignment::Right),
                 Cell::new(&workflow.updated_at),
                 Cell::new(&workflow.id),
@@ -804,7 +811,7 @@ mod tests {
             describe_sink(
                 &json!({"type": "http", "id": "s2", "settings": {"url_configured": true, "header_names": ["Authorization"]}})
             ),
-            "http  id=s2  headers=Authorization"
+            "http URL unavailable  id=s2  headers=Authorization"
         );
         assert_eq!(
             describe_sink(&json!({"type": "queue"})),

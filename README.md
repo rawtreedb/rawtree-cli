@@ -249,17 +249,19 @@ creation; create a replacement key to change it. There is no `key update` comman
 
 ### Workflows
 
-Workflows run saved SQL on a schedule and deliver results to sinks.
+Workflows run saved SQL on demand or on a schedule and deliver results to sinks.
 
 ```sh
 rtree workflow list
 rtree workflow create --name errors --database analytics --interval-seconds 60 \
   --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
+rtree workflow create --name on-demand --database analytics --manual --sql "SELECT 1"
 rtree workflow create --name alerts --disabled --sql - \
   --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
   < alerts.sql
 rtree workflow get <id>
 rtree workflow update <id> --interval-seconds 300
+rtree workflow update <id> --manual
 rtree workflow update <id> --disable
 rtree workflow update <id> --clear-sinks
 rtree workflow delete <id>
@@ -274,6 +276,17 @@ rtree workflow metrics <id> --since 7d
 Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
 the environment, or the saved defaults). API keys must have admin permission.
 `create` uses the selected database when `--database` is omitted.
+The CLI sends `--database` and `--sql` inside the API's `query` object. On `update`,
+each flag changes only that query field; the other field stays unchanged.
+
+Use `--manual` on `create` or `update` for manual-only execution
+(`interval_seconds: null`). It cannot be combined with `--interval-seconds`.
+An interval restores recurring execution, subject to the enabled state; use
+`--enable` as well if the workflow is paused. Omitting both flags on `create`
+uses the server default of one second; on `update` it preserves the current mode.
+`--disable` pauses scheduled runs while retaining the interval. Manual runs remain
+available in either mode, including while paused. Text output shows the next
+scheduled run when available and HTTP sink URLs.
 
 Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
 nested `settings` object: `{"database","table"}` for `table` sinks and
@@ -367,6 +380,9 @@ database creation, insertion, querying, API key login, and deletion through the 
 It also logs in with the local test user's email and password, verifies API access
 using the saved session, logs out, and checks that credentials are cleared and API
 access requires authentication again.
+Workflow tests cover definition updates, manual and scheduled execution,
+pause/resume, cancellation, idempotency, table sink delivery, logs, and metrics.
+They run through the real CLI and clean up their workflows and databases.
 The Platform repository continues to test API endpoints directly.
 
 The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It

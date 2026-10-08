@@ -1,3 +1,6 @@
+#[path = "live_platform/workflows.rs"]
+mod workflows;
+
 use std::env;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
