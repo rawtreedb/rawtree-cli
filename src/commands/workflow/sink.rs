@@ -18,9 +18,8 @@ macro_rules! invalid {
     };
 }
 
-/// Mirrors the platform's `MAX_SINKS` and the HTTP sink header limit.
+/// Documents the platform's `MAX_SINKS`; the API enforces it.
 const MAX_SINKS: usize = 5;
-const MAX_HEADERS: usize = 20;
 
 struct SinkField {
     name: &'static str,
@@ -263,20 +262,13 @@ pub(super) fn read_json_args(args: &[String]) -> Result<Vec<Value>> {
     Ok(sinks)
 }
 
-/// Checks the shape the platform accepts so mistakes fail before a request.
-/// Types this CLI does not know are left for the server to judge.
+/// Checks only the shape of each sink so malformed input fails before a
+/// request; values and limits are left to the API. Types this CLI does not
+/// know are passed through.
 pub(super) fn validate(sinks: &[Value]) -> Result<()> {
-    if sinks.len() > MAX_SINKS {
-        invalid!(
-            "a workflow supports at most {MAX_SINKS} sinks; got {}",
-            sinks.len()
-        );
-    }
-    let mut ids = BTreeSet::new();
-    let mut targets = BTreeSet::new();
     for (index, sink) in sinks.iter().enumerate() {
         let kind = sink["type"].as_str().and_then(sink_type);
-        if let Err(reason) = validate_sink(sink, kind) {
+        if let Err(reason) = validate_shape(sink, kind) {
             let position = index + 1;
             match kind {
                 Some(kind) => invalid!(
@@ -288,30 +280,11 @@ pub(super) fn validate(sinks: &[Value]) -> Result<()> {
                 ),
             }
         }
-        if let Some(id) = sink["id"].as_str() {
-            if !ids.insert(id) {
-                invalid!("sink ID '{id}' appears more than once");
-            }
-        }
-        if kind.is_some_and(|kind| kind.name == "table") {
-            let settings = &sink["settings"];
-            let target = (
-                settings["database"].as_str().unwrap_or_default(),
-                settings["table"].as_str().unwrap_or_default(),
-            );
-            if !targets.insert(target) {
-                invalid!(
-                    "each table sink must target a different table; {}.{} appears more than once",
-                    target.0,
-                    target.1
-                );
-            }
-        }
     }
     Ok(())
 }
 
-fn validate_sink(sink: &Value, kind: Option<&SinkType>) -> Result<(), String> {
+fn validate_shape(sink: &Value, kind: Option<&SinkType>) -> Result<(), String> {
     let Value::Object(fields) = sink else {
         return Err("expected a JSON object".into());
     };
@@ -324,69 +297,43 @@ fn validate_sink(sink: &Value, kind: Option<&SinkType>) -> Result<(), String> {
     reject_unknown(fields, &["type", "id", "settings"], "")?;
     let existing = match fields.get("id") {
         None => false,
-        Some(Value::String(id)) if !id.trim().is_empty() => true,
-        Some(_) => return Err(r#""id" must be a sink ID string"#.into()),
+        Some(Value::String(_)) => true,
+        Some(_) => return Err(r#""id" must be a string"#.into()),
     };
     match (kind.name, fields.get("settings")) {
         ("table", Some(Value::Object(settings))) => {
             reject_unknown(settings, &["database", "table"], "settings.")?;
             for name in ["database", "table"] {
-                match settings.get(name).and_then(Value::as_str) {
-                    Some(value) if is_identifier(value) => {}
-                    Some(value) => {
-                        return Err(format!(
-                            "settings.{name} '{value}' is not a valid identifier ({})",
-                            IDENTIFIER_RULE.to_lowercase()
-                        ))
-                    }
-                    None => return Err(format!("settings.{name} is required")),
+                if !settings.get(name).is_some_and(Value::is_string) {
+                    return Err(format!("settings.{name} is required and must be a string"));
                 }
             }
             Ok(())
         }
         ("table", _) => Err("settings must be an object with database and table".into()),
         ("http", None) if existing => Ok(()),
-        ("http", None) => Err("settings.url is required when adding an HTTP sink".into()),
         ("http", Some(Value::Object(settings))) => {
             reject_unknown(settings, &["url", "headers"], "settings.")?;
             match settings.get("url") {
-                Some(Value::String(url)) => validate_url(url)?,
+                Some(Value::String(_)) => {}
                 Some(_) => return Err("settings.url must be a string".into()),
                 None if existing => {}
                 None => return Err("settings.url is required when adding an HTTP sink".into()),
             }
             match settings.get("headers") {
                 None => Ok(()),
-                Some(Value::Object(headers)) => {
-                    if headers.len() > MAX_HEADERS {
-                        return Err(format!(
-                            "settings.headers allows at most {MAX_HEADERS} headers"
-                        ));
-                    }
-                    for (name, value) in headers {
-                        match value {
-                            Value::String(value) if has_reserved_sequence(value) => {
-                                return Err(format!(
-                                    "header '{name}' contains {{{{, %, or ${{, which are reserved"
-                                ))
-                            }
-                            Value::String(_) => {}
-                            Value::Null if existing => {}
-                            Value::Null => {
-                                return Err(format!(
-                                    "header '{name}' is null; null keeps a stored value and only applies to existing sinks"
-                                ))
-                            }
-                            _ => return Err(format!("header '{name}' must be a string")),
-                        }
-                    }
-                    Ok(())
-                }
+                Some(Value::Object(headers)) => headers
+                    .iter()
+                    .find(|(_, value)| !(value.is_string() || value.is_null()))
+                    .map_or(Ok(()), |(name, _)| {
+                        Err(format!("header '{name}' must be a string"))
+                    }),
                 Some(_) => {
                     Err("settings.headers must be an object of header names to values".into())
                 }
             }
         }
+        ("http", None) => Err("settings.url is required when adding an HTTP sink".into()),
         _ => Err("settings must be an object".into()),
     }
 }
@@ -407,33 +354,6 @@ fn reject_unknown(
         )),
         None => Ok(()),
     }
-}
-
-/// The platform's delivery configuration reserves these sequences.
-fn has_reserved_sequence(value: &str) -> bool {
-    ["{{", "%", "${"]
-        .iter()
-        .any(|reserved| value.contains(reserved))
-}
-
-fn validate_url(url: &str) -> Result<(), String> {
-    if has_reserved_sequence(url) {
-        return Err(format!(
-            "settings.url '{url}' contains {{{{, %, or ${{, which are reserved; percent-encoded URLs are not supported"
-        ));
-    }
-    match reqwest::Url::parse(url.trim()) {
-        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") && parsed.has_host() => Ok(()),
-        _ => Err(format!(
-            "settings.url '{url}' must be an absolute HTTP or HTTPS URL"
-        )),
-    }
-}
-
-fn is_identifier(value: &str) -> bool {
-    value.len() <= 64
-        && value.starts_with(|c: char| c.is_ascii_alphabetic())
-        && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn load(client: &ApiClient, scope: &WorkflowScope, workflow_id: &str) -> Result<Workflow> {
@@ -831,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_matches_platform_rules_and_points_to_the_schema() {
+    fn validation_checks_shape_and_points_to_the_schema() {
         for (sinks, expected) in [
             (json!([{"settings": {}}]), r#"missing "type""#),
             (json!(["table"]), "expected a JSON object"),
@@ -840,8 +760,8 @@ mod tests {
                 "settings.table is required",
             ),
             (
-                json!([{"type": "table", "settings": {"database": "1a", "table": "b"}}]),
-                "not a valid identifier",
+                json!([{"type": "table", "settings": {"database": "a", "table": 1}}]),
+                "settings.table is required and must be a string",
             ),
             (
                 json!([{"type": "table", "name": "x", "settings": {"database": "a", "table": "b"}}]),
@@ -853,41 +773,31 @@ mod tests {
             ),
             (json!([{"type": "http"}]), "settings.url is required"),
             (
-                json!([{"type": "http", "settings": {"url": "https://a.example/a%20b"}}]),
-                "which are reserved",
+                json!([{"type": "http", "settings": {"url": "https://a.example", "headers": {"X": 1}}}]),
+                "header 'X' must be a string",
             ),
             (
-                json!([{"type": "http", "settings": {"url": "https://a.example", "headers": {"X": "${TOKEN}"}}}]),
-                "header 'X' contains",
-            ),
-            (
-                json!([{"type": "http", "settings": {"url": "ftp://a.example"}}]),
-                "absolute HTTP or HTTPS URL",
-            ),
-            (
-                json!([{"type": "http", "settings": {"url": "https://a.example", "headers": {"X": null}}}]),
-                "only applies to existing sinks",
-            ),
-            (
-                json!([
-                    {"type": "table", "settings": {"database": "a", "table": "b"}},
-                    {"type": "table", "settings": {"database": "a", "table": "b"}},
-                ]),
-                "a.b appears more than once",
-            ),
-            (
-                json!([{"type": "http", "id": "s1"}, {"type": "http", "id": "s1"}]),
-                "appears more than once",
-            ),
-            (
-                Value::Array(vec![json!({"type": "http", "id": "s"}); 6]),
-                "at most 5 sinks",
+                json!([{"type": "http", "id": 7}]),
+                r#""id" must be a string"#,
             ),
         ] {
             let err = error(sinks);
             assert!(err.contains(expected), "expected {expected:?} in {err}");
         }
         assert!(error(json!([{"type": "http"}])).contains("rtree workflow sink schema --type http"));
+    }
+
+    #[test]
+    fn values_and_limits_are_left_to_the_api() {
+        validate(&[
+            json!({"type": "table", "settings": {"database": "1bad", "table": "a.b"}}),
+            json!({"type": "table", "settings": {"database": "1bad", "table": "a.b"}}),
+            json!({"type": "http", "settings": {"url": "not a url", "headers": {"X": null}}}),
+            json!({"type": "http", "id": "s"}),
+            json!({"type": "http", "id": "s"}),
+            json!({"type": "http", "id": "t"}),
+        ])
+        .unwrap();
     }
 
     #[test]
