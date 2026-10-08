@@ -433,21 +433,42 @@ pub enum TableCommand {
     },
 }
 
-const SINK_HELP: &str = "Sinks are JSON objects with a type and its settings:\n  {\"type\":\"table\",\"settings\":{\"database\":\"analytics\",\"table\":\"alerts\"}}\n  {\"type\":\"http\",\"settings\":{\"url\":\"https://example.com/hook\",\"headers\":{\"Authorization\":\"Bearer ...\"}}}";
+const SINK_HELP: &str = r#"Sinks:
+  --sink-table and --sink-http cover the common cases. --sink takes JSON for
+  anything else: an object, an array of objects, @<path> to read a file, or -
+  to read stdin. A workflow has at most five sinks in total.
 
-const SINK_UPDATE_HELP: &str = r#"Sinks are JSON objects with a type and its settings. --sink replaces the whole
-list; include the "id" of existing sinks to keep them. An existing HTTP sink may
-omit "settings", or its "url" or "headers", to retain them, and a null header
-value keeps the stored value:
-  {"type":"table","id":"<sink-id>","settings":{"database":"analytics","table":"alerts"}}
-  {"type":"http","id":"<sink-id>"}
-  {"type":"http","settings":{"url":"https://example.com/hook"}}
+  rtree workflow create --name alerts --sql - --sink-table analytics.alerts < alerts.sql
+  rtree workflow create --name hook --sql 'SELECT 1' \
+    --sink-http https://example.com/hook --sink-header 'Authorization: Bearer ...'
+  rtree workflow create --name alerts --sql 'SELECT 1' --sink @sinks.json
 
-Example: keep an HTTP sink unchanged and point a table sink at another table.
-Find the sink IDs with `rtree workflow get <id>`, then pass every sink to keep:
-  rtree workflow update <id> \
-    --sink '{"type":"http","id":"<http-sink-id>"}' \
-    --sink '{"type":"table","id":"<table-sink-id>","settings":{"database":"analytics","table":"alerts_v2"}}'"#;
+Run `rtree workflow sink schema` for each sink type's fields."#;
+
+const SINK_UPDATE_HELP: &str = r#"Sinks:
+  To add, change, or remove a single sink, use `rtree workflow sink`.
+
+  --sink replaces the whole list. It takes a JSON object, an array of objects,
+  @<path> to read a file, or - to read stdin. Include the "id" of existing sinks
+  to keep them; an existing HTTP sink may omit "settings", or its "url" or
+  "headers", to retain them:
+    rtree workflow update <id> \
+      --sink '{"type":"http","id":"<http-sink-id>"}' \
+      --sink '{"type":"table","id":"<table-sink-id>","settings":{"database":"analytics","table":"alerts_v2"}}'
+
+Run `rtree workflow sink schema` for each sink type's fields."#;
+
+const SINK_COMMAND_HELP: &str = r#"Each change reads the workflow's current sinks and writes back the full list,
+so a concurrent edit to the same workflow's sinks can be overwritten.
+
+Examples:
+  rtree workflow sink list <workflow-id>
+  rtree workflow sink create <workflow-id> --table analytics.alerts
+  rtree workflow sink create <workflow-id> --http https://example.com/hook \
+    --header 'Authorization: Bearer ...'
+  rtree workflow sink update <workflow-id> <sink-id> --header 'Authorization: Bearer ...'
+  rtree workflow sink delete <workflow-id> <sink-id>
+  rtree workflow sink schema --type http"#;
 
 #[derive(Subcommand)]
 pub enum WorkflowCommand {
@@ -476,8 +497,17 @@ pub enum WorkflowCommand {
         /// Create the workflow paused
         #[arg(long)]
         disabled: bool,
-        /// Sink as a JSON object; repeat for up to five sinks
-        #[arg(long = "sink", value_name = "JSON")]
+        /// Table sink as [DATABASE.]TABLE; the database defaults to the workflow's
+        #[arg(long = "sink-table", value_name = "[DATABASE.]TABLE")]
+        sink_tables: Vec<String>,
+        /// HTTP sink URL
+        #[arg(long = "sink-http", value_name = "URL")]
+        sink_urls: Vec<String>,
+        /// Header for the HTTP sink, as 'Name: value'; requires exactly one --sink-http
+        #[arg(long = "sink-header", value_name = "HEADER", requires = "sink_urls")]
+        sink_headers: Vec<String>,
+        /// Sink as JSON (object or array), @<path>, or - for stdin
+        #[arg(long = "sink", value_name = "JSON|@PATH|-")]
         sinks: Vec<String>,
     },
     /// Update a workflow; omitted fields are left unchanged
@@ -503,8 +533,12 @@ pub enum WorkflowCommand {
         /// Pause scheduled runs
         #[arg(long)]
         disable: bool,
-        /// Sink as a JSON object; replaces all sinks. Repeat for up to five.
-        #[arg(long = "sink", value_name = "JSON", conflicts_with = "clear_sinks")]
+        /// Sink as JSON (object or array), @<path>, or - for stdin; replaces all sinks
+        #[arg(
+            long = "sink",
+            value_name = "JSON|@PATH|-",
+            conflicts_with = "clear_sinks"
+        )]
         sinks: Vec<String>,
         /// Remove all sinks
         #[arg(long)]
@@ -561,6 +595,79 @@ pub enum WorkflowCommand {
         #[command(flatten)]
         range: WorkflowTimeRange,
     },
+    /// List, add, change, or remove a workflow's sinks
+    #[command(after_help = SINK_COMMAND_HELP)]
+    Sink {
+        #[command(subcommand)]
+        action: WorkflowSinkCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WorkflowSinkCommand {
+    /// List a workflow's sinks
+    List {
+        /// Workflow ID
+        workflow_id: String,
+    },
+    /// Add a sink to a workflow
+    #[command(group(clap::ArgGroup::new("target").required(true).args(["table", "http"])))]
+    Create {
+        /// Workflow ID
+        workflow_id: String,
+        /// Write results to a table, as [DATABASE.]TABLE; the database defaults to the workflow's
+        #[arg(long, value_name = "[DATABASE.]TABLE")]
+        table: Option<String>,
+        /// Send results to this webhook URL
+        #[arg(long, value_name = "URL")]
+        http: Option<String>,
+        /// HTTP header as 'Name: value'; repeat for more headers
+        #[arg(
+            long = "header",
+            value_name = "HEADER",
+            requires = "http",
+            conflicts_with = "table"
+        )]
+        headers: Vec<String>,
+    },
+    /// Change one sink; everything not passed is left unchanged
+    Update {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink ID, from `rtree workflow sink list`
+        sink_id: String,
+        /// Table sinks: new target, as [DATABASE.]TABLE; the database defaults to the sink's current one
+        #[arg(long, value_name = "[DATABASE.]TABLE", conflicts_with_all = ["url", "headers", "remove_headers"])]
+        table: Option<String>,
+        /// HTTP sinks: new URL
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+        /// HTTP sinks: add or replace a header, as 'Name: value'; other headers are kept
+        #[arg(long = "header", value_name = "HEADER")]
+        headers: Vec<String>,
+        /// HTTP sinks: remove a header by name
+        #[arg(long = "remove-header", value_name = "NAME")]
+        remove_headers: Vec<String>,
+    },
+    /// Remove a sink from a workflow
+    Delete {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink ID, from `rtree workflow sink list`
+        sink_id: String,
+    },
+    /// Show each sink type's fields, rules, and examples
+    Schema {
+        /// Sink type to describe; omit to describe every type
+        #[arg(long = "type", value_enum)]
+        sink_type: Option<SinkTypeArg>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SinkTypeArg {
+    Table,
+    Http,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1211,6 +1318,99 @@ mod tests {
             let mut command = vec!["rtree", "workflow", "update", "wf-1"];
             command.extend(args);
             assert!(Cli::try_parse_from(command).is_err());
+        }
+    }
+
+    #[test]
+    fn workflow_sink_flags_enforce_their_target_type() {
+        for (accepted, args) in [
+            (
+                false,
+                vec![
+                    "create",
+                    "--name",
+                    "a",
+                    "--sql",
+                    "x",
+                    "--sink-header",
+                    "A: b",
+                ],
+            ),
+            (
+                true,
+                vec![
+                    "create",
+                    "--name",
+                    "a",
+                    "--sql",
+                    "x",
+                    "--sink-http",
+                    "https://a.example",
+                    "--sink-header",
+                    "A: b",
+                ],
+            ),
+            (false, vec!["sink", "create", "wf-1"]),
+            (
+                false,
+                vec![
+                    "sink",
+                    "create",
+                    "wf-1",
+                    "--table",
+                    "t",
+                    "--http",
+                    "https://a.example",
+                ],
+            ),
+            (
+                false,
+                vec!["sink", "create", "wf-1", "--table", "t", "--header", "A: b"],
+            ),
+            (
+                true,
+                vec![
+                    "sink",
+                    "create",
+                    "wf-1",
+                    "--http",
+                    "https://a.example",
+                    "--header",
+                    "A: b",
+                ],
+            ),
+            (
+                false,
+                vec![
+                    "sink",
+                    "update",
+                    "wf-1",
+                    "s-1",
+                    "--table",
+                    "t",
+                    "--url",
+                    "https://a.example",
+                ],
+            ),
+            (
+                true,
+                vec![
+                    "sink",
+                    "update",
+                    "wf-1",
+                    "s-1",
+                    "--header",
+                    "A: b",
+                    "--remove-header",
+                    "C",
+                ],
+            ),
+            (true, vec!["sink", "schema", "--type", "http"]),
+            (false, vec!["sink", "schema", "--type", "queue"]),
+        ] {
+            let mut command = vec!["rtree", "workflow"];
+            command.extend(&args);
+            assert_eq!(Cli::try_parse_from(command).is_ok(), accepted, "{args:?}");
         }
     }
 
