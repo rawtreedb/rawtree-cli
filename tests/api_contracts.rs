@@ -181,8 +181,9 @@ fn logs_use_cluster_scope_without_a_database_or_with_a_stale_saved_database() {
 const WORKFLOW_SCOPE: &str = "organization=team%20alpha&cluster=prod%2Feu";
 
 fn workflow_response() -> Value {
-    json!({"id": "wf-1", "name": "alerts", "database": "analytics", "sql": "SELECT 1",
+    json!({"id": "wf-1", "name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"},
         "enabled": true, "revision": 1, "interval_seconds": 60,
+        "next_run_at": "2026-10-07T10:01:00Z",
         "created_at": "2026-10-07 10:00:00+00", "updated_at": "2026-10-07 10:00:00+00",
         "sinks": [{"type": "table", "id": "sink-1", "settings": {"database": "analytics", "table": "out"}}]})
 }
@@ -210,10 +211,201 @@ fn workflow_create_uses_saved_database_and_sends_sinks() {
     assert_eq!(result, workflow_response());
     assert_eq!(
         body,
-        json!({"name": "alerts", "database": "analytics", "sql": "SELECT 1", "enabled": true,
+        json!({"name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"}, "enabled": true,
             "interval_seconds": 60,
             "sinks": [{"type": "table", "settings": {"database": "analytics", "table": "out"}}]})
     );
+}
+
+fn run_workflow_human(args: &[&str], method: &str, path: &str, response: Value) -> String {
+    let mut command = vec!["--org", "team alpha", "--cluster", "prod/eu"];
+    command.extend_from_slice(args);
+    let (output, _, _) = common::run_cli(
+        &[(format!("{method} {path}"), "200 OK", response)],
+        &command,
+        &json!({}),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn workflow_list_renders_empty_and_populated_responses() {
+    let path = format!("/v1/workflows?{WORKFLOW_SCOPE}");
+    let stdout = run_workflow_human(
+        &["workflow", "list"],
+        "GET",
+        &path,
+        json!({"workflows": []}),
+    );
+    assert!(stdout.contains("No workflows yet"), "{stdout}");
+
+    let mut manual = workflow_response();
+    manual["id"] = json!("wf-2");
+    manual["name"] = json!("backfill");
+    manual["interval_seconds"] = Value::Null;
+    manual["next_run_at"] = Value::Null;
+    let stdout = run_workflow_human(
+        &["workflow", "list"],
+        "GET",
+        &path,
+        json!({"workflows": [workflow_response(), manual]}),
+    );
+    for expected in [
+        "alerts",
+        "analytics",
+        "1m",
+        "wf-1",
+        "backfill",
+        "active",
+        "manual",
+        "wf-2",
+        "2026-10-07T10:01:00Z",
+        "—",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected}: {stdout}");
+    }
+}
+
+#[test]
+fn workflow_human_output_reads_query_and_optional_metadata() {
+    for (interval, enabled, status, next_run) in [
+        (Value::Null, true, "manual", Value::Null),
+        (Value::Null, false, "manual", Value::Null),
+        (json!(60), false, "paused", Value::Null),
+        (json!(60), true, "active", json!("2026-10-07T10:01:00Z")),
+    ] {
+        let mut response = workflow_response();
+        response["interval_seconds"] = interval.clone();
+        response["enabled"] = json!(enabled);
+        response["next_run_at"] = next_run.clone();
+        response["sinks"] = json!([{"id": "sink-http", "type": "http", "settings": {
+            "url": "https://example.com/hook", "url_configured": true, "header_names": ["Authorization"]
+        }}]);
+        let list = run_workflow_human(
+            &["workflow", "list"],
+            "GET",
+            &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+            json!({"workflows": [response.clone()]}),
+        );
+        let row = list.lines().find(|line| line.contains("alerts")).unwrap();
+        let cells: Vec<_> = row.split(['│', '┆']).map(str::trim).collect();
+        assert_eq!(cells[3], status, "{list}");
+        let expected_interval = if interval.is_null() { "—" } else { "1m" };
+        assert_eq!(cells[4], expected_interval, "{list}");
+        for (args, method, suffix) in [
+            (vec!["workflow", "get", "wf-1"], "GET", "/wf-1"),
+            (
+                vec![
+                    "workflow",
+                    "create",
+                    "--name",
+                    "alerts",
+                    "--database",
+                    "analytics",
+                    "--sql",
+                    "SELECT 1",
+                ],
+                "POST",
+                "",
+            ),
+            (
+                vec!["workflow", "update", "wf-1", "--name", "alerts"],
+                "PATCH",
+                "/wf-1",
+            ),
+        ] {
+            let text = run_workflow_human(
+                &args,
+                method,
+                &format!("/v1/workflows{suffix}?{WORKFLOW_SCOPE}"),
+                response.clone(),
+            );
+            assert!(text.contains("analytics"), "{text}");
+            assert!(text.contains(&format!("  status:   {status}\n")), "{text}");
+            assert!(
+                text.contains(&format!("  interval: {expected_interval}\n")),
+                "{text}"
+            );
+            assert!(text.contains(next_run.as_str().unwrap_or("—")), "{text}");
+            assert!(text.contains("SELECT 1"), "{text}");
+            assert!(text.contains("https://example.com/hook"), "{text}");
+            assert!(text.contains("headers=Authorization"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn workflow_query_updates_preserve_unspecified_fields() {
+    for (flags, expected) in [
+        (
+            vec!["--sql", "SELECT 2"],
+            json!({"query": {"sql": "SELECT 2"}}),
+        ),
+        (
+            vec!["--database", "other"],
+            json!({"query": {"database": "other"}}),
+        ),
+        (
+            vec!["--database", "other", "--sql", "SELECT 2"],
+            json!({"query": {"database": "other", "sql": "SELECT 2"}}),
+        ),
+        (vec!["--name", "renamed"], json!({"name": "renamed"})),
+    ] {
+        let mut args = vec!["workflow", "update", "wf-1"];
+        args.extend(flags);
+        let (_, _, body) = run(
+            &args,
+            "PATCH",
+            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({"database": "saved-db"}),
+        );
+        assert_eq!(body, expected);
+    }
+}
+
+#[test]
+fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
+    for (flags, interval) in [
+        (vec![], None),
+        (vec!["--interval-seconds", "null"], Some(Value::Null)),
+        (vec!["--interval-seconds", "300"], Some(json!(300))),
+    ] {
+        let mut create = vec![
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
+        ];
+        create.extend_from_slice(&flags);
+        let (_, _, body) = run(
+            &create,
+            "POST",
+            &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({"database": "analytics"}),
+        );
+        assert_eq!(
+            body.get("interval_seconds"),
+            Some(interval.as_ref().unwrap_or(&Value::Null))
+        );
+        assert_eq!(body["enabled"], true);
+
+        let mut update = vec!["workflow", "update", "wf-1", "--name", "renamed"];
+        update.extend_from_slice(&flags);
+        let (_, _, body) = run(
+            &update,
+            "PATCH",
+            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({}),
+        );
+        assert_eq!(body.get("interval_seconds"), interval.as_ref());
+        assert!(body.get("enabled").is_none());
+        assert!(body.get("query").is_none());
+    }
 }
 
 #[test]
@@ -296,4 +488,37 @@ fn workflow_commands_require_a_cluster() {
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("No cluster specified"));
+}
+
+#[test]
+fn workflow_invalid_intervals_are_rejected_before_sending_requests() {
+    for args in [
+        vec![
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
+        ],
+        vec!["workflow", "update", "wf-1"],
+    ] {
+        for value in ["0", "86401", "1.5", "manual", ""] {
+            let mut command = args.clone();
+            command.extend(["--interval-seconds", value]);
+            let (output, _, _) = common::run_cli(&[], &command, &json!({}));
+            assert_eq!(output.status.code(), Some(2));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("expected a whole number"));
+        }
+    }
+}
+
+#[test]
+fn workflow_manual_flag_is_rejected() {
+    for mut args in [
+        vec![
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
+        ],
+        vec!["workflow", "update", "wf-1"],
+    ] {
+        args.push("--manual");
+        let (output, _, _) = common::run_cli(&[], &args, &json!({}));
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--manual'"));
+    }
 }

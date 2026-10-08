@@ -34,18 +34,35 @@ impl WorkflowScope<'_> {
 }
 
 #[derive(Deserialize)]
+struct WorkflowQuery {
+    database: String,
+    sql: String,
+}
+
+#[derive(Deserialize)]
 struct Workflow {
     id: String,
     name: String,
-    database: String,
-    sql: String,
+    query: WorkflowQuery,
     enabled: bool,
     revision: i64,
-    interval_seconds: i64,
+    /// `None` for manual-only workflows, which have no schedule.
+    interval_seconds: Option<i64>,
+    next_run_at: Option<String>,
     created_at: String,
     updated_at: String,
     #[serde(default)]
     sinks: Vec<Value>,
+}
+
+impl Workflow {
+    fn status(&self) -> &'static str {
+        match (self.interval_seconds, self.enabled) {
+            (None, _) => "manual",
+            (Some(_), true) => "active",
+            (Some(_), false) => "paused",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -133,7 +150,7 @@ pub struct UpdateWorkflow {
     pub name: Option<String>,
     pub database: Option<String>,
     pub sql: Option<String>,
-    pub interval_seconds: Option<u32>,
+    pub interval_seconds: Option<Option<u32>>,
     pub enabled: Option<bool>,
     pub sinks: Option<Vec<String>>,
 }
@@ -166,17 +183,13 @@ fn parse_sinks(sinks: &[String]) -> Result<Vec<Value>> {
 }
 
 fn create_body(request: CreateWorkflow) -> Result<Value> {
-    let mut body = json!({
+    Ok(json!({
         "name": request.name,
-        "database": request.database,
-        "sql": request.sql,
+        "query": {"database": request.database, "sql": request.sql},
         "enabled": !request.disabled,
+        "interval_seconds": request.interval_seconds,
         "sinks": parse_sinks(&request.sinks)?,
-    });
-    if let Some(interval) = request.interval_seconds {
-        body["interval_seconds"] = json!(interval);
-    }
-    Ok(body)
+    }))
 }
 
 fn update_body(request: UpdateWorkflow) -> Result<Value> {
@@ -184,11 +197,15 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
     if let Some(name) = request.name {
         body.insert("name".into(), json!(name));
     }
+    let mut query = Map::new();
     if let Some(database) = request.database {
-        body.insert("database".into(), json!(database));
+        query.insert("database".into(), json!(database));
     }
     if let Some(sql) = request.sql {
-        body.insert("sql".into(), json!(sql));
+        query.insert("sql".into(), json!(sql));
+    }
+    if !query.is_empty() {
+        body.insert("query".into(), Value::Object(query));
     }
     if let Some(enabled) = request.enabled {
         body.insert("enabled".into(), json!(enabled));
@@ -281,11 +298,12 @@ fn format_ms(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
-fn format_interval(seconds: i64) -> String {
+fn format_interval(seconds: Option<i64>) -> String {
     match seconds {
-        s if s % 3600 == 0 => format!("{}h", s / 3600),
-        s if s % 60 == 0 => format!("{}m", s / 60),
-        s => format!("{s}s"),
+        None => "—".into(),
+        Some(s) if s % 3600 == 0 => format!("{}h", s / 3600),
+        Some(s) if s % 60 == 0 => format!("{}m", s / 60),
+        Some(s) => format!("{s}s"),
     }
 }
 
@@ -299,6 +317,7 @@ fn describe_sink(sink: &Value) -> String {
             settings["table"].as_str().unwrap_or("?")
         ),
         Some("http") => {
+            let url = settings["url"].as_str().unwrap_or("URL unavailable");
             let headers = settings["header_names"]
                 .as_array()
                 .map(|names| {
@@ -310,9 +329,9 @@ fn describe_sink(sink: &Value) -> String {
                 })
                 .unwrap_or_default();
             if headers.is_empty() {
-                format!("http  id={id}")
+                format!("http {url}  id={id}")
             } else {
-                format!("http  id={id}  headers={headers}")
+                format!("http {url}  id={id}  headers={headers}")
             }
         }
         _ => sink.to_string(),
@@ -322,16 +341,13 @@ fn describe_sink(sink: &Value) -> String {
 fn print_workflow(workflow: &Workflow) {
     println!("  id:       {}", workflow.id);
     println!("  name:     {}", workflow.name);
-    println!("  database: {}", workflow.database);
-    println!(
-        "  status:   {}",
-        if workflow.enabled {
-            "enabled"
-        } else {
-            "paused"
-        }
-    );
+    println!("  database: {}", workflow.query.database);
+    println!("  status:   {}", workflow.status());
     println!("  interval: {}", format_interval(workflow.interval_seconds));
+    println!(
+        "  next run: {}",
+        workflow.next_run_at.as_deref().unwrap_or("—")
+    );
     println!("  revision: {}", workflow.revision);
     println!("  created:  {}", workflow.created_at);
     println!("  updated:  {}", workflow.updated_at);
@@ -344,7 +360,7 @@ fn print_workflow(workflow: &Workflow) {
         }
     }
     println!("  sql:");
-    for line in workflow.sql.lines() {
+    for line in workflow.query.sql.lines() {
         println!("    {line}");
     }
 }
@@ -358,19 +374,16 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
         }
         let mut table = new_cli_table();
         table.set_header(vec![
-            "name", "database", "status", "interval", "sinks", "updated", "id",
+            "name", "database", "status", "interval", "next run", "sinks", "updated", "id",
         ]);
         for workflow in &resp.workflows {
             table.add_row(vec![
                 Cell::new(&workflow.name),
-                Cell::new(&workflow.database),
-                Cell::new(if workflow.enabled {
-                    "enabled"
-                } else {
-                    "paused"
-                }),
+                Cell::new(&workflow.query.database),
+                Cell::new(workflow.status()),
                 Cell::new(format_interval(workflow.interval_seconds))
                     .set_alignment(CellAlignment::Right),
+                Cell::new(workflow.next_run_at.as_deref().unwrap_or("—")),
                 Cell::new(workflow.sinks.len()).set_alignment(CellAlignment::Right),
                 Cell::new(&workflow.updated_at),
                 Cell::new(&workflow.id),
@@ -652,9 +665,9 @@ mod tests {
             body,
             json!({
                 "name": "alerts",
-                "database": "analytics",
-                "sql": "SELECT 1",
+                "query": {"database": "analytics", "sql": "SELECT 1"},
                 "enabled": false,
+                "interval_seconds": null,
                 "sinks": [{"type": "table", "settings": {"database": "a", "table": "b"}}],
             })
         );
@@ -687,7 +700,7 @@ mod tests {
             name: None,
             database: None,
             sql: None,
-            interval_seconds: Some(30),
+            interval_seconds: Some(Some(30)),
             enabled: Some(false),
             sinks: Some(vec![]),
         })
@@ -696,6 +709,25 @@ mod tests {
             body,
             json!({"interval_seconds": 30, "enabled": false, "sinks": []})
         );
+
+        let body = update_body(UpdateWorkflow {
+            name: None,
+            database: None,
+            sql: Some("SELECT 2".into()),
+            interval_seconds: None,
+            enabled: None,
+            sinks: None,
+        })
+        .unwrap();
+        assert_eq!(body, json!({"query": {"sql": "SELECT 2"}}));
+    }
+
+    #[test]
+    fn format_interval_shows_only_scheduled_durations() {
+        assert_eq!(format_interval(None), "—");
+        assert_eq!(format_interval(Some(7200)), "2h");
+        assert_eq!(format_interval(Some(120)), "2m");
+        assert_eq!(format_interval(Some(45)), "45s");
     }
 
     #[test]
@@ -765,7 +797,7 @@ mod tests {
             describe_sink(
                 &json!({"type": "http", "id": "s2", "settings": {"url_configured": true, "header_names": ["Authorization"]}})
             ),
-            "http  id=s2  headers=Authorization"
+            "http URL unavailable  id=s2  headers=Authorization"
         );
         assert_eq!(
             describe_sink(&json!({"type": "queue"})),

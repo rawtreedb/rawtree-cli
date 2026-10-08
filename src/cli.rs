@@ -458,7 +458,7 @@ pub enum WorkflowCommand {
         /// Workflow ID
         id: String,
     },
-    /// Create a workflow that runs SQL on a schedule
+    /// Create a workflow that runs SQL on demand or on a schedule
     #[command(after_help = SINK_HELP)]
     Create {
         /// Workflow name (letters, digits, '-' and '_')
@@ -470,9 +470,9 @@ pub enum WorkflowCommand {
         /// SQL to run: a SELECT or INSERT INTO ... SELECT. Use "-" to read from stdin.
         #[arg(long)]
         sql: String,
-        /// Seconds between runs (server default: 1)
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
-        interval_seconds: Option<u32>,
+        /// Seconds between automatic runs (1–86400); null or omitted means manual-only
+        #[arg(long, value_name = "SECONDS|null")]
+        interval_seconds: Option<WorkflowIntervalArg>,
         /// Create the workflow paused
         #[arg(long)]
         disabled: bool,
@@ -494,9 +494,9 @@ pub enum WorkflowCommand {
         /// New SQL. Use "-" to read from stdin.
         #[arg(long)]
         sql: Option<String>,
-        /// Seconds between runs
-        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
-        interval_seconds: Option<u32>,
+        /// Seconds between automatic runs (1–86400); null removes the schedule
+        #[arg(long, value_name = "SECONDS|null")]
+        interval_seconds: Option<WorkflowIntervalArg>,
         /// Resume scheduled runs
         #[arg(long, conflicts_with = "disable")]
         enable: bool,
@@ -561,6 +561,23 @@ pub enum WorkflowCommand {
         #[command(flatten)]
         range: WorkflowTimeRange,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkflowIntervalArg(pub Option<u32>);
+
+impl FromStr for WorkflowIntervalArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "null" {
+            return Ok(Self(None));
+        }
+        match value.parse::<u32>() {
+            Ok(seconds) if (1..=86400).contains(&seconds) => Ok(Self(Some(seconds))),
+            _ => Err("expected a whole number from 1 to 86400, or null".into()),
+        }
+    }
 }
 
 /// Time window for workflow logs and metrics. Defaults to the last 24 hours; at most 7 days.
@@ -1176,7 +1193,7 @@ mod tests {
                         ..
                     },
             } => {
-                assert_eq!(interval_seconds, Some(60));
+                assert_eq!(interval_seconds.map(|interval| interval.0), Some(Some(60)));
                 assert!(disabled);
                 assert_eq!(sinks.len(), 2);
                 assert!(database.is_none());
