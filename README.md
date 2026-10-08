@@ -287,8 +287,9 @@ An interval restores recurring execution, subject to the enabled state; use
 `--enable` as well if the workflow is paused. Omitting `--interval-seconds` on `update`
 preserves the current mode.
 `--disable` pauses scheduled runs while retaining the interval. Manual runs remain
-available in either mode, including while paused. Text output shows the next
-scheduled run when available and HTTP sink URLs.
+available in either mode, including while paused. Text output shows status as
+`active`, `paused`, or `manual`, the next scheduled run when available, and HTTP
+sink URLs.
 
 Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
 nested `settings` object: `{"database","table"}` for `table` sinks and

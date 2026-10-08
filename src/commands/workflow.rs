@@ -55,6 +55,16 @@ struct Workflow {
     sinks: Vec<Value>,
 }
 
+impl Workflow {
+    fn status(&self) -> &'static str {
+        match (self.interval_seconds, self.enabled) {
+            (None, _) => "manual",
+            (Some(_), true) => "active",
+            (Some(_), false) => "paused",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct ListWorkflowsResponse {
     workflows: Vec<Workflow>,
@@ -290,7 +300,7 @@ fn format_ms(ms: i64) -> String {
 
 fn format_interval(seconds: Option<i64>) -> String {
     match seconds {
-        None => "manual".into(),
+        None => "—".into(),
         Some(s) if s % 3600 == 0 => format!("{}h", s / 3600),
         Some(s) if s % 60 == 0 => format!("{}m", s / 60),
         Some(s) => format!("{s}s"),
@@ -332,14 +342,7 @@ fn print_workflow(workflow: &Workflow) {
     println!("  id:       {}", workflow.id);
     println!("  name:     {}", workflow.name);
     println!("  database: {}", workflow.query.database);
-    println!(
-        "  status:   {}",
-        if workflow.enabled {
-            "enabled"
-        } else {
-            "paused"
-        }
-    );
+    println!("  status:   {}", workflow.status());
     println!("  interval: {}", format_interval(workflow.interval_seconds));
     println!(
         "  next run: {}",
@@ -377,11 +380,7 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
             table.add_row(vec![
                 Cell::new(&workflow.name),
                 Cell::new(&workflow.query.database),
-                Cell::new(if workflow.enabled {
-                    "enabled"
-                } else {
-                    "paused"
-                }),
+                Cell::new(workflow.status()),
                 Cell::new(format_interval(workflow.interval_seconds))
                     .set_alignment(CellAlignment::Right),
                 Cell::new(workflow.next_run_at.as_deref().unwrap_or("—")),
@@ -724,8 +723,8 @@ mod tests {
     }
 
     #[test]
-    fn format_interval_marks_manual_workflows() {
-        assert_eq!(format_interval(None), "manual");
+    fn format_interval_shows_only_scheduled_durations() {
+        assert_eq!(format_interval(None), "—");
         assert_eq!(format_interval(Some(7200)), "2h");
         assert_eq!(format_interval(Some(120)), "2m");
         assert_eq!(format_interval(Some(45)), "45s");

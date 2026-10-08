@@ -261,6 +261,7 @@ fn workflow_list_renders_empty_and_populated_responses() {
         "1m",
         "wf-1",
         "backfill",
+        "active",
         "manual",
         "wf-2",
         "2026-10-07T10:01:00Z",
@@ -276,15 +277,26 @@ fn workflow_human_output_reads_query_and_optional_metadata() {
         (Value::Null, true, "manual", Value::Null),
         (Value::Null, false, "manual", Value::Null),
         (json!(60), false, "paused", Value::Null),
-        (json!(60), true, "enabled", json!("2026-10-07T10:01:00Z")),
+        (json!(60), true, "active", json!("2026-10-07T10:01:00Z")),
     ] {
         let mut response = workflow_response();
-        response["interval_seconds"] = interval;
+        response["interval_seconds"] = interval.clone();
         response["enabled"] = json!(enabled);
         response["next_run_at"] = next_run.clone();
         response["sinks"] = json!([{"id": "sink-http", "type": "http", "settings": {
             "url": "https://example.com/hook", "url_configured": true, "header_names": ["Authorization"]
         }}]);
+        let list = run_workflow_human(
+            &["workflow", "list"],
+            "GET",
+            &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+            json!({"workflows": [response.clone()]}),
+        );
+        let row = list.lines().find(|line| line.contains("alerts")).unwrap();
+        let cells: Vec<_> = row.split(['│', '┆']).map(str::trim).collect();
+        assert_eq!(cells[3], status, "{list}");
+        let expected_interval = if interval.is_null() { "—" } else { "1m" };
+        assert_eq!(cells[4], expected_interval, "{list}");
         for (args, method, suffix) in [
             (vec!["workflow", "get", "wf-1"], "GET", "/wf-1"),
             (
@@ -314,7 +326,11 @@ fn workflow_human_output_reads_query_and_optional_metadata() {
                 response.clone(),
             );
             assert!(text.contains("analytics"), "{text}");
-            assert!(text.contains(status), "{text}");
+            assert!(text.contains(&format!("  status:   {status}\n")), "{text}");
+            assert!(
+                text.contains(&format!("  interval: {expected_interval}\n")),
+                "{text}"
+            );
             assert!(text.contains(next_run.as_str().unwrap_or("—")), "{text}");
             assert!(text.contains("SELECT 1"), "{text}");
             assert!(text.contains("https://example.com/hook"), "{text}");

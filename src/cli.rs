@@ -458,7 +458,7 @@ pub enum WorkflowCommand {
         /// Workflow ID
         id: String,
     },
-    /// Create a workflow that runs SQL on a schedule
+    /// Create a workflow that runs SQL on demand or on a schedule
     #[command(after_help = SINK_HELP)]
     Create {
         /// Workflow name (letters, digits, '-' and '_')
