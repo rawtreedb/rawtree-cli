@@ -131,6 +131,7 @@ pub struct CreateWorkflow {
     pub database: String,
     pub sql: String,
     pub interval_seconds: Option<u32>,
+    pub manual: bool,
     pub disabled: bool,
     pub sinks: Vec<String>,
 }
@@ -140,6 +141,7 @@ pub struct UpdateWorkflow {
     pub database: Option<String>,
     pub sql: Option<String>,
     pub interval_seconds: Option<u32>,
+    pub manual: bool,
     pub enabled: Option<bool>,
     pub sinks: Option<Vec<String>>,
 }
@@ -178,7 +180,9 @@ fn create_body(request: CreateWorkflow) -> Result<Value> {
         "enabled": !request.disabled,
         "sinks": parse_sinks(&request.sinks)?,
     });
-    if let Some(interval) = request.interval_seconds {
+    if request.manual {
+        body["interval_seconds"] = Value::Null;
+    } else if let Some(interval) = request.interval_seconds {
         body["interval_seconds"] = json!(interval);
     }
     Ok(body)
@@ -202,14 +206,16 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
     if let Some(enabled) = request.enabled {
         body.insert("enabled".into(), json!(enabled));
     }
-    if let Some(interval) = request.interval_seconds {
+    if request.manual {
+        body.insert("interval_seconds".into(), Value::Null);
+    } else if let Some(interval) = request.interval_seconds {
         body.insert("interval_seconds".into(), json!(interval));
     }
     if let Some(sinks) = request.sinks {
         body.insert("sinks".into(), Value::Array(parse_sinks(&sinks)?));
     }
     if body.is_empty() {
-        bail!("nothing to update: pass at least one of --name, --database, --sql, --interval-seconds, --enable, --disable, --sink, or --clear-sinks");
+        bail!("nothing to update: pass at least one of --name, --database, --sql, --interval-seconds, --manual, --enable, --disable, --sink, or --clear-sinks");
     }
     Ok(Value::Object(body))
 }
@@ -654,6 +660,7 @@ mod tests {
             database: "analytics".into(),
             sql: "SELECT 1".into(),
             interval_seconds: None,
+            manual: false,
             disabled: true,
             sinks: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
         })
@@ -673,6 +680,7 @@ mod tests {
             database: "analytics".into(),
             sql: "SELECT 1".into(),
             interval_seconds: Some(60),
+            manual: false,
             disabled: false,
             sinks: vec!["[]".into()],
         })
@@ -687,6 +695,7 @@ mod tests {
             database: None,
             sql: None,
             interval_seconds: None,
+            manual: false,
             enabled: None,
             sinks: None,
         };
@@ -697,6 +706,7 @@ mod tests {
             database: None,
             sql: None,
             interval_seconds: Some(30),
+            manual: false,
             enabled: Some(false),
             sinks: Some(vec![]),
         })
@@ -711,6 +721,7 @@ mod tests {
             database: None,
             sql: Some("SELECT 2".into()),
             interval_seconds: None,
+            manual: false,
             enabled: None,
             sinks: None,
         })

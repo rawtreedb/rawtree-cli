@@ -473,6 +473,9 @@ pub enum WorkflowCommand {
         /// Seconds between runs (server default: 1)
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
         interval_seconds: Option<u32>,
+        /// Run only on demand with `rtree workflow run`, with no schedule
+        #[arg(long, conflicts_with = "interval_seconds")]
+        manual: bool,
         /// Create the workflow paused
         #[arg(long)]
         disabled: bool,
@@ -494,9 +497,12 @@ pub enum WorkflowCommand {
         /// New SQL. Use "-" to read from stdin.
         #[arg(long)]
         sql: Option<String>,
-        /// Seconds between runs
+        /// Seconds between runs; also restores the schedule of a manual workflow
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=86400))]
         interval_seconds: Option<u32>,
+        /// Remove the schedule so the workflow only runs with `rtree workflow run`
+        #[arg(long, conflicts_with = "interval_seconds")]
+        manual: bool,
         /// Resume scheduled runs
         #[arg(long, conflicts_with = "disable")]
         enable: bool,
@@ -1190,6 +1196,7 @@ mod tests {
         for args in [
             vec!["--enable", "--disable"],
             vec!["--clear-sinks", "--sink", "{}"],
+            vec!["--manual", "--interval-seconds", "60"],
         ] {
             let mut command = vec!["rtree", "workflow", "update", "wf-1"];
             command.extend(args);
@@ -1209,6 +1216,19 @@ mod tests {
             "SELECT 1",
             "--interval-seconds",
             "86401",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "rtree",
+            "workflow",
+            "create",
+            "--name",
+            "a",
+            "--sql",
+            "SELECT 1",
+            "--manual",
+            "--interval-seconds",
+            "60",
         ])
         .is_err());
         assert!(Cli::try_parse_from([

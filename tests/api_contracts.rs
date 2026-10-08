@@ -291,6 +291,30 @@ fn workflow_update_nests_query_fields() {
 }
 
 #[test]
+fn workflow_manual_sends_null_interval() {
+    let (_, _, body) = run(
+        &[
+            "workflow", "create", "--name", "alerts", "--sql", "SELECT 1", "--manual",
+        ],
+        "POST",
+        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({"database": "analytics"}),
+    );
+    assert_eq!(body["interval_seconds"], Value::Null);
+    assert!(body.as_object().unwrap().contains_key("interval_seconds"));
+
+    let (_, _, body) = run(
+        &["workflow", "update", "wf-1", "--manual"],
+        "PATCH",
+        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({}),
+    );
+    assert_eq!(body, json!({"interval_seconds": null}));
+}
+
+#[test]
 fn workflow_update_sends_only_changed_fields() {
     let (_, _, body) = run(
         &["workflow", "update", "wf-1", "--disable", "--clear-sinks"],
