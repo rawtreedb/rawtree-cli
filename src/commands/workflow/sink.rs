@@ -233,7 +233,7 @@ fn set_header(headers: &mut Map<String, Value>, name: String, value: Value) -> R
 /// an array of them.
 pub(super) fn read_json_args(args: &[String]) -> Result<Vec<Value>> {
     let mut sinks = Vec::new();
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         let (label, text) = if arg == "-" {
             let mut text = String::new();
             std::io::stdin()
@@ -241,11 +241,15 @@ pub(super) fn read_json_args(args: &[String]) -> Result<Vec<Value>> {
                 .context("failed to read sinks from stdin")?;
             ("from stdin".to_string(), text)
         } else if let Some(path) = arg.strip_prefix('@') {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("failed to read sink file '{path}'"))?;
+            let text = match std::fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(error) => invalid!("failed to read sink file '{path}': {error}"),
+            };
             (format!("in '{path}'"), text)
         } else {
-            (format!("'{arg}'"), arg.clone())
+            // Inline JSON often carries header credentials, so errors name its
+            // position instead of echoing it.
+            (format!("#{}", index + 1), arg.clone())
         };
         match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(sink)) => sinks.push(Value::Object(sink)),
@@ -363,14 +367,20 @@ fn load(client: &ApiClient, scope: &WorkflowScope, workflow_id: &str) -> Result<
 
 /// The API replaces the whole list, so sinks that are not being changed are
 /// sent back by ID. HTTP sinks omit settings, which keeps their URL and
-/// write-only headers.
-fn retained(sink: &Value) -> Value {
+/// write-only headers. Other types are refused because their settings cannot
+/// be sent back safely.
+fn retained(sink: &Value, workflow_id: &str) -> Result<Value> {
     match sink["type"].as_str() {
-        Some("table") => json!({"type": "table", "id": sink["id"], "settings": {
+        Some("table") => Ok(json!({"type": "table", "id": sink["id"], "settings": {
             "database": sink["settings"]["database"],
             "table": sink["settings"]["table"],
-        }}),
-        _ => json!({"type": sink["type"], "id": sink["id"]}),
+        }})),
+        Some("http") => Ok(json!({"type": "http", "id": sink["id"]})),
+        other => invalid!(
+            "sink {} has type '{}', which this version of rtree cannot preserve; upgrade rtree or replace the whole list with `rtree workflow update {workflow_id} --sink`",
+            sink["id"].as_str().unwrap_or("?"),
+            other.unwrap_or("unknown")
+        ),
     }
 }
 
@@ -483,7 +493,11 @@ pub fn create(
         .iter()
         .filter_map(|sink| sink["id"].as_str())
         .collect();
-    let mut sinks: Vec<Value> = workflow.sinks.iter().map(retained).collect();
+    let mut sinks = workflow
+        .sinks
+        .iter()
+        .map(|sink| retained(sink, workflow_id))
+        .collect::<Result<Vec<_>>>()?;
     sinks.push(new_sink);
     let updated = replace_sinks(client, scope, workflow_id, sinks)?;
     let created = updated
@@ -521,12 +535,12 @@ pub fn update(
         .iter()
         .map(|sink| {
             if sink["id"].as_str() == Some(sink_id) {
-                replacement.clone()
+                Ok(replacement.clone())
             } else {
-                retained(sink)
+                retained(sink, workflow_id)
             }
         })
-        .collect();
+        .collect::<Result<_>>()?;
     let updated = replace_sinks(client, scope, workflow_id, sinks)?;
     let sink = updated
         .sinks
@@ -648,8 +662,8 @@ pub fn delete(
         .sinks
         .iter()
         .filter(|sink| sink["id"].as_str() != Some(sink_id))
-        .map(retained)
-        .collect();
+        .map(|sink| retained(sink, workflow_id))
+        .collect::<Result<_>>()?;
     let updated = replace_sinks(client, scope, workflow_id, sinks)?;
     output::print_result(
         &json!({"workflow_id": workflow_id, "sink_id": sink_id, "deleted": true}),
@@ -740,14 +754,19 @@ mod tests {
         .unwrap();
         assert_eq!(sinks.len(), 2);
 
-        let err = read_json_args(&["[".into()]).unwrap_err().to_string();
-        assert!(err.contains("not valid JSON"), "{err}");
-        let err = read_json_args(&["42".into()]).unwrap_err().to_string();
-        assert!(err.contains("object or an array"), "{err}");
-        let err = read_json_args(&["@missing.json".into()])
+        let secret =
+            r#"{"type":"http","settings":{"headers":{"Authorization":"Bearer secret-token"}"#;
+        let err = read_json_args(&["{}".into(), secret.into()])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("missing.json"), "{err}");
+        assert!(err.contains("--sink #2: not valid JSON"), "{err}");
+        assert!(!err.contains("secret-token"), "{err}");
+        let err = read_json_args(&["42".into()]).unwrap_err().to_string();
+        assert!(err.contains("object or an array"), "{err}");
+        let err = read_json_args(&["@missing.json".into()]).unwrap_err();
+        assert!(err.to_string().contains("missing.json"), "{err}");
+        let coded = err.downcast_ref::<output::CliError>().unwrap();
+        assert_eq!(coded.exit_code(), 2);
     }
 
     #[test]
@@ -814,17 +833,29 @@ mod tests {
     fn retained_sinks_keep_table_targets_and_omit_http_settings() {
         assert_eq!(
             retained(
-                &json!({"type": "table", "id": "t", "settings": {"database": "a", "table": "b"}})
-            ),
+                &json!({"type": "table", "id": "t", "settings": {"database": "a", "table": "b"}}),
+                "wf"
+            )
+            .unwrap(),
             json!({"type": "table", "id": "t", "settings": {"database": "a", "table": "b"}})
         );
         assert_eq!(
             retained(
                 &json!({"type": "http", "id": "h", "settings": {"url": "https://a.example",
-                "url_configured": true, "header_names": ["Authorization"]}})
-            ),
+                "url_configured": true, "header_names": ["Authorization"]}}),
+                "wf"
+            )
+            .unwrap(),
             json!({"type": "http", "id": "h"})
         );
+        let err = retained(
+            &json!({"type": "queue", "id": "q", "settings": {"topic": "t"}}),
+            "wf",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("type 'queue'"), "{err}");
+        assert!(err.contains("rtree workflow update wf --sink"), "{err}");
     }
 
     #[test]
