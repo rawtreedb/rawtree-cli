@@ -9,6 +9,7 @@ pub mod open;
 pub mod organization;
 pub mod ping;
 pub mod query;
+pub mod query_format;
 pub mod status;
 pub mod table;
 mod table_output;

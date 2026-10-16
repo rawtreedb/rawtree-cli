@@ -209,6 +209,8 @@ pub enum Command {
         #[arg(long)]
         limit: Option<u64>,
     },
+    /// Format SQL without executing it
+    QueryFormat(crate::commands::query_format::QueryFormatArgs),
     /// Insert data into a table
     Insert {
         #[arg(long)]

@@ -134,11 +134,10 @@ fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
-    let trimmed = buf.trim().to_string();
-    if trimmed.is_empty() {
+    if buf.trim().is_empty() {
         anyhow::bail!("no SQL provided on stdin");
     }
-    Ok(trimmed)
+    Ok(buf)
 }
 
 fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<String> {
@@ -653,6 +652,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 effective_cluster.as_deref(),
                 &sql,
                 limit,
+                json,
+            )
+        }
+        Command::QueryFormat(args) => {
+            let database = resolve_optional_database(args.database);
+            let sql = match args.file {
+                Some(path) => std::fs::read_to_string(path)?,
+                None => resolve_sql(args.sql_positional, args.sql)?,
+            };
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            commands::query_format::query_format(
+                &client,
+                database.as_deref(),
+                effective_org.as_deref(),
+                effective_cluster.as_deref(),
+                &sql,
                 json,
             )
         }
