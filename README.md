@@ -190,18 +190,60 @@ With `--json`, creation returns `{"database":{"name":"analytics"}}`; listing ret
 `{"databases":[{"name":"analytics","s3_storage":null}]}`. Database output no longer
 adds organization metadata that is absent from the API response.
 
+### Formatting SQL
+
+```sh
+rtree format "select 1"
+rtree format -q "select 1"
+rtree format --query "select 1"
+rtree format --sql "select 1; select 2"
+cat query.sql | rtree format
+cat query.sql | rtree format -
+rtree format < query.sql > formatted.sql
+rtree format --json < query.sql
+```
+
+Use stdin redirection or a pipe for large SQL documents to avoid shell argument limits.
+Plain output is the complete formatted SQL, with its whitespace preserved.
+`--json` returns `{ "formatted": "..." }`. `--sql`, `--query`, and `-q` are aliases;
+provide SQL once, either positionally or with one flag. Omit SQL or use `-` to
+read from stdin, including `--sql -`, `--query -`, or `-q -`.
+`--database`, `--org`, and `--cluster` honor the usual environment and
+saved defaults; a database is optional for formatting.
+
+Formatting uses the native RawTree formatter without executing SQL or adding
+database query logs. Multiple statements and literal values are preserved.
+Inline `INSERT ... VALUES` data is copied verbatim without completeness or schema
+validation. The API accepts a 50 MiB JSON request, allows 100 MiB of formatted
+output, and times formatting out after 30 seconds. The CLI allows 120 seconds
+for the entire HTTP request, including upload/download. Ctrl-C cancels the CLI
+request. Errors produce no partial formatted output.
+
+Requires deployment of [Platform PR #1468](https://github.com/rawtreedb/rawtree-platform/pull/1468),
+which adds `POST /v1/query-format`.
+
 ### Querying
 
 ```sh
 # Positional SQL
 rtree query "SELECT * FROM events LIMIT 10"
 
+# Equivalent named forms
+rtree query -q "SELECT * FROM events LIMIT 10"
+rtree query --query "SELECT * FROM events LIMIT 10"
+rtree query --sql "SELECT * FROM events LIMIT 10"
+
 # SQL from stdin
+rtree query < query.sql
+cat query.sql | rtree query
 cat query.sql | rtree query -
 
 # JSON output
 rtree query --json --sql "SELECT * FROM events LIMIT 10"
 ```
+
+As with `format`, provide SQL once. Stdin also works with `--sql -`, `--query -`,
+or `-q -`.
 
 ### Data ingestion
 

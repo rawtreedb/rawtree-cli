@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cluster;
 pub mod database;
 pub mod docs;
+pub mod format;
 pub mod insert;
 pub mod keys;
 pub mod logs;

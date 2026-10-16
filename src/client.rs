@@ -6,6 +6,7 @@ use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::Write;
+use std::time::Duration;
 
 const RAWTREE_CLIENT_HEADER: &str = "x-rawtree-client";
 const RAWTREE_CLIENT_VALUE: &str = "cli";
@@ -29,8 +30,19 @@ impl ApiClient {
     }
 
     pub fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
+        self.post_with_timeout(path, body, Duration::from_secs(30))
+    }
+
+    pub fn post_with_timeout<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+        timeout: Duration,
+    ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url)).json(body);
+        let mut req = with_client_header(self.client.post(&url))
+            .json(body)
+            .timeout(timeout);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }

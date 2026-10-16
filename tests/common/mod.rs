@@ -24,6 +24,26 @@ pub fn run_cli_with_progress(
     original: &Value,
     on_progress: Option<ProgressExpectation>,
 ) -> (Output, Value, Vec<Value>) {
+    run_cli_with_input(responses, args, original, on_progress, None)
+}
+
+#[allow(dead_code)] // Used by the SQL input and format integration test binaries.
+pub fn run_cli_with_stdin(
+    responses: &[(String, &str, Value)],
+    args: &[&str],
+    original: &Value,
+    stdin: &str,
+) -> (Output, Value, Vec<Value>) {
+    run_cli_with_input(responses, args, original, None, Some(stdin))
+}
+
+fn run_cli_with_input(
+    responses: &[(String, &str, Value)],
+    args: &[&str],
+    original: &Value,
+    on_progress: Option<ProgressExpectation>,
+    stdin: Option<&str>,
+) -> (Output, Value, Vec<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -108,11 +128,23 @@ pub fn run_cli_with_progress(
         .env("HOME", home.path())
         .args(["--api-url", &url])
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    if let Some(input) = stdin {
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+    }
     let progress = on_progress.map(|progress| {
         let stderr = child.stderr.take().unwrap();
         std::thread::spawn(move || {
