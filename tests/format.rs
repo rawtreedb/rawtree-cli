@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 const PATH: &str = "POST /v1/query-format?organization=team&cluster=prod";
 
 fn config() -> Value {
-    json!({"token": "fixture-session", "default_organization": "team", "cluster": "prod"})
+    json!({"token": "fixture-token", "default_organization": "team", "cluster": "prod"})
 }
 
 #[test]
@@ -14,7 +14,7 @@ fn formats_complete_positional_sql_with_optional_database() {
     let formatted = "-- café\nSELECT 'a\\b';\n\nINSERT INTO t VALUES (1), (  \n";
     let (output, saved, bodies) = common::run_cli(
         &[(PATH.to_string(), "200 OK", json!({"formatted": formatted}))],
-        &["query-format", sql],
+        &["format", sql],
         &config(),
     );
     assert!(output.status.success(), "{:?}", output);
@@ -32,7 +32,7 @@ fn json_output_and_scope_overrides_preserve_the_document() {
             "200 OK",
             json!({"formatted": formatted}),
         )],
-        &["query-format", "--sql", "select 1", "--database", "analytics db", "--org", "team alpha", "--cluster", "prod/eu", "--json"],
+        &["format", "--sql", "select 1", "--database", "analytics db", "--org", "team alpha", "--cluster", "prod/eu", "--json"],
         &config(),
     );
     assert!(output.status.success(), "{:?}", output);
@@ -44,7 +44,7 @@ fn json_output_and_scope_overrides_preserve_the_document() {
 }
 
 #[test]
-fn preserves_large_sql_from_stdin_and_files_and_complete_output() {
+fn preserves_large_sql_from_stdin_and_complete_output() {
     let sql = format!(
         "  INSERT INTO t VALUES ('{}'), (  \n",
         "café\\\"".repeat(200_000)
@@ -53,21 +53,13 @@ fn preserves_large_sql_from_stdin_and_files_and_complete_output() {
         "INSERT INTO t VALUES ('{}'), (  \n",
         "café\\\"".repeat(200_000)
     );
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("query.sql");
-    std::fs::write(&path, &sql).unwrap();
     for args in [
-        vec!["query-format", "-"],
-        vec!["query-format"],
-        vec!["query-format", "--sql", "-"],
-        vec!["query-format", "--file", path.to_str().unwrap()],
+        vec!["format", "-"],
+        vec!["format"],
+        vec!["format", "--sql", "-"],
     ] {
         let responses = [(PATH.to_string(), "200 OK", json!({"formatted": formatted}))];
-        let (output, _, bodies) = if args.contains(&"--file") {
-            common::run_cli(&responses, &args, &config())
-        } else {
-            common::run_cli_with_stdin(&responses, &args, &config(), &sql)
-        };
+        let (output, _, bodies) = common::run_cli_with_stdin(&responses, &args, &config(), &sql);
         assert!(output.status.success(), "{:?}", output.status);
         assert_eq!(output.stdout, formatted.as_bytes());
         assert_eq!(bodies, vec![json!({"sql": sql})]);
@@ -84,7 +76,7 @@ fn uses_saved_database_scope() {
             "200 OK",
             json!({"formatted": "SELECT 1"}),
         )],
-        &["query-format", "select 1"],
+        &["format", "select 1"],
         &configuration,
     );
     assert!(output.status.success());
@@ -107,7 +99,7 @@ fn surfaces_api_errors_without_partial_output_or_query_fallback() {
                 status,
                 json!({"message": "Formatting failed", "hint": "Try a smaller selection"}),
             )],
-            &["query-format", "select 1"],
+            &["format", "select 1"],
             &config(),
         );
         assert!(!output.status.success());
@@ -121,24 +113,19 @@ fn surfaces_api_errors_without_partial_output_or_query_fallback() {
 }
 
 #[test]
-fn rejects_invalid_response_and_conflicting_inputs() {
+fn rejects_invalid_response_conflicting_inputs_and_removed_options() {
     let (output, _, _) = common::run_cli(
         &[(PATH.to_string(), "200 OK", json!({"formatted": null}))],
-        &["query-format", "select 1"],
+        &["format", "select 1"],
         &config(),
     );
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
 
     for args in [
-        vec!["query-format", "select 1", "--sql", "select 2"],
-        vec!["query-format", "select 1", "--file", "query.sql"],
-        vec!["query-format", "--sql", "select 1", "--file", "query.sql"],
-        vec![
-            "query-format",
-            "--file",
-            "/missing/query-format-fixture.sql",
-        ],
+        vec!["format", "select 1", "--sql", "select 2"],
+        vec!["format", "--file", "query.sql"],
+        vec!["query-format", "select 1"],
     ] {
         let (output, _, bodies) = common::run_cli(&[], &args, &config());
         assert!(!output.status.success());

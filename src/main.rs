@@ -655,14 +655,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 json,
             )
         }
-        Command::QueryFormat(args) => {
+        Command::Format(args) => {
             let database = resolve_optional_database(args.database);
-            let sql = match args.file {
-                Some(path) => std::fs::read_to_string(path)?,
-                None => resolve_sql(args.sql_positional, args.sql)?,
-            };
+            let sql = resolve_sql(args.sql_positional, args.sql)?;
             let effective_org = resolve_effective_org(&client, cli_org.clone());
-            commands::query_format::query_format(
+            commands::format::format(
                 &client,
                 database.as_deref(),
                 effective_org.as_deref(),

@@ -27,7 +27,7 @@ pub fn run_cli_with_progress(
     run_cli_with_input(responses, args, original, on_progress, None)
 }
 
-#[allow(dead_code)] // Used by the query-format integration test binary.
+#[allow(dead_code)] // Used by the format integration test binary.
 pub fn run_cli_with_stdin(
     responses: &[(String, &str, Value)],
     args: &[&str],

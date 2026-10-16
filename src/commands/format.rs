@@ -1,5 +1,4 @@
 use std::io::Write;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -10,19 +9,16 @@ use serde_json::json;
 use crate::{client::ApiClient, org};
 
 #[derive(Args)]
-pub struct QueryFormatArgs {
+pub struct FormatArgs {
     /// Optional database override for authentication scope
     #[arg(long)]
     pub database: Option<String>,
     /// SQL to format. Use "-" or omit SQL to read from piped stdin.
-    #[arg(value_name = "SQL", conflicts_with_all = ["sql", "file"])]
+    #[arg(value_name = "SQL", conflicts_with = "sql")]
     pub sql_positional: Option<String>,
     /// SQL to format. Use "-" to read from stdin.
-    #[arg(long, conflicts_with = "file")]
+    #[arg(long)]
     pub sql: Option<String>,
-    /// Read the complete SQL document from a UTF-8 file
-    #[arg(long, value_name = "PATH")]
-    pub file: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -30,7 +26,7 @@ struct QueryFormatResponse {
     formatted: String,
 }
 
-pub fn query_format(
+pub fn format(
     client: &ApiClient,
     database: Option<&str>,
     organization: Option<&str>,

@@ -193,17 +193,16 @@ adds organization metadata that is absent from the API response.
 ### Formatting SQL
 
 ```sh
-rtree query-format "select 1"
-rtree query-format --sql "select 1; select 2"
-cat query.sql | rtree query-format -
-rtree query-format < query.sql
-rtree query-format --file query.sql > formatted.sql
-rtree query-format --file query.sql --json
+rtree format "select 1"
+rtree format --sql "select 1; select 2"
+cat query.sql | rtree format -
+rtree format < query.sql > formatted.sql
+rtree format --json < query.sql
 ```
 
-Use stdin or `--file` for large SQL documents to avoid shell argument limits.
+Use stdin redirection or a pipe for large SQL documents to avoid shell argument limits.
 Plain output is the complete formatted SQL, with its whitespace preserved.
-`--json` returns `{ "formatted": "..." }`. SQL arguments and `--file` are mutually
+`--json` returns `{ "formatted": "..." }`. Positional SQL and `--sql` are mutually
 exclusive. `--database`, `--org`, and `--cluster` honor the usual environment and
 saved defaults; a database is optional for formatting.
 
