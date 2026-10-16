@@ -149,7 +149,7 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
             if !io::stdin().is_terminal() {
                 read_stdin()
             } else {
-                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --sql, or pipe via stdin")
+                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --sql / --query / -q, or pipe via stdin")
             }
         }
     }

@@ -194,7 +194,10 @@ adds organization metadata that is absent from the API response.
 
 ```sh
 rtree format "select 1"
+rtree format -q "select 1"
+rtree format --query "select 1"
 rtree format --sql "select 1; select 2"
+cat query.sql | rtree format
 cat query.sql | rtree format -
 rtree format < query.sql > formatted.sql
 rtree format --json < query.sql
@@ -202,8 +205,10 @@ rtree format --json < query.sql
 
 Use stdin redirection or a pipe for large SQL documents to avoid shell argument limits.
 Plain output is the complete formatted SQL, with its whitespace preserved.
-`--json` returns `{ "formatted": "..." }`. Positional SQL and `--sql` are mutually
-exclusive. `--database`, `--org`, and `--cluster` honor the usual environment and
+`--json` returns `{ "formatted": "..." }`. `--sql`, `--query`, and `-q` are aliases;
+provide SQL once, either positionally or with one flag. Omit SQL or use `-` to
+read from stdin, including `--sql -`, `--query -`, or `-q -`.
+`--database`, `--org`, and `--cluster` honor the usual environment and
 saved defaults; a database is optional for formatting.
 
 Formatting uses the native RawTree formatter without executing SQL or adding
@@ -223,12 +228,22 @@ which adds `POST /v1/query-format`.
 # Positional SQL
 rtree query "SELECT * FROM events LIMIT 10"
 
+# Equivalent named forms
+rtree query -q "SELECT * FROM events LIMIT 10"
+rtree query --query "SELECT * FROM events LIMIT 10"
+rtree query --sql "SELECT * FROM events LIMIT 10"
+
 # SQL from stdin
+rtree query < query.sql
+cat query.sql | rtree query
 cat query.sql | rtree query -
 
 # JSON output
 rtree query --json --sql "SELECT * FROM events LIMIT 10"
 ```
+
+As with `format`, provide SQL once. Stdin also works with `--sql -`, `--query -`,
+or `-q -`.
 
 ### Data ingestion
 

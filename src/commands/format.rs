@@ -17,7 +17,7 @@ pub struct FormatArgs {
     #[arg(value_name = "SQL", conflicts_with = "sql")]
     pub sql_positional: Option<String>,
     /// SQL to format. Use "-" to read from stdin.
-    #[arg(long)]
+    #[arg(long, short = 'q', visible_alias = "query")]
     pub sql: Option<String>,
 }
 

@@ -199,11 +199,11 @@ pub enum Command {
     Query {
         #[arg(long)]
         database: Option<String>,
-        /// SQL query to execute (positional or --sql). Use "-" to read from stdin.
+        /// SQL to execute. Use "-" or omit SQL to read from piped stdin.
         #[arg(value_name = "SQL", conflicts_with = "sql")]
         sql_positional: Option<String>,
-        /// SQL query to execute
-        #[arg(long)]
+        /// SQL to execute. Use "-" to read from stdin.
+        #[arg(long, short = 'q', visible_alias = "query")]
         sql: Option<String>,
         /// Append LIMIT N to the query
         #[arg(long)]
@@ -1019,19 +1019,6 @@ mod tests {
             "csv",
         ]);
         assert!(result.is_err(), "query --format should not be supported");
-    }
-
-    #[test]
-    fn query_named_query_flag_is_rejected() {
-        let result = Cli::try_parse_from([
-            "rtree",
-            "query",
-            "--database",
-            "analytics",
-            "--query",
-            "SELECT 1",
-        ]);
-        assert!(result.is_err(), "query --query should not be supported");
     }
 
     #[test]
