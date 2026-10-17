@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 const PATH: &str = "POST /v1/query-format?organization=team&cluster=prod";
 
 fn config() -> Value {
-    json!({"token": "fixture-token", "default_organization": "team", "cluster": "prod"})
+    json!({"token": "rt_fixture", "default_organization": "team", "cluster": "prod"})
 }
 
 #[test]
