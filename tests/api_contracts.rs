@@ -36,11 +36,11 @@ fn database_create_reads_nested_response_and_saves_requested_context() {
         "POST",
         "/v1/databases?organization=team%20alpha&cluster=prod%2Feu",
         response.clone(),
-        json!({"token": "fixture-session", "default_organization": "old-org", "database": "old-db"}),
+        json!({"token": "rt_fixture", "default_organization": "old-org", "database": "old-db"}),
     );
     assert_eq!(result, response);
     assert_eq!(body, json!({"name": "analytics"}));
-    assert_eq!(saved["token"], "fixture-session");
+    assert_eq!(saved["token"], "rt_fixture");
     assert_eq!(saved["default_organization"], "team alpha");
     assert_eq!(saved["cluster"], "prod/eu");
     assert_eq!(saved["database"], "analytics");
@@ -48,7 +48,7 @@ fn database_create_reads_nested_response_and_saves_requested_context() {
 
 #[test]
 fn database_create_failure_does_not_overwrite_config() {
-    let config = json!({"token": "fixture-session", "default_organization": "team", "cluster": "prod", "database": "old-db"});
+    let config = json!({"token": "rt_fixture", "default_organization": "team", "cluster": "prod", "database": "old-db"});
     let (output, saved, _) = common::run_cli(
         &[(
             "POST /v1/databases?organization=team&cluster=prod".to_string(),
