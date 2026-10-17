@@ -96,7 +96,7 @@ pub struct Cli {
 pub enum Command {
     /// Log in and save credentials
     #[command(
-        after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\",\"cluster\":\"<name>\"}"
+        after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\",\"cluster\":\"<name>\"}\n\nNon-interactive login:\n  JSON is automatic when stdin is not a terminal. Read the device approval link\n  from a JSON event on stderr while login is running. Missing selections return\n  JSON choices on stdout and exit code 2. Rerun with --org, --cluster, or\n  --database; each retry requires approval again."
     )]
     Login {
         #[arg(long, hide = true)]
@@ -141,6 +141,11 @@ pub enum Command {
     Table {
         #[command(subcommand)]
         action: TableCommand,
+    },
+    /// Manage scheduled SQL workflows
+    Workflow {
+        #[command(subcommand)]
+        action: WorkflowCommand,
     },
     /// View API request logs for a cluster
     Logs {
@@ -196,16 +201,18 @@ pub enum Command {
     Query {
         #[arg(long)]
         database: Option<String>,
-        /// SQL query to execute (positional or --sql). Use "-" to read from stdin.
+        /// SQL to execute. Use "-" or omit SQL to read from piped stdin.
         #[arg(value_name = "SQL", conflicts_with = "sql")]
         sql_positional: Option<String>,
-        /// SQL query to execute
-        #[arg(long)]
+        /// SQL to execute. Use "-" to read from stdin.
+        #[arg(long, short = 'q', visible_alias = "query")]
         sql: Option<String>,
         /// Append LIMIT N to the query
         #[arg(long)]
         limit: Option<u64>,
     },
+    /// Format SQL without executing it
+    Format(crate::commands::format::FormatArgs),
     /// Insert data into a table
     Insert {
         #[arg(long)]
@@ -389,6 +396,9 @@ pub enum KeyCommand {
         /// Permission level: admin, read_write, write_only, read_only
         #[arg(long)]
         permission: String,
+        /// Expiration as an RFC 3339 timestamp with timezone; omit to never expire
+        #[arg(long)]
+        expires_at: Option<String>,
     },
     /// Delete an API key
     Delete {
@@ -431,6 +441,170 @@ pub enum TableCommand {
         #[arg(long)]
         sorting_key: String,
     },
+}
+
+const SINK_HELP: &str = "Sinks are JSON objects with a type and its settings:\n  {\"type\":\"table\",\"settings\":{\"database\":\"analytics\",\"table\":\"alerts\"}}\n  {\"type\":\"http\",\"settings\":{\"url\":\"https://example.com/hook\",\"headers\":{\"Authorization\":\"Bearer ...\"}}}";
+
+const SINK_UPDATE_HELP: &str = r#"Sinks are JSON objects with a type and its settings. --sink replaces the whole
+list; include the "id" of existing sinks to keep them. An existing HTTP sink may
+omit "settings", or its "url" or "headers", to retain them, and a null header
+value keeps the stored value:
+  {"type":"table","id":"<sink-id>","settings":{"database":"analytics","table":"alerts"}}
+  {"type":"http","id":"<sink-id>"}
+  {"type":"http","settings":{"url":"https://example.com/hook"}}
+
+Example: keep an HTTP sink unchanged and point a table sink at another table.
+Find the sink IDs with `rtree workflow get <id>`, then pass every sink to keep:
+  rtree workflow update <id> \
+    --sink '{"type":"http","id":"<http-sink-id>"}' \
+    --sink '{"type":"table","id":"<table-sink-id>","settings":{"database":"analytics","table":"alerts_v2"}}'"#;
+
+#[derive(Subcommand)]
+pub enum WorkflowCommand {
+    /// List workflows in the selected cluster
+    List,
+    /// Show a workflow
+    Get {
+        /// Workflow ID
+        id: String,
+    },
+    /// Create a workflow that runs SQL on demand or on a schedule
+    #[command(after_help = SINK_HELP)]
+    Create {
+        /// Workflow name (letters, digits, '-' and '_')
+        #[arg(long)]
+        name: String,
+        /// Database the SQL runs in (defaults to RAWTREE_DATABASE/config default)
+        #[arg(long)]
+        database: Option<String>,
+        /// SQL to run: a SELECT or INSERT INTO ... SELECT. Use "-" to read from stdin.
+        #[arg(long)]
+        sql: String,
+        /// Seconds between automatic runs (1–86400); null or omitted means manual-only
+        #[arg(long, value_name = "SECONDS|null")]
+        interval_seconds: Option<WorkflowIntervalArg>,
+        /// Create the workflow paused
+        #[arg(long)]
+        disabled: bool,
+        /// Sink as a JSON object; repeat for up to five sinks
+        #[arg(long = "sink", value_name = "JSON")]
+        sinks: Vec<String>,
+    },
+    /// Update a workflow; omitted fields are left unchanged
+    #[command(after_help = SINK_UPDATE_HELP)]
+    Update {
+        /// Workflow ID
+        id: String,
+        /// New workflow name
+        #[arg(long)]
+        name: Option<String>,
+        /// Database the SQL runs in
+        #[arg(long)]
+        database: Option<String>,
+        /// New SQL. Use "-" to read from stdin.
+        #[arg(long)]
+        sql: Option<String>,
+        /// Seconds between automatic runs (1–86400); null removes the schedule
+        #[arg(long, value_name = "SECONDS|null")]
+        interval_seconds: Option<WorkflowIntervalArg>,
+        /// Resume scheduled runs
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Pause scheduled runs
+        #[arg(long)]
+        disable: bool,
+        /// Sink as a JSON object; replaces all sinks. Repeat for up to five.
+        #[arg(long = "sink", value_name = "JSON", conflicts_with = "clear_sinks")]
+        sinks: Vec<String>,
+        /// Remove all sinks
+        #[arg(long)]
+        clear_sinks: bool,
+    },
+    /// Delete a workflow and stop its schedule
+    Delete {
+        /// Workflow ID
+        id: String,
+    },
+    /// Run a workflow once, independently of its schedule
+    Run {
+        /// Workflow ID
+        id: String,
+        /// Retry key; reusing it returns the same run instead of starting another
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
+    /// List manual and scheduled runs of a workflow
+    Runs {
+        /// Workflow ID
+        id: String,
+        /// Maximum runs to return (default: 20, max: 100)
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=100))]
+        limit: Option<u16>,
+        /// Cursor from a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Request cancellation of a workflow run
+    Cancel {
+        /// Workflow ID
+        id: String,
+        /// Run ID
+        run_id: String,
+    },
+    /// Show workflow execution and sink delivery logs
+    Logs {
+        /// Workflow ID
+        id: String,
+        #[command(flatten)]
+        range: WorkflowTimeRange,
+        /// Maximum log entries to return (default: 100, max: 200)
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=200))]
+        limit: Option<u16>,
+        /// Cursor from a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Show workflow execution, match, delivery, and error counts
+    Metrics {
+        /// Workflow ID
+        id: String,
+        #[command(flatten)]
+        range: WorkflowTimeRange,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkflowIntervalArg(pub Option<u32>);
+
+impl FromStr for WorkflowIntervalArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "null" {
+            return Ok(Self(None));
+        }
+        match value.parse::<u32>() {
+            Ok(seconds) if (1..=86400).contains(&seconds) => Ok(Self(Some(seconds))),
+            _ => Err("expected a whole number from 1 to 86400, or null".into()),
+        }
+    }
+}
+
+/// Time window for workflow logs and metrics. Defaults to the last 24 hours; at most 7 days.
+#[derive(clap::Args, Debug, Default)]
+pub struct WorkflowTimeRange {
+    /// Start this long ago (e.g., 1h, 30m, 7d)
+    #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
+    pub since: Option<String>,
+    /// End this long ago (e.g., 30m)
+    #[arg(long, conflicts_with_all = ["start_time", "end_time"])]
+    pub until: Option<String>,
+    /// Start time as RFC 3339 (e.g., "2026-03-28T18:00:00Z")
+    #[arg(long)]
+    pub start_time: Option<String>,
+    /// End time as RFC 3339 (e.g., "2026-03-28T19:00:00Z")
+    #[arg(long)]
+    pub end_time: Option<String>,
 }
 
 #[cfg(test)]

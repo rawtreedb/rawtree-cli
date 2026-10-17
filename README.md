@@ -76,6 +76,40 @@ Interactive login offers browser-based Rawtree authentication or securely prompt
 for an existing API key. Non-interactive and `--json` login continue to use
 browser-based authentication unless `--api-key` is provided.
 
+When stdin is not a terminal, `login` uses JSON automatically. Browser login
+prints a `device_approval_required` JSON event to stderr before waiting for
+approval. Open its `verification_uri_complete` link in a browser on any device.
+JSON mode does not open a browser automatically; interactive terminals can use
+`--no-browser` to print the link without opening it.
+
+```json
+{"event":"device_approval_required","verification_uri":"<approval page>","verification_uri_complete":"<approval link>","user_code":"ABCD-EFGH","expires_in":600}
+```
+
+Read stderr as newline-delimited JSON while the command is running. Stdout
+contains the final JSON result. A successful login exits with code `0`. If a
+selection is needed after approval, stdout contains one of these responses and
+the command exits with code `2`:
+
+```json
+{"needs":"org","orgs":["team-alpha","team-beta"]}
+{"needs":"cluster","organization":"team-alpha","clusters":["production","staging"]}
+{"needs":"database","organization":"team-alpha","cluster":"production","databases":["analytics","billing"]}
+```
+
+Rerun with the corresponding `--org`, `--cluster`, or `--database` flag, retaining
+the selections already made. A single available option is selected automatically.
+An empty choices array means no resources are available at that level. Invalid
+selections and API failures produce a JSON error on stderr and a nonzero exit.
+
+Credentials and defaults are saved only after login completes. An incomplete
+login leaves the existing config unchanged; each retry requires browser approval
+again. Pass all three selectors to avoid selection retries:
+
+```sh
+rtree login --org team-alpha --cluster production --database analytics
+```
+
 When using `--api-key`, the CLI validates the key and any supplied organization/cluster
 selectors with the server before saving it. Explicit selections are saved as defaults.
 If the server omits organization/database metadata and no selection was supplied,
@@ -123,7 +157,7 @@ API keys remain restricted to their bound cluster regardless of which selector s
 Top-level commands:
 
 - `login`, `logout`
-- `database`, `organization`, `cluster`, `key`, `table`
+- `database`, `organization`, `cluster`, `key`, `table`, `workflow`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -156,18 +190,60 @@ With `--json`, creation returns `{"database":{"name":"analytics"}}`; listing ret
 `{"databases":[{"name":"analytics","s3_storage":null}]}`. Database output no longer
 adds organization metadata that is absent from the API response.
 
+### Formatting SQL
+
+```sh
+rtree format "select 1"
+rtree format -q "select 1"
+rtree format --query "select 1"
+rtree format --sql "select 1; select 2"
+cat query.sql | rtree format
+cat query.sql | rtree format -
+rtree format < query.sql > formatted.sql
+rtree format --json < query.sql
+```
+
+Use stdin redirection or a pipe for large SQL documents to avoid shell argument limits.
+Plain output is the complete formatted SQL, with its whitespace preserved.
+`--json` returns `{ "formatted": "..." }`. `--sql`, `--query`, and `-q` are aliases;
+provide SQL once, either positionally or with one flag. Omit SQL or use `-` to
+read from stdin, including `--sql -`, `--query -`, or `-q -`.
+`--database`, `--org`, and `--cluster` honor the usual environment and
+saved defaults; a database is optional for formatting.
+
+Formatting uses the native RawTree formatter without executing SQL or adding
+database query logs. Multiple statements and literal values are preserved.
+Inline `INSERT ... VALUES` data is copied verbatim without completeness or schema
+validation. The API accepts a 50 MiB JSON request, allows 100 MiB of formatted
+output, and times formatting out after 30 seconds. The CLI allows 120 seconds
+for the entire HTTP request, including upload/download. Ctrl-C cancels the CLI
+request. Errors produce no partial formatted output.
+
+Requires deployment of [Platform PR #1468](https://github.com/rawtreedb/rawtree-platform/pull/1468),
+which adds `POST /v1/query-format`.
+
 ### Querying
 
 ```sh
 # Positional SQL
 rtree query "SELECT * FROM events LIMIT 10"
 
+# Equivalent named forms
+rtree query -q "SELECT * FROM events LIMIT 10"
+rtree query --query "SELECT * FROM events LIMIT 10"
+rtree query --sql "SELECT * FROM events LIMIT 10"
+
 # SQL from stdin
+rtree query < query.sql
+cat query.sql | rtree query
 cat query.sql | rtree query -
 
 # JSON output
 rtree query --json --sql "SELECT * FROM events LIMIT 10"
 ```
+
+As with `format`, provide SQL once. Stdin also works with `--sql -`, `--query -`,
+or `-q -`.
 
 ### Data ingestion
 
@@ -191,6 +267,7 @@ With `--json`, the result is
 ```sh
 rtree key list
 rtree key create --name ci --permission read_write
+rtree key create --name temporary-ci --permission read_only --expires-at 2027-01-01T00:00:00Z
 rtree key create --database analytics --name analytics-ci --permission read_write
 
 rtree table list --database analytics
@@ -205,6 +282,67 @@ API keys belong to a cluster. `key list` and `key delete` do not accept `--datab
 listing includes each key's default database. `key create --database` selects the
 new key's default database, using `RAWTREE_DATABASE` or the saved selection when
 omitted. If none is selected, the server uses `default`.
+
+`key create --expires-at` accepts a future RFC 3339 timestamp with a timezone.
+The server validates and normalizes it to UTC. Omit the flag for a key that never
+expires. Create/list output includes expiration (`never` in text, `null` in JSON);
+older servers that omit the field are also supported. Expiration is fixed at
+creation; create a replacement key to change it. There is no `key update` command.
+
+### Workflows
+
+Workflows run saved SQL on demand or on a schedule and deliver results to sinks.
+
+```sh
+rtree workflow list
+rtree workflow create --name errors --database analytics --interval-seconds 60 \
+  --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
+rtree workflow create --name on-demand --database analytics --sql "SELECT 1"
+rtree workflow create --name alerts --disabled --sql - \
+  --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
+  < alerts.sql
+rtree workflow get <id>
+rtree workflow update <id> --interval-seconds 300
+rtree workflow update <id> --interval-seconds null
+rtree workflow update <id> --disable
+rtree workflow update <id> --clear-sinks
+rtree workflow delete <id>
+
+rtree workflow run <id> --idempotency-key deploy-42
+rtree workflow runs <id>
+rtree workflow cancel <id> <run-id>
+rtree workflow logs <id> --since 1h
+rtree workflow metrics <id> --since 7d
+```
+
+Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
+the environment, or the saved defaults). API keys must have admin permission.
+`create` uses the selected database when `--database` is omitted.
+The CLI sends `--database` and `--sql` inside the API's `query` object. On `update`,
+each flag changes only that query field; the other field stays unchanged.
+
+Creating a workflow without `--interval-seconds` makes it manual-only. The CLI
+explicitly sends `interval_seconds: null`, so the API's default interval is not used.
+Use `--interval-seconds null` to remove an existing schedule, matching the API's
+`interval_seconds: null`. The same value is accepted on `create`.
+An interval restores recurring execution, subject to the enabled state; use
+`--enable` as well if the workflow is paused. Omitting `--interval-seconds` on `update`
+preserves the current mode.
+`--disable` pauses scheduled runs while retaining the interval. Manual runs remain
+available in either mode, including while paused. Text output shows status as
+`active`, `paused`, or `manual`, the next scheduled run when available, and HTTP
+sink URLs.
+
+Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
+nested `settings` object: `{"database","table"}` for `table` sinks and
+`{"url","headers"}` for `http` sinks. On `update`, `--sink` replaces the whole
+list. Include each existing sink's `id` to keep it; an existing HTTP sink may omit
+`settings`, or its `url` or `headers`, to retain them.
+
+`run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
+same run instead of starting another. Logs and metrics cover the last 24 hours by
+default, at most 7 days. Use `--since`/`--until` or `--start-time`/`--end-time`
+to change the window.
 
 ### Request logs
 
@@ -325,8 +463,50 @@ Setup:
 git clone https://github.com/rawtreedb/rawtree-cli.git
 cd rawtree-cli
 cargo check
-cargo test
+cargo fmt --all -- --check
+cargo test --locked
 ```
+
+The `Tests` workflow runs the CLI's unit and mock-API contract tests on pushes
+to `main` and pull requests. New PR updates cancel obsolete runs. It also runs `tests/live_platform.rs` against the full
+Platform Docker Compose stack on same-repository changes. That test uses the
+Platform launcher to create a local organization and cluster, then checks CLI
+database creation, insertion, querying, API key login, and deletion through the real API.
+It also logs in with the local test user's email and password, verifies API access
+using the saved session, logs out, and checks that credentials are cleared and API
+access requires authentication again.
+Workflow tests cover definition updates, manual and scheduled execution,
+pause/resume, cancellation, idempotency, table sink delivery, logs, and metrics.
+They run through the real CLI and clean up their workflows and databases.
+The Platform repository continues to test API endpoints directly.
+
+The Docker job checks out private `rawtreedb/rawtree-platform` at `main`. It
+requires a read-only deploy key on the Platform repository, with its private SSH
+key stored as `PLATFORM_REPO_SSH_KEY` in this repository's GitHub Actions secrets.
+The job also requires `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets to pull
+the private RawTree server, keeper, and backend images. Use a read-only Docker Hub
+token with access to those repositories.
+
+The integration job uses Platform's `arc-runner-set-platform-arm64` runner pool.
+It reuses the published backend image
+only when its source revision is an ancestor of the checked-out Platform `main`
+and its backend release inputs are unchanged. It pulls the verified image by
+digest; if the inputs differ or revision metadata is missing, it builds from
+source. The frontend is built for the local test URL. Compose still starts the
+full stack, waits for healthy services, and bootstraps the test identity. Build
+and startup timings appear as separate CI steps. Private Platform layers are
+never stored in the public CLI repository's Actions cache.
+Fork pull requests run the unit and mock-API tests;
+GitHub does not pass the private checkout secret to those runs.
+
+To run the real test locally, start Platform from its checkout with
+`bash scripts/codex/run-local-compose.sh 18087`, then set
+`RAWTREE_LIVE_API_URL=http://localhost:18087` and the
+`RAWTREE_LIVE_SESSION_TOKEN`, `RAWTREE_LIVE_ORGANIZATION`, and
+`RAWTREE_LIVE_CLUSTER` values from that checkout's ignored `.env.local`.
+Also set `RAWTREE_LIVE_EMAIL` and `RAWTREE_LIVE_PASSWORD` from
+`RAWTREE_LOCAL_BOOTSTRAP_EMAIL` and `RAWTREE_LOCAL_BOOTSTRAP_PASSWORD` in the same file.
+Run `cargo test --locked --test live_platform -- --ignored` in this checkout.
 
 Run locally:
 

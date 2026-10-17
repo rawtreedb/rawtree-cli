@@ -6,6 +6,7 @@ use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::Write;
+use std::time::Duration;
 
 const RAWTREE_CLIENT_HEADER: &str = "x-rawtree-client";
 const RAWTREE_CLIENT_VALUE: &str = "cli";
@@ -29,8 +30,19 @@ impl ApiClient {
     }
 
     pub fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
+        self.post_with_timeout(path, body, Duration::from_secs(30))
+    }
+
+    pub fn post_with_timeout<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+        timeout: Duration,
+    ) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url)).json(body);
+        let mut req = with_client_header(self.client.post(&url))
+            .json(body)
+            .timeout(timeout);
         if let Some(ref token) = self.token {
             req = req.bearer_auth(token);
         }
@@ -60,6 +72,46 @@ impl ApiClient {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         Ok((handle_response(resp)?, query_id))
+    }
+
+    /// POST without a body, sending an optional Idempotency-Key header.
+    pub fn post_empty_idempotent<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = with_client_header(self.client.post(&url));
+        if let Some(key) = idempotency_key {
+            req = req.header("idempotency-key", key);
+        }
+        if let Some(ref token) = self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().context("failed to connect to server")?;
+        handle_response(resp)
+    }
+
+    /// POST without a body to an endpoint that replies without content.
+    pub fn post_no_content(&self, path: &str) -> Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = with_client_header(self.client.post(&url));
+        if let Some(ref token) = self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().context("failed to connect to server")?;
+        check_status(resp)
+    }
+
+    /// DELETE to an endpoint that replies without content.
+    pub fn delete_no_content(&self, path: &str) -> Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = with_client_header(self.client.delete(&url));
+        if let Some(ref token) = self.token {
+            req = req.bearer_auth(token);
+        }
+        let resp = req.send().context("failed to connect to server")?;
+        check_status(resp)
     }
 
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
@@ -160,6 +212,15 @@ fn handle_response<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Re
         return Err(format_server_error(&text, status.as_u16()));
     }
     serde_json::from_str(&text).context("failed to parse server response")
+}
+
+fn check_status(resp: reqwest::blocking::Response) -> Result<()> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let text = resp.text().context("failed to read response body")?;
+    Err(format_server_error(&text, status.as_u16()))
 }
 
 fn format_server_error(body: &str, status: u16) -> anyhow::Error {

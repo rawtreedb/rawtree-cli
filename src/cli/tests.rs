@@ -1,4 +1,6 @@
-use super::{Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand};
+use super::{
+    Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand, WorkflowCommand,
+};
 use clap::{error::ErrorKind, CommandFactory, Parser};
 
 #[test]
@@ -95,7 +97,8 @@ fn global_api_key_parses_before_subcommand() {
 
 #[test]
 fn cluster_list_parses() {
-    let cli = Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
+    let cli =
+        Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
     assert!(matches!(
         cli.command,
         Command::Cluster {
@@ -143,7 +146,6 @@ fn cluster_create_parses_explicit_name_and_idle_timeout() {
                 idle_timeout_minutes: Some(30),
                 min_size,
                 max_size: Some(max_size),
-                ..
             }
         } if name == "production"
             && replicas == 2
@@ -417,19 +419,6 @@ fn query_format_flag_is_rejected() {
 }
 
 #[test]
-fn query_named_query_flag_is_rejected() {
-    let result = Cli::try_parse_from([
-        "rtree",
-        "query",
-        "--database",
-        "analytics",
-        "--query",
-        "SELECT 1",
-    ]);
-    assert!(result.is_err(), "query --query should not be supported");
-}
-
-#[test]
 fn key_command_is_singular() {
     let cli = Cli::try_parse_from(["rtree", "key", "list"]).unwrap();
     assert!(matches!(
@@ -558,4 +547,90 @@ fn logs_request_filters_parse() {
 fn logs_status_codes_must_be_http_statuses() {
     let result = Cli::try_parse_from(["rtree", "logs", "--status-codes", "99"]);
     assert!(result.is_err(), "status codes below 100 should be rejected");
+}
+
+#[test]
+fn workflow_create_collects_repeated_sinks() {
+    let cli = Cli::try_parse_from([
+        "rtree",
+        "workflow",
+        "create",
+        "--name",
+        "alerts",
+        "--sql",
+        "SELECT 1",
+        "--interval-seconds",
+        "60",
+        "--disabled",
+        "--sink",
+        r#"{"type":"table","settings":{"database":"a","table":"b"}}"#,
+        "--sink",
+        r#"{"type":"http","settings":{"url":"https://example.com"}}"#,
+    ])
+    .expect("workflow create should parse");
+    match cli.command {
+        Command::Workflow {
+            action:
+                WorkflowCommand::Create {
+                    interval_seconds,
+                    disabled,
+                    sinks,
+                    database,
+                    ..
+                },
+        } => {
+            assert_eq!(interval_seconds.map(|interval| interval.0), Some(Some(60)));
+            assert!(disabled);
+            assert_eq!(sinks.len(), 2);
+            assert!(database.is_none());
+        }
+        _ => panic!("expected workflow create command"),
+    }
+}
+
+#[test]
+fn workflow_update_rejects_conflicting_flags() {
+    for args in [
+        vec!["--enable", "--disable"],
+        vec!["--clear-sinks", "--sink", "{}"],
+    ] {
+        let mut command = vec!["rtree", "workflow", "update", "wf-1"];
+        command.extend(args);
+        assert!(Cli::try_parse_from(command).is_err());
+    }
+}
+
+#[test]
+fn workflow_interval_and_time_ranges_are_validated() {
+    assert!(Cli::try_parse_from([
+        "rtree",
+        "workflow",
+        "create",
+        "--name",
+        "a",
+        "--sql",
+        "SELECT 1",
+        "--interval-seconds",
+        "86401",
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "rtree",
+        "workflow",
+        "logs",
+        "wf-1",
+        "--since",
+        "1h",
+        "--start-time",
+        "2026-01-01T00:00:00Z",
+    ])
+    .is_err());
+    let cli = Cli::try_parse_from(["rtree", "workflow", "metrics", "wf-1", "--since", "2h"])
+        .expect("workflow metrics should parse");
+    assert!(matches!(
+        cli.command,
+        Command::Workflow {
+            action: WorkflowCommand::Metrics { range, .. }
+        } if range.since.as_deref() == Some("2h")
+    ));
 }

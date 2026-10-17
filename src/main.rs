@@ -8,6 +8,7 @@ mod output;
 mod s3_storage;
 
 use std::io::{self, IsTerminal, Read};
+use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -15,7 +16,7 @@ use clap_complete::generate;
 
 use cli::{
     Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType,
-    TableCommand,
+    TableCommand, WorkflowCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -134,11 +135,10 @@ fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
-    let trimmed = buf.trim().to_string();
-    if trimmed.is_empty() {
+    if buf.trim().is_empty() {
         anyhow::bail!("no SQL provided on stdin");
     }
-    Ok(trimmed)
+    Ok(buf)
 }
 
 fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<String> {
@@ -150,19 +150,52 @@ fn resolve_sql(positional: Option<String>, flag: Option<String>) -> Result<Strin
             if !io::stdin().is_terminal() {
                 read_stdin()
             } else {
-                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --sql, or pipe via stdin")
+                anyhow::bail!("SQL query is required. Provide it as a positional argument, with --sql / --query / -q, or pipe via stdin")
             }
         }
     }
 }
 
-fn main() {
-    let cli = Cli::parse();
-    let json_mode = cli.json;
-    if let Err(e) = run(cli) {
-        let code = output::print_error(&e, json_mode);
-        std::process::exit(code);
+fn read_sql_arg(sql: String) -> Result<String> {
+    if sql == "-" {
+        read_stdin()
+    } else {
+        Ok(sql)
     }
+}
+
+fn require_workflow_scope<'a>(
+    organization: Option<&'a str>,
+    cluster: Option<&'a str>,
+) -> Result<commands::workflow::WorkflowScope<'a>> {
+    let organization = organization.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No organization specified. Use --org, RAWTREE_ORG env, or `rtree organization use <name>`"
+        )
+    })?;
+    let cluster = cluster.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No cluster specified. Use --cluster, RAWTREE_CLUSTER env, or `rtree cluster use <name>`"
+        )
+    })?;
+    Ok(commands::workflow::WorkflowScope {
+        organization,
+        cluster,
+    })
+}
+
+fn main() -> ExitCode {
+    let mut cli = Cli::parse();
+    cli.json = effective_json_mode(&cli, io::stdin().is_terminal());
+    let json_mode = cli.json;
+    match run(cli) {
+        Ok(code) => code,
+        Err(error) => ExitCode::from(output::print_error(&error, json_mode) as u8),
+    }
+}
+
+fn effective_json_mode(cli: &Cli, stdin_is_terminal: bool) -> bool {
+    cli.json || (matches!(cli.command, Command::Login { .. }) && !stdin_is_terminal)
 }
 
 fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
@@ -187,7 +220,7 @@ fn should_prompt_for_login_method(
     email.is_none() && !json_mode && stdin_is_terminal && stdout_is_terminal
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<ExitCode> {
     let Cli {
         api_key: cli_api_key,
         api_url: cli_url,
@@ -232,15 +265,17 @@ fn run(cli: Cli) -> Result<()> {
                 io::stdout().is_terminal(),
             ) {
                 match commands::auth::prompt_for_login_method()? {
-                    commands::auth::LoginMethod::Rawtree => commands::auth::login_with_browser(
-                        &client,
-                        no_browser,
-                        timeout_seconds,
-                        cli_org.clone(),
-                        login_cluster.clone(),
-                        database,
-                        json,
-                    ),
+                    commands::auth::LoginMethod::Rawtree => {
+                        return commands::auth::login_with_browser(
+                            &client,
+                            no_browser,
+                            timeout_seconds,
+                            cli_org.clone(),
+                            login_cluster.clone(),
+                            database,
+                            json,
+                        )
+                    }
                     commands::auth::LoginMethod::ManualApiKey => {
                         let api_key = commands::auth::prompt_for_api_key()?;
                         commands::auth::login_with_api_key(
@@ -265,7 +300,7 @@ fn run(cli: Cli) -> Result<()> {
                     json,
                 )
             } else {
-                commands::auth::login_with_browser(
+                return commands::auth::login_with_browser(
                     &client,
                     no_browser,
                     timeout_seconds,
@@ -273,7 +308,7 @@ fn run(cli: Cli) -> Result<()> {
                     login_cluster.clone(),
                     database,
                     json,
-                )
+                );
             }
         }
         Command::Logout => commands::auth::logout(json),
@@ -397,6 +432,7 @@ fn run(cli: Cli) -> Result<()> {
                     database,
                     name,
                     permission,
+                    expires_at,
                 } => {
                     let database = resolve_optional_database(database);
                     commands::keys::create(
@@ -404,8 +440,11 @@ fn run(cli: Cli) -> Result<()> {
                         database.as_deref(),
                         effective_org.as_deref(),
                         effective_cluster.as_deref(),
-                        &name,
-                        &permission,
+                        commands::keys::CreateApiKeyRequest {
+                            name: &name,
+                            permission: &permission,
+                            expires_at: expires_at.as_deref(),
+                        },
                         json,
                     )
                 }
@@ -476,6 +515,91 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Workflow { action } => {
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            let scope =
+                require_workflow_scope(effective_org.as_deref(), effective_cluster.as_deref())?;
+            match action {
+                WorkflowCommand::List => commands::workflow::list(&client, &scope, json),
+                WorkflowCommand::Get { id } => commands::workflow::get(&client, &scope, &id, json),
+                WorkflowCommand::Create {
+                    name,
+                    database,
+                    sql,
+                    interval_seconds,
+                    disabled,
+                    sinks,
+                } => commands::workflow::create(
+                    &client,
+                    &scope,
+                    commands::workflow::CreateWorkflow {
+                        name,
+                        database: resolve_database(database)?,
+                        sql: read_sql_arg(sql)?,
+                        interval_seconds: interval_seconds.and_then(|interval| interval.0),
+                        disabled,
+                        sinks,
+                    },
+                    json,
+                ),
+                WorkflowCommand::Update {
+                    id,
+                    name,
+                    database,
+                    sql,
+                    interval_seconds,
+                    enable,
+                    disable,
+                    sinks,
+                    clear_sinks,
+                } => commands::workflow::update(
+                    &client,
+                    &scope,
+                    &id,
+                    commands::workflow::UpdateWorkflow {
+                        name,
+                        database,
+                        sql: sql.map(read_sql_arg).transpose()?,
+                        interval_seconds: interval_seconds.map(|interval| interval.0),
+                        enabled: (enable || disable).then_some(enable),
+                        sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
+                    },
+                    json,
+                ),
+                WorkflowCommand::Delete { id } => {
+                    commands::workflow::delete(&client, &scope, &id, json)
+                }
+                WorkflowCommand::Run {
+                    id,
+                    idempotency_key,
+                } => {
+                    commands::workflow::run(&client, &scope, &id, idempotency_key.as_deref(), json)
+                }
+                WorkflowCommand::Runs { id, limit, cursor } => {
+                    commands::workflow::runs(&client, &scope, &id, limit, cursor.as_deref(), json)
+                }
+                WorkflowCommand::Cancel { id, run_id } => {
+                    commands::workflow::cancel(&client, &scope, &id, &run_id, json)
+                }
+                WorkflowCommand::Logs {
+                    id,
+                    range,
+                    limit,
+                    cursor,
+                } => commands::workflow::logs(
+                    &client,
+                    &scope,
+                    &id,
+                    &range,
+                    limit,
+                    cursor.as_deref(),
+                    json,
+                ),
+                WorkflowCommand::Metrics { id, range } => {
+                    commands::workflow::metrics(&client, &scope, &id, &range, json)
+                }
+            }
+        }
         Command::Logs {
             search,
             methods,
@@ -537,6 +661,19 @@ fn run(cli: Cli) -> Result<()> {
                 json,
             )
         }
+        Command::Format(args) => {
+            let database = resolve_optional_database(args.database);
+            let sql = resolve_sql(args.sql_positional, args.sql)?;
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            commands::format::format(
+                &client,
+                database.as_deref(),
+                effective_org.as_deref(),
+                effective_cluster.as_deref(),
+                &sql,
+                json,
+            )
+        }
         Command::Insert {
             database,
             table,
@@ -586,17 +723,34 @@ fn run(cli: Cli) -> Result<()> {
             generate(shell, &mut Cli::command(), "rtree", &mut io::stdout());
             Ok(())
         }
-    }
+    }?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::constants::DEFAULT_API_URL;
     use super::{
-        resolve_cluster_from_sources, resolve_database_from_sources, resolve_effective_org_with,
-        resolve_login_cluster_from_sources, resolve_org_from_sources, resolve_token_from_sources,
-        resolve_url_from_sources, should_prompt_for_login_method,
+        effective_json_mode, resolve_cluster_from_sources, resolve_database_from_sources,
+        resolve_effective_org_with, resolve_login_cluster_from_sources, resolve_org_from_sources,
+        resolve_token_from_sources, resolve_url_from_sources, should_prompt_for_login_method, Cli,
     };
+
+    #[test]
+    fn json_is_automatic_only_for_non_terminal_login() {
+        for (args, terminal, expected) in [
+            (vec!["rtree", "login"], false, true),
+            (vec!["rtree", "login"], true, false),
+            (vec!["rtree", "login", "--json"], true, true),
+            (vec!["rtree", "status"], false, false),
+            (vec!["rtree", "status", "--json"], false, true),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert_eq!(effective_json_mode(&cli, terminal), expected);
+        }
+    }
 
     #[test]
     fn resolve_cluster_uses_cli_first() {

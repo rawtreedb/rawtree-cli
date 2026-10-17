@@ -11,9 +11,27 @@ struct ApiKeyItem {
     id: String,
     token: String,
     name: String,
-    permission: String,
+    #[serde(flatten)]
+    access: ApiKeyAccess,
+    expires_at: Option<String>,
     database: ApiKeyDatabaseRef,
     created_at: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum ApiKeyAccess {
+    Permission { permission: String },
+    DatabaseRoles { database_roles: Vec<String> },
+}
+
+impl std::fmt::Display for ApiKeyAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Permission { permission } => f.pad(permission),
+            Self::DatabaseRoles { database_roles } => f.pad(&database_roles.join(", ")),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -28,6 +46,7 @@ struct CreateApiKeyResponse {
     name: String,
     database: ApiKeyDatabaseRef,
     permission: String,
+    expires_at: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -54,8 +73,14 @@ pub fn list(
         } else {
             for k in &resp.keys {
                 println!(
-                    "{:<38} {:<12} {:<14} {}  database={}  created={}",
-                    k.id, k.name, k.permission, k.token, k.database.name, k.created_at
+                    "{:<38} {:<12} {:<14} {}  database={}  created={}  expires={}",
+                    k.id,
+                    k.name,
+                    k.access,
+                    k.token,
+                    k.database.name,
+                    k.created_at,
+                    k.expires_at.as_deref().unwrap_or("never")
                 );
             }
         }
@@ -63,27 +88,37 @@ pub fn list(
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct CreateApiKeyRequest<'a> {
+    pub name: &'a str,
+    pub permission: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<&'a str>,
+}
+
 pub fn create(
     client: &ApiClient,
     database: Option<&str>,
     organization: Option<&str>,
     cluster: Option<&str>,
-    name: &str,
-    permission: &str,
+    request: CreateApiKeyRequest<'_>,
     json_mode: bool,
 ) -> Result<()> {
-    let body = json!({ "name": name, "permission": permission });
     let path = match database {
         Some(database) => org::database_scoped_path(database, "/keys", organization, cluster),
         None => org::scoped_path("/v1/keys", organization, cluster),
     };
-    let resp: CreateApiKeyResponse = client.post(&path, &body)?;
+    let resp: CreateApiKeyResponse = client.post(&path, &serde_json::to_value(request)?)?;
     output::print_result(&resp, json_mode, |_| {
         println!("API key created:");
         println!("  id:         {}", resp.id);
         println!("  token:      {}", resp.token);
         println!("  name:       {}", resp.name);
         println!("  permission: {}", resp.permission);
+        println!(
+            "  expires:    {}",
+            resp.expires_at.as_deref().unwrap_or("never")
+        );
     });
     Ok(())
 }
