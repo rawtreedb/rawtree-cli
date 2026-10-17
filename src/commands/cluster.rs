@@ -135,7 +135,7 @@ pub fn create(
         options.idle_timeout_minutes,
     );
 
-    let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
+    let value: Value = client.post(&client.clusters_path(options.organization)?, &body)?;
     let created: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
 
@@ -190,7 +190,7 @@ pub fn update(
     }
 
     let value: Value = client.patch(
-        &cluster_path(&cluster.id, None, organization),
+        &cluster_path(client, &cluster.id, None, organization)?,
         &Value::Object(body),
     )?;
     let updated: ClusterItem =
@@ -363,7 +363,7 @@ pub fn delete(
 ) -> Result<()> {
     let (_, resp) = load_dedicated_clusters(client, organization)?;
     let cluster = resolve_cluster(&resp.clusters, name_or_id)?.clone();
-    let path = cluster_path(&cluster.id, None, organization);
+    let path = cluster_path(client, &cluster.id, None, organization)?;
     let result: DeleteClusterResponse = client.delete(&path)?;
     let value = delete_output(&cluster, result.deleted);
     if result.deleted {
@@ -411,7 +411,7 @@ fn load_dedicated_clusters(
     client: &ApiClient,
     organization: Option<&str>,
 ) -> Result<(Value, ListClustersResponse)> {
-    let path = clusters_collection_path(organization);
+    let path = client.clusters_path(organization)?;
     let value: Value = client.get(&path)?;
     let resp =
         serde_json::from_value(value.clone()).context("invalid clusters response from server")?;
@@ -420,7 +420,7 @@ fn load_dedicated_clusters(
 
 fn load_cluster_sizes(client: &ApiClient) -> Result<(Value, ClusterSizesResponse)> {
     let value: Value = client
-        .get("/v1/clusters/sizes")
+        .get("/v1/cluster-sizes")
         .context("invalid cluster sizes response from server")?;
     let response: ClusterSizesResponse = serde_json::from_value(value.clone())
         .context("invalid cluster sizes response from server")?;
@@ -509,7 +509,12 @@ fn request_lifecycle(
 ) -> Result<()> {
     let (_, resp) = load_dedicated_clusters(client, organization)?;
     let cluster = resolve_cluster(&resp.clusters, name_or_id)?;
-    let path = cluster_path(&cluster.id, Some(action.path_segment()), organization);
+    let path = cluster_path(
+        client,
+        &cluster.id,
+        Some(action.path_segment()),
+        organization,
+    )?;
     let value: Value = client.post_empty(&path)?;
     let updated: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
@@ -529,24 +534,22 @@ fn request_lifecycle(
     Ok(())
 }
 
-fn clusters_collection_path(organization: Option<&str>) -> String {
-    match organization {
-        Some(name) => format!("/v1/clusters?organization={}", urlencoding::encode(name)),
-        None => "/v1/clusters".to_string(),
-    }
-}
-
-fn cluster_path(cluster_id: &str, action: Option<&str>, organization: Option<&str>) -> String {
-    let mut path = format!("/v1/clusters/{}", urlencoding::encode(cluster_id));
+fn cluster_path(
+    client: &ApiClient,
+    cluster_id: &str,
+    action: Option<&str>,
+    organization: Option<&str>,
+) -> Result<String> {
+    let mut path = format!(
+        "{}/{}",
+        client.clusters_path(organization)?,
+        urlencoding::encode(cluster_id)
+    );
     if let Some(action) = action {
         path.push('/');
         path.push_str(action);
     }
-    if let Some(name) = organization {
-        path.push_str("?organization=");
-        path.push_str(&urlencoding::encode(name));
-    }
-    path
+    Ok(path)
 }
 
 fn format_phase(phase: &str) -> String {
@@ -603,38 +606,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        cluster_path, cluster_size_json, clusters_collection_path, create_request_body,
-        default_cluster_after_delete, delete_output, empty_list_message, format_created_at,
-        format_idle_timeout, format_phase, format_size_per_replica, renamed_default_cluster,
-        resolve_cluster, resolve_cluster_size, ClusterItem, ClusterResources, ClusterSizeItem,
-        ClusterStatus, ListClustersResponse,
+        cluster_size_json, create_request_body, default_cluster_after_delete, delete_output,
+        empty_list_message, format_created_at, format_idle_timeout, format_phase,
+        format_size_per_replica, renamed_default_cluster, resolve_cluster, resolve_cluster_size,
+        ClusterItem, ClusterResources, ClusterSizeItem, ClusterStatus, ListClustersResponse,
     };
     use crate::cli::ClusterSizeArg;
-
-    #[test]
-    fn collection_path_encodes_organization() {
-        assert_eq!(
-            clusters_collection_path(Some("team alpha")),
-            "/v1/clusters?organization=team%20alpha"
-        );
-        assert_eq!(clusters_collection_path(None), "/v1/clusters");
-    }
-
-    #[test]
-    fn lifecycle_paths_encode_cluster_and_organization() {
-        assert_eq!(
-            cluster_path("cluster/id", Some("stop"), Some("team alpha")),
-            "/v1/clusters/cluster%2Fid/stop?organization=team%20alpha"
-        );
-        assert_eq!(
-            cluster_path("cluster-id", Some("resume"), None),
-            "/v1/clusters/cluster-id/resume"
-        );
-        assert_eq!(
-            cluster_path("cluster-id", None, Some("team alpha")),
-            "/v1/clusters/cluster-id?organization=team%20alpha"
-        );
-    }
 
     #[test]
     fn cluster_size_catalog_resolves_cpu_and_memory_pairs() {

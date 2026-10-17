@@ -265,7 +265,7 @@ fn list_clusters_for_organization(
     client: &ApiClient,
     organization_name: &str,
 ) -> Result<Vec<String>> {
-    let path = org::scoped_path("/v1/clusters", Some(organization_name), None);
+    let path = client.clusters_path(Some(organization_name))?;
     let resp: ListClustersResponse = client.get(&path)?;
     Ok(resp.clusters.into_iter().map(|item| item.name).collect())
 }

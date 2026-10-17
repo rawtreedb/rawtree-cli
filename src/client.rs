@@ -1,3 +1,7 @@
+mod routing;
+#[cfg(test)]
+mod routing_tests;
+
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -18,6 +22,7 @@ pub struct ApiClient {
     pub base_url: String,
     pub token: Option<String>,
     client: Client,
+    routing: routing::RoutingCache,
 }
 
 impl ApiClient {
@@ -26,6 +31,18 @@ impl ApiClient {
             base_url,
             token,
             client: Client::new(),
+            routing: routing::RoutingCache::default(),
+        }
+    }
+
+    fn unrouted_request(&self, method: reqwest::Method, path: &str) -> RequestBuilder {
+        let request = with_client_header(
+            self.client
+                .request(method, format!("{}{}", self.base_url, path)),
+        );
+        match &self.token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
         }
     }
 
@@ -39,13 +56,9 @@ impl ApiClient {
         body: &Value,
         timeout: Duration,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url))
-            .json(body)
-            .timeout(timeout);
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self
+            .routed_request_with_timeout(reqwest::Method::POST, path, timeout)?
+            .json(body);
         let resp = req.send().context("failed to connect to server")?;
         handle_response(resp)
     }
@@ -60,11 +73,7 @@ impl ApiClient {
         &self,
         path: &str,
     ) -> Result<(T, Option<String>)> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url));
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::POST, path)?;
         let resp = req.send().context("failed to connect to server")?;
         let query_id = resp
             .headers()
@@ -80,13 +89,9 @@ impl ApiClient {
         path: &str,
         idempotency_key: Option<&str>,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url));
+        let mut req = self.routed_request(reqwest::Method::POST, path)?;
         if let Some(key) = idempotency_key {
             req = req.header("idempotency-key", key);
-        }
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
         }
         let resp = req.send().context("failed to connect to server")?;
         handle_response(resp)
@@ -94,85 +99,59 @@ impl ApiClient {
 
     /// POST without a body to an endpoint that replies without content.
     pub fn post_no_content(&self, path: &str) -> Result<()> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url));
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::POST, path)?;
         let resp = req.send().context("failed to connect to server")?;
         check_status(resp)
     }
 
     /// DELETE to an endpoint that replies without content.
     pub fn delete_no_content(&self, path: &str) -> Result<()> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.delete(&url));
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::DELETE, path)?;
         let resp = req.send().context("failed to connect to server")?;
         check_status(resp)
     }
 
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.patch(&url)).json(body);
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self
+            .routed_request(reqwest::Method::PATCH, path)?
+            .json(body);
         let resp = req.send().context("failed to connect to server")?;
         handle_response(resp)
     }
 
     pub fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.delete(&url));
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::DELETE, path)?;
         let resp = req.send().context("failed to connect to server")?;
         handle_response(resp)
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.get(&url));
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::GET, path)?;
         let resp = req.send().context("failed to connect to server")?;
-        handle_response(resp)
+        let value: Value = handle_response(resp)?;
+        self.remember_routing_metadata(path, &value);
+        serde_json::from_value(value).context("failed to parse server response")
     }
 
     /// POST with a pre-serialized JSON string body, gzip-compressed.
     pub fn post_compressed<T: DeserializeOwned>(&self, path: &str, body: &str) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
         let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
         encoder
             .write_all(body.as_bytes())
             .context("gzip compression failed")?;
         let compressed = encoder.finish().context("gzip finalization failed")?;
-        let mut req = self
-            .client
-            .post(&url)
+        let req = self
+            .routed_request(reqwest::Method::POST, path)?
             .header("content-type", "application/json")
             .header("content-encoding", "gzip")
             .body(compressed);
-        req = with_client_header(req);
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
         let resp = req.send().context("failed to connect to server")?;
         handle_response(resp)
     }
 
     /// POST that returns raw text (for queries that return ClickHouse results directly).
     pub fn post_raw(&self, path: &str, body: &Value) -> Result<String> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.post(&url)).json(body);
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::POST, path)?.json(body);
         let resp = req.send().context("failed to connect to server")?;
         let status = resp.status();
         let text = resp.text().context("failed to read response body")?;
@@ -184,11 +163,7 @@ impl ApiClient {
 
     /// GET that returns raw text.
     pub fn get_raw(&self, path: &str) -> Result<String> {
-        let url = format!("{}{}", self.base_url, path);
-        let mut req = with_client_header(self.client.get(&url));
-        if let Some(ref token) = self.token {
-            req = req.bearer_auth(token);
-        }
+        let req = self.routed_request(reqwest::Method::GET, path)?;
         let resp = req.send().context("failed to connect to server")?;
         let status = resp.status();
         let text = resp.text().context("failed to read response body")?;
@@ -205,7 +180,7 @@ fn with_client_header(req: RequestBuilder) -> RequestBuilder {
         .header(RAWTREE_CLIENT_VERSION_HEADER, RAWTREE_CLIENT_VERSION_VALUE)
 }
 
-fn handle_response<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T> {
+fn handle_response<T: DeserializeOwned>(resp: Response) -> Result<T> {
     let status = resp.status();
     let text = resp.text().context("failed to read response body")?;
     if !status.is_success() {
@@ -214,7 +189,7 @@ fn handle_response<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Re
     serde_json::from_str(&text).context("failed to parse server response")
 }
 
-fn check_status(resp: reqwest::blocking::Response) -> Result<()> {
+fn check_status(resp: Response) -> Result<()> {
     let status = resp.status();
     if status.is_success() {
         return Ok(());
