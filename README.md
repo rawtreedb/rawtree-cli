@@ -365,6 +365,24 @@ rtree cluster create \
   --min-size 2:8 \
   --max-size 64:256 \
   --idle-timeout-minutes 30
+# Or create a cluster with customer-owned S3 storage
+rtree cluster create \
+  --name customer-data \
+  --replicas 1 \
+  --min-size 2:8 \
+  --s3-data-bucket acme-rawtree-data \
+  --s3-data-path rawtree/data \
+  --s3-backup-bucket acme-rawtree-backups \
+  --s3-backup-path rawtree/backups \
+  --s3-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access \
+  --external-id rawtree-example
+# Or choose explicit cluster identity with RawTree-managed default storage
+rtree cluster create \
+  --name database-storage \
+  --replicas 1 \
+  --min-size 2:8 \
+  --external-id rawtree-database-access \
+  --resource-tag rawtree-customer-database
 rtree cluster use production
 rtree cluster status production
 rtree cluster update production --idle-timeout-minutes 60
@@ -381,6 +399,45 @@ catalog. Run `rtree cluster sizes` to see the currently available sizes; add
 `--json` for a machine-readable response.
 `--idle-timeout-minutes` is optional on create and update; omit it to use the
 server default on create, and pass `0` to disable automatic idling.
+
+Cluster creation forwards `--external-id` and `--resource-tag` when supplied.
+The API generates omitted identity values independently as `rawtree-<UUID>`
+using secure randomness and returns the saved values. The CLI does not generate
+identity values. Both are immutable after creation.
+Custom cluster storage requires `--external-id` to match the customer IAM role's
+trust policy. `--resource-tag` may be supplied or generated.
+
+Cluster and database creation share `--s3-data-bucket`, `--s3-backup-bucket`, and
+`--s3-role-arn`; all three are required if any S3 option is supplied. The optional
+`--s3-data-path` and `--s3-backup-path` specify object-key prefixes.
+
+```sh
+rtree --org acme --cluster production database create analytics \
+  --s3-data-bucket acme-rawtree-data \
+  --s3-backup-bucket acme-rawtree-backups \
+  --s3-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access
+```
+
+Database creation reuses the cluster's saved identity: no external ID or tag is
+accepted on database commands. Use `rtree cluster status production` to read the
+External ID for the IAM trust policy and the resource tag value. Tag eligible
+customer buckets and roles with `rawtree.com/cluster=<resource-tag>`.
+
+These flags configure new resources; the API verifies access and provisions
+storage. The CLI does not create AWS buckets or IAM roles or migrate existing
+data. Omitting S3 options uses RawTree-managed cluster storage or, for a database,
+inherits its cluster's storage.
+
+The API payload has a flat `s3_storage` object containing `data_bucket`,
+`data_path`, `backup_bucket`, `backup_path`, and `role_arn`. List/status JSON
+preserves the flat bucket/path metadata and top-level cluster `external_id` and
+`resource_tag`; role ARNs and credentials are not returned. Older clusters without
+saved identity show `not configured` in status output.
+
+The old `--s3-external-id`, `--database-s3-external-id`, `--database-bucket-tag`,
+and plural `--s3-backups-*` flags are removed. This CLI targets
+[Platform PR #1482](https://github.com/rawtreedb/rawtree-platform/pull/1482) and
+must be released with that server contract.
 
 Cluster lifecycle and provisioning changes are asynchronous. The `create`,
 `stop`, `resume`, and `delete` commands return as soon as the API accepts the

@@ -7,8 +7,10 @@ use serde_json::{json, Value};
 use super::table_output::new_cli_table;
 use crate::cli::ClusterSizeArg;
 use crate::client::ApiClient;
+use crate::cluster_identity::ClusterIdentityArgs;
 use crate::config;
 use crate::output;
+use crate::s3_storage::{format_storage, S3StorageArgs, S3StorageMetadata};
 
 #[derive(Deserialize)]
 struct ListClustersResponse {
@@ -41,6 +43,12 @@ struct ClusterItem {
     resources: Option<ClusterResources>,
     can_pause: bool,
     can_resume: bool,
+    #[serde(default)]
+    s3_storage: Option<S3StorageMetadata>,
+    #[serde(default)]
+    external_id: Option<String>,
+    #[serde(default)]
+    resource_tag: Option<String>,
     idle_timeout_minutes: u64,
 }
 
@@ -116,6 +124,7 @@ pub fn create(
     options: ClusterCreateOptions<'_>,
     json_mode: bool,
 ) -> Result<()> {
+    let s3_storage = options.s3_storage.to_json()?;
     let (_, sizes) = load_cluster_sizes(client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
@@ -133,6 +142,8 @@ pub fn create(
         min_size,
         max_size,
         options.idle_timeout_minutes,
+        s3_storage,
+        options.identity,
     );
 
     let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
@@ -144,6 +155,14 @@ pub fn create(
             "Cluster '{}' creation accepted (status: {}).",
             created.name,
             format_phase(&created.status.phase),
+        );
+        println!(
+            "External ID: {}",
+            created.external_id.as_deref().unwrap_or("not configured")
+        );
+        println!(
+            "Resource tag: {}",
+            created.resource_tag.as_deref().unwrap_or("not configured")
         );
         println!(
             "Run `rtree cluster status {}` to check provisioning progress.",
@@ -160,6 +179,8 @@ pub struct ClusterCreateOptions<'a> {
     pub min_size: ClusterSizeArg,
     pub max_size: Option<ClusterSizeArg>,
     pub idle_timeout_minutes: Option<u64>,
+    pub s3_storage: S3StorageArgs,
+    pub identity: ClusterIdentityArgs,
 }
 
 pub fn update(
@@ -232,6 +253,8 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
             "replicas",
             "size / replica",
             "idle timeout",
+            "storage",
+            "resource tag",
             "created",
             "id",
         ]);
@@ -247,6 +270,11 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                 Cell::new(replicas).set_alignment(CellAlignment::Right),
                 Cell::new(format_size_per_replica(cluster.resources.as_ref())),
                 Cell::new(format_idle_timeout(cluster.idle_timeout_minutes)),
+                Cell::new(format_storage(
+                    cluster.s3_storage.as_ref(),
+                    "RawTree-managed",
+                )),
+                Cell::new(cluster.resource_tag.as_deref().unwrap_or("—")),
                 Cell::new(format_created_at(&cluster.created_at)),
                 Cell::new(&cluster.id),
             ]);
@@ -317,6 +345,18 @@ pub fn status(
         println!(
             "Idle timeout: {}",
             format_idle_timeout(cluster.idle_timeout_minutes)
+        );
+        println!(
+            "Storage: {}",
+            format_storage(cluster.s3_storage.as_ref(), "RawTree-managed")
+        );
+        println!(
+            "External ID: {}",
+            cluster.external_id.as_deref().unwrap_or("not configured")
+        );
+        println!(
+            "Resource tag: {}",
+            cluster.resource_tag.as_deref().unwrap_or("not configured")
         );
         if let Some(message) = cluster.status.message.as_deref() {
             println!("Message: {message}");
@@ -471,6 +511,8 @@ fn create_request_body(
     min_size: ClusterSizeArg,
     max_size: ClusterSizeArg,
     idle_timeout_minutes: Option<u64>,
+    s3_storage: Option<Value>,
+    identity: ClusterIdentityArgs,
 ) -> Value {
     let mut body = json!({
         "name": name,
@@ -481,8 +523,17 @@ fn create_request_body(
             "max_size": cluster_size_json(max_size),
         },
     });
+    if let Some(external_id) = identity.external_id {
+        body["external_id"] = json!(external_id);
+    }
+    if let Some(resource_tag) = identity.resource_tag {
+        body["resource_tag"] = json!(resource_tag);
+    }
     if let Some(idle_timeout_minutes) = idle_timeout_minutes {
         body["idle_timeout_minutes"] = json!(idle_timeout_minutes);
+    }
+    if let Some(s3_storage) = s3_storage {
+        body["s3_storage"] = s3_storage;
     }
     body
 }
@@ -702,6 +753,11 @@ mod tests {
                     memory_gib: 256,
                 },
                 Some(30),
+                None,
+                crate::cluster_identity::ClusterIdentityArgs {
+                    external_id: Some("rawtree-test".into()),
+                    resource_tag: Some("test-tag".into())
+                },
             ),
             json!({
                 "name": "production",
@@ -711,7 +767,8 @@ mod tests {
                     "min_size": {"cpu_cores": 2, "memory_gib": 8},
                     "max_size": {"cpu_cores": 64, "memory_gib": 256}
                 },
-                "idle_timeout_minutes": 30
+                "idle_timeout_minutes": 30,
+                "external_id": "rawtree-test", "resource_tag": "test-tag"
             })
         );
     }
@@ -729,6 +786,9 @@ mod tests {
             resources: None,
             can_pause: true,
             can_resume: false,
+            s3_storage: None,
+            external_id: None,
+            resource_tag: None,
             idle_timeout_minutes: 15,
         }
     }
@@ -943,3 +1003,6 @@ mod tests {
         assert_eq!(format_phase("rolling_rawtree"), "rolling rawtree");
     }
 }
+
+#[cfg(test)]
+mod storage_tests;

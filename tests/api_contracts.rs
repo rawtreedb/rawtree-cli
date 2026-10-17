@@ -66,7 +66,7 @@ fn database_create_failure_does_not_overwrite_config() {
 fn database_list_preserves_current_metadata_without_obsolete_organization() {
     let response = json!({"databases": [
         {"name": "default", "s3_storage": null},
-        {"name": "analytics", "s3_storage": {"data": {"bucket": "data-bucket", "path": "prefix/"}, "backups": {"bucket": "backups", "path": ""}}}
+        {"name": "analytics", "s3_storage": {"data_bucket": "data-bucket", "data_path": "prefix/", "backup_bucket": "backups", "backup_path": ""}}
     ]});
     let (result, _, _) = run(
         &["database", "list"],
@@ -89,7 +89,7 @@ fn database_list_preserves_current_metadata_without_obsolete_organization() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "default\nanalytics\n"
+        "default              storage=cluster default\nanalytics            storage=customer-owned S3\n"
     );
 }
 
