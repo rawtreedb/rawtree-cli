@@ -68,16 +68,10 @@ fn server(responses: Vec<(&'static str, Value)>) -> (String, thread::JoinHandle<
 }
 
 fn metadata(pair: Value) -> Vec<(&'static str, Value)> {
-    vec![
-        (
-            "200 OK",
-            json!({"organizations": [{"organization_id": ORG, "name": "acme"}]}),
-        ),
-        (
-            "200 OK",
-            json!({"clusters": [{"id": "cluster-id", "name": "production", "deployment_id": pair["deployment_id"], "cloud_region": pair["cloud_region"]}]}),
-        ),
-    ]
+    vec![(
+        "200 OK",
+        json!({"clusters": [{"id": "cluster-id", "name": "production", "deployment_id": pair["deployment_id"], "cloud_region": pair["cloud_region"]}]}),
+    )]
 }
 
 #[test]
@@ -98,21 +92,20 @@ fn session_requests_resolve_scope_and_reuse_metadata_for_queries_and_gzip() {
         )
         .unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests[0].path, "GET /v1/organizations HTTP/1.1");
     assert_eq!(
-        requests[1].path,
-        format!("GET /v1/organizations/{ORG}/clusters HTTP/1.1")
+        requests[0].path,
+        "GET /v1/clusters?organization=acme HTTP/1.1"
     );
     assert!(!requests[0].headers.contains_key("x-rawtree-region"));
-    for request in &requests[2..] {
+    for request in &requests[1..] {
         assert_eq!(request.headers["x-rawtree-deployment-id"], "12abcdef");
         assert_eq!(request.headers["x-rawtree-region"], "eu-west-1");
         assert_eq!(request.headers["authorization"], "Bearer session.fixture");
         assert_eq!(request.headers["x-rawtree-client"], "cli");
     }
-    assert_eq!(requests[3].headers["content-encoding"], "gzip");
+    assert_eq!(requests[2].headers["content-encoding"], "gzip");
     let mut decoded = String::new();
-    flate2::read::GzDecoder::new(requests[3].body.as_slice())
+    flate2::read::GzDecoder::new(requests[2].body.as_slice())
         .read_to_string(&mut decoded)
         .unwrap();
     assert_eq!(decoded, "{\"value\":1}");
@@ -134,8 +127,8 @@ fn absent_partial_and_invalid_metadata_keep_default_routing() {
             .get("/v1/databases?organization=acme&cluster=production")
             .unwrap();
         let requests = server.join().unwrap();
-        assert!(!requests[2].headers.contains_key("x-rawtree-region"));
-        assert!(!requests[2].headers.contains_key("x-rawtree-deployment-id"));
+        assert!(!requests[1].headers.contains_key("x-rawtree-region"));
+        assert!(!requests[1].headers.contains_key("x-rawtree-deployment-id"));
     }
 }
 
@@ -156,20 +149,18 @@ fn api_keys_skip_discovery_and_routing_headers() {
 }
 
 #[test]
-fn cluster_id_actions_use_organization_id_and_serving_headers() {
+fn cluster_id_actions_preserve_organization_query_and_serving_headers() {
     let mut responses = metadata(json!({"deployment_id": "12abcdef", "cloud_region": "us-east-1"}));
-    responses.remove(0); // Organization ID is already known: no name resolution.
     responses.push(("200 OK", json!({})));
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".to_string()));
-    let collection = client.clusters_path(Some(ORG)).unwrap();
     let _: Value = client
-        .post_empty(&format!("{collection}/cluster-id/stop"))
+        .post_empty("/v1/clusters/cluster-id/stop?organization=acme")
         .unwrap();
     let requests = server.join().unwrap();
     assert_eq!(
         requests[1].path,
-        format!("POST {collection}/cluster-id/stop HTTP/1.1")
+        "POST /v1/clusters/cluster-id/stop?organization=acme HTTP/1.1"
     );
     assert_eq!(requests[1].headers["x-rawtree-deployment-id"], "12abcdef");
 }
@@ -177,7 +168,7 @@ fn cluster_id_actions_use_organization_id_and_serving_headers() {
 #[test]
 fn discovery_failure_does_not_execute_the_operation() {
     let mut responses = metadata(json!({}));
-    responses[1] = (
+    responses[0] = (
         "503 Service Unavailable",
         json!({"message":"discovery unavailable"}),
     );
@@ -186,7 +177,7 @@ fn discovery_failure_does_not_execute_the_operation() {
     assert!(client
         .get::<Value>("/v1/databases?organization=acme&cluster=production")
         .is_err());
-    assert_eq!(server.join().unwrap().len(), 2);
+    assert_eq!(server.join().unwrap().len(), 1);
 }
 
 #[test]
@@ -202,13 +193,11 @@ fn cluster_creation_invalidates_previously_discovered_empty_collection() {
     ];
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".to_string()));
-    let collection = client.clusters_path(Some(ORG)).unwrap();
+    let collection = "/v1/clusters?organization=acme";
     let _: Value = client.get(&collection).unwrap();
     let _: Value = client.post(&collection, &json!({"name":"new"})).unwrap();
     let _: Value = client
-        .get(&format!(
-            "/v1/databases?organization_id={ORG}&cluster_id=new-id"
-        ))
+        .get("/v1/databases?organization=acme&cluster_id=new-id")
         .unwrap();
     let requests = server.join().unwrap();
     assert_eq!(requests[2].path, format!("GET {collection} HTTP/1.1"));
@@ -227,7 +216,7 @@ fn explicit_timeout_includes_routing_discovery() {
         let mut reader = BufReader::new(socket);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        assert_eq!(line.trim(), "GET /v1/organizations HTTP/1.1");
+        assert_eq!(line.trim(), "GET /v1/clusters?organization=acme HTTP/1.1");
         thread::sleep(Duration::from_millis(400));
     });
     let client = ApiClient::new(base, Some("session.fixture".to_string()));
@@ -253,12 +242,16 @@ fn explicit_id_and_name_selectors_cannot_collide() {
             ]}),
         ),
         ("200 OK", json!({})),
+        (
+            "200 OK",
+            json!({"organizations": [{"organization_id": ORG, "name": "acme"}]}),
+        ),
         ("200 OK", json!({})),
         ("200 OK", json!({})),
     ]);
     let client = ApiClient::new(base, Some("session.fixture".to_string()));
     let _: Value = client
-        .get(&format!("/v1/organizations/{ORG}/clusters/target-id"))
+        .get("/v1/clusters/target-id?organization=acme")
         .unwrap();
     let _: Value = client
         .get(&format!(
@@ -272,6 +265,6 @@ fn explicit_id_and_name_selectors_cannot_collide() {
         .unwrap();
     let requests = server.join().unwrap();
     assert_eq!(requests[1].headers["x-rawtree-region"], "eu-west-1");
-    assert_eq!(requests[2].headers["x-rawtree-region"], "eu-west-1");
-    assert_eq!(requests[3].headers["x-rawtree-region"], "ap-south-1");
+    assert_eq!(requests[3].headers["x-rawtree-region"], "eu-west-1");
+    assert_eq!(requests[4].headers["x-rawtree-region"], "ap-south-1");
 }

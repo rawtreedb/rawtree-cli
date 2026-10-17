@@ -45,13 +45,13 @@ fn organizations(names: &[&str]) -> Response {
     (
         "GET /v1/organizations".into(),
         "200 OK",
-        json!({"organizations": names.iter().map(|name| json!({"organization_id": "00000000-0000-4000-8000-000000000001", "name": name, "role": "owner"})).collect::<Vec<_>>()}),
+        json!({"organizations": names.iter().map(|name| json!({"name": name, "role": "owner"})).collect::<Vec<_>>()}),
     )
 }
 
 fn clusters(names: &[&str]) -> Response {
     (
-        "GET /v1/organizations/00000000-0000-4000-8000-000000000001/clusters".into(),
+        "GET /v1/clusters?organization=team".into(),
         "200 OK",
         json!({"clusters": names.iter().map(|name| json!({"id": name, "name": name})).collect::<Vec<_>>()}),
     )
@@ -61,7 +61,7 @@ fn databases(names: &[&str]) -> Response {
     (
         "GET /v1/databases?organization=team&cluster=production".into(),
         "200 OK",
-        json!({"databases": names.iter().map(|name| json!({"name": name})).collect::<Vec<_>>()}),
+        json!({"databases": names.iter().map(|name| json!({"id": name, "name": name})).collect::<Vec<_>>()}),
     )
 }
 
