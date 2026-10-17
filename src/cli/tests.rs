@@ -97,8 +97,7 @@ fn global_api_key_parses_before_subcommand() {
 
 #[test]
 fn cluster_list_parses() {
-    let cli =
-        Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
+    let cli = Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
     assert!(matches!(
         cli.command,
         Command::Cluster {
@@ -146,6 +145,7 @@ fn cluster_create_parses_explicit_name_and_idle_timeout() {
                 idle_timeout_minutes: Some(30),
                 min_size,
                 max_size: Some(max_size),
+                ..
             }
         } if name == "production"
             && replicas == 2

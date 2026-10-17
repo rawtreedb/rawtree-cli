@@ -1,5 +1,6 @@
 mod cli;
 mod client;
+mod cluster_identity;
 mod commands;
 mod config;
 mod constants;
@@ -378,7 +379,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     max_size,
                     idle_timeout_minutes,
                     s3_storage,
-                    database_s3_access,
+                    identity,
                 } => commands::cluster::create(
                     &client,
                     commands::cluster::ClusterCreateOptions {
@@ -389,7 +390,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         max_size,
                         idle_timeout_minutes,
                         s3_storage,
-                        database_s3_access,
+                        identity,
                     },
                     json,
                 ),

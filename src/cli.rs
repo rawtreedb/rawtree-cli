@@ -2,7 +2,8 @@ use std::{fmt, str::FromStr};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::s3_storage::{DatabaseS3AccessArgs, S3StorageArgs};
+use crate::cluster_identity::ClusterIdentityArgs;
+use crate::s3_storage::S3StorageArgs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ClusterSizeArg {
@@ -341,7 +342,7 @@ pub enum ClusterCommand {
         #[command(flatten)]
         s3_storage: S3StorageArgs,
         #[command(flatten)]
-        database_s3_access: DatabaseS3AccessArgs,
+        identity: ClusterIdentityArgs,
     },
     /// Set the default cluster
     Use {

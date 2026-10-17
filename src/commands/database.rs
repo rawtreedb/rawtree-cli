@@ -62,7 +62,7 @@ pub fn list(
                 println!(
                     "{:<20} storage={}",
                     database.name,
-                    format_storage(database.s3_storage.as_ref())
+                    format_storage(database.s3_storage.as_ref(), "cluster default")
                 );
             }
         }
