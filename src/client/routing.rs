@@ -61,6 +61,16 @@ impl ApiClient {
         }
     }
 
+    pub(super) fn organization_id(&self, name: &str) -> Result<String> {
+        let response: Organizations = self.get("/v1/organizations")?;
+        response
+            .organizations
+            .into_iter()
+            .find(|organization| organization.name == name)
+            .map(|organization| organization.organization_id)
+            .context("Organization not found.")
+    }
+
     fn organization_name(&self, id: &str, deadline: Option<Instant>) -> Result<String> {
         if let Some((time, organizations)) = self.routing.organizations.borrow().as_ref() {
             if time.elapsed() < Duration::from_secs(30) {
@@ -237,7 +247,7 @@ fn scope(url: &Url) -> Option<(OrganizationSelector, ClusterSelector)> {
 }
 
 // Match the backend/worker syntax; do not maintain a catalog of AWS regions.
-fn valid_routing(deployment: &str, region: &str) -> bool {
+pub(super) fn valid_routing(deployment: &str, region: &str) -> bool {
     let mut parts = region.rsplit('-');
     let number = parts.next().unwrap_or_default();
     let names: Vec<_> = parts.collect();
