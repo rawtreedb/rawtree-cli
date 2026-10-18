@@ -268,3 +268,96 @@ fn explicit_id_and_name_selectors_cannot_collide() {
     assert_eq!(requests[3].headers["x-rawtree-region"], "eu-west-1");
     assert_eq!(requests[4].headers["x-rawtree-region"], "ap-south-1");
 }
+
+fn region_catalog(overrides: Value) -> Vec<(&'static str, Value)> {
+    let mut region = json!({"id":"region-id", "name":"Europe", "cloud_region":"eu-central-1", "organization_id":null, "deployment_id":"abcd1234", "enabled":true});
+    region
+        .as_object_mut()
+        .unwrap()
+        .extend(overrides.as_object().unwrap().clone());
+    vec![
+        (
+            "200 OK",
+            json!({"organizations":[{"organization_id":ORG,"name":"acme"}]}),
+        ),
+        ("200 OK", json!({"regions":[region]})),
+    ]
+}
+
+#[test]
+fn creation_and_sizes_use_selected_region_without_mutating_default_client() {
+    let mut responses = region_catalog(json!({}));
+    responses.extend([
+        ("200 OK", json!({"sizes":[]})),
+        ("200 OK", json!({"id":"new"})),
+        ("200 OK", json!({"clusters":[]})),
+    ]);
+    let (base, server) = server(responses);
+    let client = ApiClient::new(base, Some("session.fixture".into()));
+    let regional = client.for_region(Some("acme"), Some("region-id")).unwrap();
+    let _: Value = regional.get("/v1/clusters/sizes").unwrap();
+    let _: Value = regional
+        .post(
+            "/v1/clusters?organization=acme",
+            &json!({"region_id":"region-id"}),
+        )
+        .unwrap();
+    let _: Value = client.get("/v1/clusters?organization=acme").unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(
+        requests[1].path,
+        format!("GET /v1/organizations/{ORG}/regions HTTP/1.1")
+    );
+    for request in &requests[2..4] {
+        assert_eq!(request.headers["x-rawtree-deployment-id"], "abcd1234");
+        assert_eq!(request.headers["x-rawtree-region"], "eu-central-1");
+        assert_eq!(request.headers["authorization"], "Bearer session.fixture");
+    }
+    for index in [0, 1, 4] {
+        assert!(!requests[index].headers.contains_key("x-rawtree-region"));
+    }
+}
+
+#[test]
+fn explicit_unusable_regions_never_reach_creation() {
+    for overrides in [
+        json!({"enabled":false}),
+        json!({"deployment_id":null}),
+        json!({"deployment_id":"bad"}),
+        json!({"cloud_region":"bad"}),
+        json!({"id":"other"}),
+    ] {
+        let (base, server) = server(region_catalog(overrides));
+        let client = ApiClient::new(base, Some("session.fixture".into()));
+        assert!(client.for_region(Some("acme"), Some("region-id")).is_err());
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn legacy_region_and_omitted_selection_preserve_default_routing() {
+    let id = "0c0f0a56-7f03-4d39-8e5d-000000000001";
+    let mut responses =
+        region_catalog(json!({"id":id,"deployment_id":null,"cloud_region":"us-east-1"}));
+    responses.extend([("200 OK", json!({})), ("200 OK", json!({}))]);
+    let (base, server) = server(responses);
+    let client = ApiClient::new(base, Some("session.fixture".into()));
+    for selected in [Some(id), None] {
+        let regional = client.for_region(Some("acme"), selected).unwrap();
+        let _: Value = regional.get("/v1/clusters/sizes").unwrap();
+    }
+    for request in server.join().unwrap() {
+        assert!(!request.headers.contains_key("x-rawtree-region"));
+    }
+}
+
+#[test]
+fn api_keys_cannot_override_their_embedded_deployment() {
+    let client = ApiClient::new("http://127.0.0.1:1".into(), Some("rt_fixture".into()));
+    assert!(client
+        .for_region(Some("acme"), Some("region-id"))
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("user credential"));
+}

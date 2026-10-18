@@ -360,7 +360,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         },
         Command::Cluster { action } => {
             let effective_org = match &action {
-                ClusterCommand::Use { .. } | ClusterCommand::Sizes => None,
+                ClusterCommand::Use { .. } | ClusterCommand::Sizes { region_id: None } => None,
                 _ => resolve_effective_org(&client, cli_org.clone()),
             };
             match action {
@@ -368,8 +368,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 ClusterCommand::List => {
                     commands::cluster::list(&client, effective_org.as_deref(), json)
                 }
-                ClusterCommand::Sizes => commands::cluster::sizes(&client, json),
+                ClusterCommand::Regions => {
+                    commands::cluster::regions(&client, effective_org.as_deref(), json)
+                }
+                ClusterCommand::Sizes { region_id } => {
+                    let client =
+                        client.for_region(effective_org.as_deref(), region_id.as_deref())?;
+                    commands::cluster::sizes(&client, json)
+                }
                 ClusterCommand::Create {
+                    region_id,
                     name,
                     replicas,
                     min_size,
@@ -378,6 +386,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 } => commands::cluster::create(
                     &client,
                     commands::cluster::ClusterCreateOptions {
+                        region_id: region_id.as_deref(),
                         organization: effective_org.as_deref(),
                         name: &name,
                         replicas,

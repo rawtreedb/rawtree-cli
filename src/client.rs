@@ -1,3 +1,4 @@
+mod regions;
 mod routing;
 #[cfg(test)]
 mod routing_tests;
@@ -23,6 +24,7 @@ pub struct ApiClient {
     pub token: Option<String>,
     client: Client,
     routing: routing::RoutingCache,
+    deployment: Option<(String, String)>,
 }
 
 impl ApiClient {
@@ -32,6 +34,7 @@ impl ApiClient {
             token,
             client: Client::new(),
             routing: routing::RoutingCache::default(),
+            deployment: None,
         }
     }
 
@@ -40,6 +43,12 @@ impl ApiClient {
             self.client
                 .request(method, format!("{}{}", self.base_url, path)),
         );
+        let request = match &self.deployment {
+            Some((deployment, region)) => request
+                .header("X-RawTree-Deployment-Id", deployment)
+                .header("X-RawTree-Region", region),
+            None => request,
+        };
         match &self.token {
             Some(token) => request.bearer_auth(token),
             None => request,
