@@ -146,7 +146,7 @@ pub struct CreateWorkflow {
     pub database: String,
     pub sql: String,
     pub cron: Option<String>,
-    pub disabled: bool,
+    pub enabled: Option<bool>,
     pub sinks: Vec<String>,
 }
 
@@ -187,12 +187,12 @@ fn parse_sinks(sinks: &[String]) -> Result<Vec<Value>> {
 }
 
 fn create_body(request: CreateWorkflow) -> Result<Value> {
-    if request.disabled && request.cron.is_none() {
-        bail!("--disabled requires --cron with a cron expression; manual-only workflows have no schedule to pause");
+    if request.enabled.is_some() && request.cron.is_none() {
+        bail!("--schedule-enabled requires --schedule-cron with a cron expression; manual-only workflows have no schedule to pause");
     }
     let schedule = request
         .cron
-        .map(|cron| json!({"cron": cron, "enabled": !request.disabled}));
+        .map(|cron| json!({"cron": cron, "enabled": request.enabled.unwrap_or(true)}));
     Ok(json!({
         "name": request.name,
         "query": {"database": request.database, "sql": request.sql},
@@ -219,7 +219,7 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
     match request.cron {
         Some(None) => {
             if request.enabled.is_some() {
-                bail!("--cron null cannot be combined with --enable or --disable");
+                bail!("--schedule-cron null cannot be combined with --schedule-enabled");
             }
             body.insert("schedule".into(), Value::Null);
         }
@@ -240,7 +240,7 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
         body.insert("sinks".into(), Value::Array(parse_sinks(&sinks)?));
     }
     if body.is_empty() {
-        bail!("nothing to update: pass at least one of --name, --database, --sql, --cron, --enable, --disable, --sink, or --clear-sinks");
+        bail!("nothing to update: pass at least one of --name, --database, --sql, --schedule-cron, --schedule-enabled, --sink, or --clear-sinks");
     }
     Ok(Value::Object(body))
 }
@@ -700,7 +700,7 @@ mod tests {
             database: "analytics".into(),
             sql: "SELECT 1".into(),
             cron: None,
-            disabled: false,
+            enabled: None,
             sinks: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
         })
         .unwrap();
@@ -719,7 +719,7 @@ mod tests {
             database: "analytics".into(),
             sql: "SELECT 1".into(),
             cron: Some("* * * * *".into()),
-            disabled: false,
+            enabled: None,
             sinks: vec!["[]".into()],
         })
         .unwrap_err();

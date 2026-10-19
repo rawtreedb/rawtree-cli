@@ -492,10 +492,10 @@ pub enum WorkflowCommand {
         sql: String,
         /// UTC cron expression (5 fields, or 6 with seconds); null or omitted means manual-only
         #[arg(long, value_name = "EXPRESSION|null")]
-        cron: Option<WorkflowCronArg>,
-        /// Create the workflow paused
-        #[arg(long)]
-        disabled: bool,
+        schedule_cron: Option<WorkflowCronArg>,
+        /// Enable or pause the schedule (true or false); requires a cron expression
+        #[arg(long, action = clap::ArgAction::Set, value_name = "BOOL")]
+        schedule_enabled: Option<bool>,
         /// Sink as a JSON object; repeat for up to five sinks
         #[arg(long = "sink", value_name = "JSON")]
         sinks: Vec<String>,
@@ -516,13 +516,10 @@ pub enum WorkflowCommand {
         sql: Option<String>,
         /// UTC cron expression (5 fields, or 6 with seconds); null removes the schedule
         #[arg(long, value_name = "EXPRESSION|null")]
-        cron: Option<WorkflowCronArg>,
-        /// Resume scheduled runs
-        #[arg(long, conflicts_with = "disable")]
-        enable: bool,
-        /// Pause scheduled runs
-        #[arg(long)]
-        disable: bool,
+        schedule_cron: Option<WorkflowCronArg>,
+        /// Enable or pause scheduled runs (true or false); omit to preserve the state
+        #[arg(long, action = clap::ArgAction::Set, value_name = "BOOL")]
+        schedule_enabled: Option<bool>,
         /// Sink as a JSON object; replaces all sinks. Repeat for up to five.
         #[arg(long = "sink", value_name = "JSON", conflicts_with = "clear_sinks")]
         sinks: Vec<String>,

@@ -560,9 +560,10 @@ fn workflow_create_collects_repeated_sinks() {
         "alerts",
         "--sql",
         "SELECT 1",
-        "--cron",
+        "--schedule-cron",
         "* * * * *",
-        "--disabled",
+        "--schedule-enabled",
+        "false",
         "--sink",
         r#"{"type":"table","settings":{"database":"a","table":"b"}}"#,
         "--sink",
@@ -573,15 +574,18 @@ fn workflow_create_collects_repeated_sinks() {
         Command::Workflow {
             action:
                 WorkflowCommand::Create {
-                    cron,
-                    disabled,
+                    schedule_cron,
+                    schedule_enabled,
                     sinks,
                     database,
                     ..
                 },
         } => {
-            assert_eq!(cron.map(|cron| cron.0), Some(Some("* * * * *".into())));
-            assert!(disabled);
+            assert_eq!(
+                schedule_cron.map(|cron| cron.0),
+                Some(Some("* * * * *".into()))
+            );
+            assert_eq!(schedule_enabled, Some(false));
             assert_eq!(sinks.len(), 2);
             assert!(database.is_none());
         }
@@ -592,7 +596,7 @@ fn workflow_create_collects_repeated_sinks() {
 #[test]
 fn workflow_update_rejects_conflicting_flags() {
     for args in [
-        vec!["--enable", "--disable"],
+        vec!["--schedule-enabled", "true", "--schedule-enabled", "false"],
         vec!["--clear-sinks", "--sink", "{}"],
     ] {
         let mut command = vec!["rtree", "workflow", "update", "wf-1"];
@@ -604,7 +608,15 @@ fn workflow_update_rejects_conflicting_flags() {
 #[test]
 fn workflow_cron_and_time_ranges_are_validated() {
     assert!(Cli::try_parse_from([
-        "rtree", "workflow", "create", "--name", "a", "--sql", "SELECT 1", "--cron", "",
+        "rtree",
+        "workflow",
+        "create",
+        "--name",
+        "a",
+        "--sql",
+        "SELECT 1",
+        "--schedule-cron",
+        "",
     ])
     .is_err());
     assert!(Cli::try_parse_from([
@@ -626,4 +638,53 @@ fn workflow_cron_and_time_ranges_are_validated() {
             action: WorkflowCommand::Metrics { range, .. }
         } if range.since.as_deref() == Some("2h")
     ));
+}
+
+#[test]
+fn workflow_schedule_enabled_requires_an_explicit_boolean() {
+    for base in [
+        vec![
+            "rtree",
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--schedule-cron",
+            "* * * * *",
+        ],
+        vec!["rtree", "workflow", "update", "wf-1"],
+    ] {
+        for (text, expected) in [("true", true), ("false", false)] {
+            let mut args = base.clone();
+            args.extend(["--schedule-enabled", text]);
+            let parsed = Cli::try_parse_from(args).unwrap();
+            match parsed.command {
+                Command::Workflow {
+                    action:
+                        WorkflowCommand::Create {
+                            schedule_enabled, ..
+                        }
+                        | WorkflowCommand::Update {
+                            schedule_enabled, ..
+                        },
+                } => assert_eq!(schedule_enabled, Some(expected)),
+                _ => panic!("expected workflow command"),
+            }
+        }
+        for flags in [
+            vec!["--schedule-enabled"],
+            vec!["--schedule-enabled", "yes"],
+            vec!["--schedule-enabled", "1"],
+            vec!["--cron", "* * * * *"],
+            vec!["--enable"],
+            vec!["--disable"],
+            vec!["--disabled"],
+        ] {
+            let mut args = base.clone();
+            args.extend(flags);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
 }

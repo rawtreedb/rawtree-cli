@@ -198,7 +198,7 @@ fn workflow_create_uses_saved_database_and_sends_sinks() {
             "alerts",
             "--sql",
             "SELECT 1",
-            "--cron",
+            "--schedule-cron",
             "* * * * *",
             "--sink",
             r#"{"type":"table","settings":{"database":"analytics","table":"out"}}"#,
@@ -379,9 +379,9 @@ fn workflow_query_updates_preserve_unspecified_fields() {
 fn workflow_scheduling_distinguishes_omitted_null_and_cron() {
     for (flags, schedule) in [
         (vec![], None),
-        (vec!["--cron", "null"], Some(Value::Null)),
+        (vec!["--schedule-cron", "null"], Some(Value::Null)),
         (
-            vec!["--cron", "*/5 * * * *"],
+            vec!["--schedule-cron", "*/5 * * * *"],
             Some(json!({"cron": "*/5 * * * *"})),
         ),
     ] {
@@ -421,7 +421,14 @@ fn workflow_scheduling_distinguishes_omitted_null_and_cron() {
 #[test]
 fn workflow_update_sends_only_changed_fields() {
     let (_, _, body) = run(
-        &["workflow", "update", "wf-1", "--disable", "--clear-sinks"],
+        &[
+            "workflow",
+            "update",
+            "wf-1",
+            "--schedule-enabled",
+            "false",
+            "--clear-sinks",
+        ],
         "PATCH",
         &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
         workflow_response(),
@@ -544,9 +551,10 @@ fn workflow_schedule_pause_and_resume_fields_are_nested() {
             "alerts",
             "--sql",
             "SELECT 1",
-            "--cron",
+            "--schedule-cron",
             "*/30 * * * * *",
-            "--disabled",
+            "--schedule-enabled",
+            "false",
         ],
         "POST",
         &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
@@ -559,13 +567,18 @@ fn workflow_schedule_pause_and_resume_fields_are_nested() {
     );
     assert!(body.get("enabled").is_none());
     for (flags, schedule) in [
-        (vec!["--enable"], json!({"enabled":true})),
+        (vec!["--schedule-enabled", "true"], json!({"enabled":true})),
         (
-            vec!["--cron", "0 * * * *", "--enable"],
+            vec!["--schedule-cron", "0 * * * *", "--schedule-enabled", "true"],
             json!({"cron":"0 * * * *","enabled":true}),
         ),
         (
-            vec!["--cron", "0 * * * *", "--disable"],
+            vec![
+                "--schedule-cron",
+                "0 * * * *",
+                "--schedule-enabled",
+                "false",
+            ],
             json!({"cron":"0 * * * *","enabled":false}),
         ),
     ] {
@@ -592,7 +605,8 @@ fn workflow_manual_schedule_rejects_pause_flags_before_http() {
             "alerts",
             "--sql",
             "SELECT 1",
-            "--disabled",
+            "--schedule-enabled",
+            "false",
         ],
         vec![
             "workflow",
@@ -601,12 +615,29 @@ fn workflow_manual_schedule_rejects_pause_flags_before_http() {
             "alerts",
             "--sql",
             "SELECT 1",
-            "--cron",
+            "--schedule-cron",
             "null",
-            "--disabled",
+            "--schedule-enabled",
+            "false",
         ],
-        vec!["workflow", "update", "wf-1", "--cron", "null", "--enable"],
-        vec!["workflow", "update", "wf-1", "--cron", "null", "--disable"],
+        vec![
+            "workflow",
+            "update",
+            "wf-1",
+            "--schedule-cron",
+            "null",
+            "--schedule-enabled",
+            "true",
+        ],
+        vec![
+            "workflow",
+            "update",
+            "wf-1",
+            "--schedule-cron",
+            "null",
+            "--schedule-enabled",
+            "false",
+        ],
     ] {
         let mut command = vec!["--json", "--org", "team", "--cluster", "prod"];
         command.extend(args);
@@ -615,7 +646,7 @@ fn workflow_manual_schedule_rejects_pause_flags_before_http() {
         assert!(bodies.is_empty());
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(
-            error.contains("requires --cron") || error.contains("cannot be combined"),
+            error.contains("requires --schedule-cron") || error.contains("cannot be combined"),
             "{error}"
         );
     }
@@ -637,7 +668,7 @@ fn workflow_cron_validation_errors_are_returned_by_the_api() {
             "alerts",
             "--sql",
             "SELECT 1",
-            "--cron",
+            "--schedule-cron",
             "invalid-cron",
         ],
         &json!({"default_organization":"team","cluster":"prod","database":"analytics"}),

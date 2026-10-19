@@ -139,7 +139,7 @@ fn workflow_manual_runs_deliver_rows_and_expose_logs_and_metrics() {
 #[ignore = "requires a bootstrapped Platform Docker Compose stack"]
 fn workflow_scheduled_runs_can_be_paused_and_switched_to_manual() {
     with_workflow("SELECT 1", |cli, _, id| {
-        let scheduled = cli.json(&["workflow", "update", id, "--cron", "* * * * * *"]);
+        let scheduled = cli.json(&["workflow", "update", id, "--schedule-cron", "* * * * * *"]);
         assert_eq!(scheduled["schedule"]["cron"], "* * * * * *");
         assert_eq!(scheduled["schedule"]["enabled"], true);
         wait_for(
@@ -153,16 +153,24 @@ fn workflow_scheduled_runs_can_be_paused_and_switched_to_manual() {
                     .any(|run| run["source"] == "scheduled" && run["status"] == "completed")
             },
         );
-        let paused = cli.json(&["workflow", "update", id, "--disable"]);
+        let paused = cli.json(&["workflow", "update", id, "--schedule-enabled", "false"]);
         assert_eq!(paused["schedule"]["enabled"], false);
         assert_eq!(paused["schedule"]["cron"], "* * * * * *");
         assert_eq!(paused["schedule"]["next_run_at"], Value::Null);
-        let manual = cli.json(&["workflow", "update", id, "--cron", "null"]);
+        let manual = cli.json(&["workflow", "update", id, "--schedule-cron", "null"]);
         assert_eq!(manual["schedule"], Value::Null);
         let run = cli.json(&["workflow", "run", id]);
         assert_eq!(run["source"], "manual");
         wait_for_run(cli, id, run["id"].as_str().unwrap(), "completed");
-        let resumed = cli.json(&["workflow", "update", id, "--cron", "0 * * * *", "--enable"]);
+        let resumed = cli.json(&[
+            "workflow",
+            "update",
+            id,
+            "--schedule-cron",
+            "0 * * * *",
+            "--schedule-enabled",
+            "true",
+        ]);
         assert_eq!(resumed["schedule"]["enabled"], true);
         assert_eq!(resumed["schedule"]["cron"], "0 * * * *");
         assert!(resumed["schedule"]["next_run_at"].is_string());
@@ -205,9 +213,10 @@ fn workflow_query_and_schedule_round_trip_through_real_platform() {
         "default",
         "--sql",
         "SELECT 1",
-        "--cron",
+        "--schedule-cron",
         "0 * * * *",
-        "--disabled",
+        "--schedule-enabled",
+        "false",
     ]);
     let id = created["id"].as_str().expect("workflow ID");
     let result = std::panic::catch_unwind(|| {
@@ -238,7 +247,7 @@ fn workflow_query_and_schedule_round_trip_through_real_platform() {
             json!({"database": "default", "sql": "SELECT 2"})
         );
 
-        let scheduled = cli.json(&["workflow", "update", id, "--cron", "*/5 * * * *"]);
+        let scheduled = cli.json(&["workflow", "update", id, "--schedule-cron", "*/5 * * * *"]);
         assert_eq!(scheduled["schedule"]["cron"], "*/5 * * * *");
         assert_eq!(scheduled["schedule"]["enabled"], false);
         let renamed = cli.json(&[
@@ -250,7 +259,7 @@ fn workflow_query_and_schedule_round_trip_through_real_platform() {
         ]);
         assert_eq!(renamed["schedule"]["cron"], "*/5 * * * *");
         assert_eq!(renamed["query"], updated["query"]);
-        let manual = cli.json(&["workflow", "update", id, "--cron", "null"]);
+        let manual = cli.json(&["workflow", "update", id, "--schedule-cron", "null"]);
         assert_eq!(manual["schedule"], Value::Null);
         assert_eq!(manual["query"], updated["query"]);
         assert_eq!(cli.json(&["workflow", "get", id]), manual);

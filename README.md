@@ -307,16 +307,16 @@ Workflows run saved SQL on demand or on a schedule and deliver results to sinks.
 
 ```sh
 rtree workflow list
-rtree workflow create --name errors --database analytics --cron "* * * * *" \
+rtree workflow create --name errors --database analytics --schedule-cron "* * * * *" \
   --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
 rtree workflow create --name on-demand --database analytics --sql "SELECT 1"
-rtree workflow create --name alerts --cron "* * * * *" --disabled --sql - \
+rtree workflow create --name alerts --schedule-cron "* * * * *" --schedule-enabled false --sql - \
   --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
   < alerts.sql
 rtree workflow get <id>
-rtree workflow update <id> --cron "*/5 * * * *"
-rtree workflow update <id> --cron null
-rtree workflow update <id> --disable
+rtree workflow update <id> --schedule-cron "*/5 * * * *"
+rtree workflow update <id> --schedule-cron null
+rtree workflow update <id> --schedule-enabled false
 rtree workflow update <id> --clear-sinks
 rtree workflow delete <id>
 
@@ -333,20 +333,20 @@ the environment, or the saved defaults). API keys must have admin permission.
 The CLI sends `--database` and `--sql` inside the API's `query` object. On `update`,
 each flag changes only that query field; the other field stays unchanged.
 
-Creating a workflow without `--cron` makes it manual-only. The CLI explicitly
-sends `schedule: null`, preserving its manual-only default. Use `--cron null` to
+Creating a workflow without `--schedule-cron` makes it manual-only. The CLI explicitly
+sends `schedule: null`, preserving its manual-only default. Use `--schedule-cron null` to
 remove an existing schedule. The obsolete `--interval-seconds` flag is rejected.
 
-`--cron "*/5 * * * *"` runs every five minutes in UTC. Five-field expressions use
+`--schedule-cron "*/5 * * * *"` runs every five minutes in UTC. Five-field expressions use
 minute, hour, day-of-month, month, and day-of-week; six fields include leading
 seconds. The API validates the expression. Requests nest cron and pause state in
 `schedule`, for example `{"schedule":{"cron":"*/5 * * * *","enabled":false}}`.
 
-On `update`, omitting `--cron` preserves the schedule. `--disable` pauses it and
-`--enable` resumes it without changing the cron expression. Adding cron to a
+On `update`, omitting `--schedule-cron` preserves the schedule. `--schedule-enabled false` pauses it and
+`--schedule-enabled true` resumes it without changing the cron expression. Adding cron to a
 manual-only workflow enables scheduling by default; changing an existing cron
-preserves its pause state unless you also pass `--enable` or `--disable`.
-`--disabled` on `create` requires a cron expression. `--cron null` cannot be
+preserves its pause state unless you also pass `--schedule-enabled true|false`.
+`--schedule-enabled` accepts an explicit boolean and requires a cron expression on `create`. `--schedule-cron null` cannot be
 combined with pause/resume flags. Manual runs remain available while paused.
 Text output shows `active`, `paused`, or `manual`, the UTC cron expression, and
 the next scheduled run when available. JSON output preserves the API response.
