@@ -307,15 +307,15 @@ Workflows run saved SQL on demand or on a schedule and deliver results to sinks.
 
 ```sh
 rtree workflow list
-rtree workflow create --name errors --database analytics --interval-seconds 60 \
+rtree workflow create --name errors --database analytics --cron "* * * * *" \
   --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
 rtree workflow create --name on-demand --database analytics --sql "SELECT 1"
-rtree workflow create --name alerts --disabled --sql - \
+rtree workflow create --name alerts --cron "* * * * *" --disabled --sql - \
   --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
   < alerts.sql
 rtree workflow get <id>
-rtree workflow update <id> --interval-seconds 300
-rtree workflow update <id> --interval-seconds null
+rtree workflow update <id> --cron "*/5 * * * *"
+rtree workflow update <id> --cron null
 rtree workflow update <id> --disable
 rtree workflow update <id> --clear-sinks
 rtree workflow delete <id>
@@ -333,17 +333,23 @@ the environment, or the saved defaults). API keys must have admin permission.
 The CLI sends `--database` and `--sql` inside the API's `query` object. On `update`,
 each flag changes only that query field; the other field stays unchanged.
 
-Creating a workflow without `--interval-seconds` makes it manual-only. The CLI
-explicitly sends `interval_seconds: null`, so the API's default interval is not used.
-Use `--interval-seconds null` to remove an existing schedule, matching the API's
-`interval_seconds: null`. The same value is accepted on `create`.
-An interval restores recurring execution, subject to the enabled state; use
-`--enable` as well if the workflow is paused. Omitting `--interval-seconds` on `update`
-preserves the current mode.
-`--disable` pauses scheduled runs while retaining the interval. Manual runs remain
-available in either mode, including while paused. Text output shows status as
-`active`, `paused`, or `manual`, the next scheduled run when available, and HTTP
-sink URLs.
+Creating a workflow without `--cron` makes it manual-only. The CLI explicitly
+sends `schedule: null`, preserving its manual-only default. Use `--cron null` to
+remove an existing schedule. The obsolete `--interval-seconds` flag is rejected.
+
+`--cron "*/5 * * * *"` runs every five minutes in UTC. Five-field expressions use
+minute, hour, day-of-month, month, and day-of-week; six fields include leading
+seconds. The API validates the expression. Requests nest cron and pause state in
+`schedule`, for example `{"schedule":{"cron":"*/5 * * * *","enabled":false}}`.
+
+On `update`, omitting `--cron` preserves the schedule. `--disable` pauses it and
+`--enable` resumes it without changing the cron expression. Adding cron to a
+manual-only workflow enables scheduling by default; changing an existing cron
+preserves its pause state unless you also pass `--enable` or `--disable`.
+`--disabled` on `create` requires a cron expression. `--cron null` cannot be
+combined with pause/resume flags. Manual runs remain available while paused.
+Text output shows `active`, `paused`, or `manual`, the UTC cron expression, and
+the next scheduled run when available. JSON output preserves the API response.
 
 Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
 nested `settings` object: `{"database","table"}` for `table` sinks and

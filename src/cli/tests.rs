@@ -560,8 +560,8 @@ fn workflow_create_collects_repeated_sinks() {
         "alerts",
         "--sql",
         "SELECT 1",
-        "--interval-seconds",
-        "60",
+        "--cron",
+        "* * * * *",
         "--disabled",
         "--sink",
         r#"{"type":"table","settings":{"database":"a","table":"b"}}"#,
@@ -573,14 +573,14 @@ fn workflow_create_collects_repeated_sinks() {
         Command::Workflow {
             action:
                 WorkflowCommand::Create {
-                    interval_seconds,
+                    cron,
                     disabled,
                     sinks,
                     database,
                     ..
                 },
         } => {
-            assert_eq!(interval_seconds.map(|interval| interval.0), Some(Some(60)));
+            assert_eq!(cron.map(|cron| cron.0), Some(Some("* * * * *".into())));
             assert!(disabled);
             assert_eq!(sinks.len(), 2);
             assert!(database.is_none());
@@ -602,17 +602,9 @@ fn workflow_update_rejects_conflicting_flags() {
 }
 
 #[test]
-fn workflow_interval_and_time_ranges_are_validated() {
+fn workflow_cron_and_time_ranges_are_validated() {
     assert!(Cli::try_parse_from([
-        "rtree",
-        "workflow",
-        "create",
-        "--name",
-        "a",
-        "--sql",
-        "SELECT 1",
-        "--interval-seconds",
-        "86401",
+        "rtree", "workflow", "create", "--name", "a", "--sql", "SELECT 1", "--cron", "",
     ])
     .is_err());
     assert!(Cli::try_parse_from([
