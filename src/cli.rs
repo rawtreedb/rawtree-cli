@@ -490,12 +490,12 @@ pub enum WorkflowCommand {
         /// SQL to run: a SELECT or INSERT INTO ... SELECT. Use "-" to read from stdin.
         #[arg(long)]
         sql: String,
-        /// Seconds between automatic runs (1–86400); null or omitted means manual-only
-        #[arg(long, value_name = "SECONDS|null")]
-        interval_seconds: Option<WorkflowIntervalArg>,
-        /// Create the workflow paused
-        #[arg(long)]
-        disabled: bool,
+        /// UTC cron expression (5 fields, or 6 with seconds); null or omitted means manual-only
+        #[arg(long, value_name = "EXPRESSION|null")]
+        schedule_cron: Option<WorkflowCronArg>,
+        /// Enable or pause the schedule (true or false); requires a cron expression
+        #[arg(long, action = clap::ArgAction::Set, value_name = "BOOL")]
+        schedule_enabled: Option<bool>,
         /// Sink as a JSON object; repeat for up to five sinks
         #[arg(long = "sink", value_name = "JSON")]
         sinks: Vec<String>,
@@ -514,15 +514,12 @@ pub enum WorkflowCommand {
         /// New SQL. Use "-" to read from stdin.
         #[arg(long)]
         sql: Option<String>,
-        /// Seconds between automatic runs (1–86400); null removes the schedule
-        #[arg(long, value_name = "SECONDS|null")]
-        interval_seconds: Option<WorkflowIntervalArg>,
-        /// Resume scheduled runs
-        #[arg(long, conflicts_with = "disable")]
-        enable: bool,
-        /// Pause scheduled runs
-        #[arg(long)]
-        disable: bool,
+        /// UTC cron expression (5 fields, or 6 with seconds); null removes the schedule
+        #[arg(long, value_name = "EXPRESSION|null")]
+        schedule_cron: Option<WorkflowCronArg>,
+        /// Enable or pause scheduled runs (true or false); omit to preserve the state
+        #[arg(long, action = clap::ArgAction::Set, value_name = "BOOL")]
+        schedule_enabled: Option<bool>,
         /// Sink as a JSON object; replaces all sinks. Repeat for up to five.
         #[arg(long = "sink", value_name = "JSON", conflicts_with = "clear_sinks")]
         sinks: Vec<String>,
@@ -583,20 +580,21 @@ pub enum WorkflowCommand {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct WorkflowIntervalArg(pub Option<u32>);
+#[derive(Clone, Debug)]
+pub struct WorkflowCronArg(pub Option<String>);
 
-impl FromStr for WorkflowIntervalArg {
+impl FromStr for WorkflowCronArg {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value == "null" {
             return Ok(Self(None));
         }
-        match value.parse::<u32>() {
-            Ok(seconds) if (1..=86400).contains(&seconds) => Ok(Self(Some(seconds))),
-            _ => Err("expected a whole number from 1 to 86400, or null".into()),
+        let value = value.trim();
+        if value.is_empty() {
+            return Err("expected a UTC cron expression or null".into());
         }
+        Ok(Self(Some(value.to_string())))
     }
 }
 

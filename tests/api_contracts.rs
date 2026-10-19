@@ -182,8 +182,8 @@ const WORKFLOW_SCOPE: &str = "organization=team%20alpha&cluster=prod%2Feu";
 
 fn workflow_response() -> Value {
     json!({"id": "wf-1", "name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"},
-        "enabled": true, "revision": 1, "interval_seconds": 60,
-        "next_run_at": "2026-10-07T10:01:00Z",
+        "revision": 1, "schedule": {"cron": "* * * * *", "enabled": true,
+        "next_run_at": "2026-10-07T10:01:00Z"},
         "created_at": "2026-10-07 10:00:00+00", "updated_at": "2026-10-07 10:00:00+00",
         "sinks": [{"type": "table", "id": "sink-1", "settings": {"database": "analytics", "table": "out"}}]})
 }
@@ -198,8 +198,8 @@ fn workflow_create_uses_saved_database_and_sends_sinks() {
             "alerts",
             "--sql",
             "SELECT 1",
-            "--interval-seconds",
-            "60",
+            "--schedule-cron",
+            "* * * * *",
             "--sink",
             r#"{"type":"table","settings":{"database":"analytics","table":"out"}}"#,
         ],
@@ -211,8 +211,8 @@ fn workflow_create_uses_saved_database_and_sends_sinks() {
     assert_eq!(result, workflow_response());
     assert_eq!(
         body,
-        json!({"name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"}, "enabled": true,
-            "interval_seconds": 60,
+        json!({"name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"},
+            "schedule": {"cron": "* * * * *", "enabled": true},
             "sinks": [{"type": "table", "settings": {"database": "analytics", "table": "out"}}]})
     );
 }
@@ -247,8 +247,7 @@ fn workflow_list_renders_empty_and_populated_responses() {
     let mut manual = workflow_response();
     manual["id"] = json!("wf-2");
     manual["name"] = json!("backfill");
-    manual["interval_seconds"] = Value::Null;
-    manual["next_run_at"] = Value::Null;
+    manual["schedule"] = Value::Null;
     let stdout = run_workflow_human(
         &["workflow", "list"],
         "GET",
@@ -258,7 +257,7 @@ fn workflow_list_renders_empty_and_populated_responses() {
     for expected in [
         "alerts",
         "analytics",
-        "1m",
+        "* * * * *",
         "wf-1",
         "backfill",
         "active",
@@ -273,16 +272,23 @@ fn workflow_list_renders_empty_and_populated_responses() {
 
 #[test]
 fn workflow_human_output_reads_query_and_optional_metadata() {
-    for (interval, enabled, status, next_run) in [
+    for (cron, enabled, status, next_run) in [
         (Value::Null, true, "manual", Value::Null),
         (Value::Null, false, "manual", Value::Null),
-        (json!(60), false, "paused", Value::Null),
-        (json!(60), true, "active", json!("2026-10-07T10:01:00Z")),
+        (json!("* * * * *"), false, "paused", Value::Null),
+        (
+            json!("* * * * *"),
+            true,
+            "active",
+            json!("2026-10-07T10:01:00Z"),
+        ),
     ] {
         let mut response = workflow_response();
-        response["interval_seconds"] = interval.clone();
-        response["enabled"] = json!(enabled);
-        response["next_run_at"] = next_run.clone();
+        response["schedule"] = if cron.is_null() {
+            Value::Null
+        } else {
+            json!({"cron": cron, "enabled": enabled, "next_run_at": next_run})
+        };
         response["sinks"] = json!([{"id": "sink-http", "type": "http", "settings": {
             "url": "https://example.com/hook", "url_configured": true, "header_names": ["Authorization"]
         }}]);
@@ -295,8 +301,8 @@ fn workflow_human_output_reads_query_and_optional_metadata() {
         let row = list.lines().find(|line| line.contains("alerts")).unwrap();
         let cells: Vec<_> = row.split(['│', '┆']).map(str::trim).collect();
         assert_eq!(cells[3], status, "{list}");
-        let expected_interval = if interval.is_null() { "—" } else { "1m" };
-        assert_eq!(cells[4], expected_interval, "{list}");
+        let expected_cron = if cron.is_null() { "—" } else { "* * * * *" };
+        assert_eq!(cells[4], expected_cron, "{list}");
         for (args, method, suffix) in [
             (vec!["workflow", "get", "wf-1"], "GET", "/wf-1"),
             (
@@ -328,7 +334,7 @@ fn workflow_human_output_reads_query_and_optional_metadata() {
             assert!(text.contains("analytics"), "{text}");
             assert!(text.contains(&format!("  status:   {status}\n")), "{text}");
             assert!(
-                text.contains(&format!("  interval: {expected_interval}\n")),
+                text.contains(&format!("  cron:     {expected_cron}\n")),
                 "{text}"
             );
             assert!(text.contains(next_run.as_str().unwrap_or("—")), "{text}");
@@ -370,11 +376,14 @@ fn workflow_query_updates_preserve_unspecified_fields() {
 }
 
 #[test]
-fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
-    for (flags, interval) in [
+fn workflow_scheduling_distinguishes_omitted_null_and_cron() {
+    for (flags, schedule) in [
         (vec![], None),
-        (vec!["--interval-seconds", "null"], Some(Value::Null)),
-        (vec!["--interval-seconds", "300"], Some(json!(300))),
+        (vec!["--schedule-cron", "null"], Some(Value::Null)),
+        (
+            vec!["--schedule-cron", "*/5 * * * *"],
+            Some(json!({"cron": "*/5 * * * *"})),
+        ),
     ] {
         let mut create = vec![
             "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
@@ -387,12 +396,13 @@ fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
             workflow_response(),
             json!({"database": "analytics"}),
         );
-        assert_eq!(
-            body.get("interval_seconds"),
-            Some(interval.as_ref().unwrap_or(&Value::Null))
-        );
-        assert_eq!(body["enabled"], true);
-
+        let mut expected = schedule.clone().unwrap_or(Value::Null);
+        if !expected.is_null() {
+            expected["enabled"] = json!(true);
+        }
+        assert_eq!(body["schedule"], expected);
+        assert!(body.get("enabled").is_none());
+        assert!(body.get("interval_seconds").is_none());
         let mut update = vec!["workflow", "update", "wf-1", "--name", "renamed"];
         update.extend_from_slice(&flags);
         let (_, _, body) = run(
@@ -402,7 +412,7 @@ fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
             workflow_response(),
             json!({}),
         );
-        assert_eq!(body.get("interval_seconds"), interval.as_ref());
+        assert_eq!(body.get("schedule"), schedule.as_ref());
         assert!(body.get("enabled").is_none());
         assert!(body.get("query").is_none());
     }
@@ -411,13 +421,20 @@ fn workflow_scheduling_distinguishes_omitted_null_and_numeric_intervals() {
 #[test]
 fn workflow_update_sends_only_changed_fields() {
     let (_, _, body) = run(
-        &["workflow", "update", "wf-1", "--disable", "--clear-sinks"],
+        &[
+            "workflow",
+            "update",
+            "wf-1",
+            "--schedule-enabled",
+            "false",
+            "--clear-sinks",
+        ],
         "PATCH",
         &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
         workflow_response(),
         json!({}),
     );
-    assert_eq!(body, json!({"enabled": false, "sinks": []}));
+    assert_eq!(body, json!({"schedule": {"enabled": false}, "sinks": []}));
 }
 
 #[test]
@@ -491,7 +508,7 @@ fn workflow_commands_require_a_cluster() {
 }
 
 #[test]
-fn workflow_invalid_intervals_are_rejected_before_sending_requests() {
+fn workflow_obsolete_intervals_are_rejected_before_sending_requests() {
     for args in [
         vec![
             "workflow", "create", "--name", "alerts", "--sql", "SELECT 1",
@@ -503,7 +520,8 @@ fn workflow_invalid_intervals_are_rejected_before_sending_requests() {
             command.extend(["--interval-seconds", value]);
             let (output, _, _) = common::run_cli(&[], &command, &json!({}));
             assert_eq!(output.status.code(), Some(2));
-            assert!(String::from_utf8_lossy(&output.stderr).contains("expected a whole number"));
+            assert!(String::from_utf8_lossy(&output.stderr)
+                .contains("unexpected argument '--interval-seconds'"));
         }
     }
 }
@@ -521,4 +539,141 @@ fn workflow_manual_flag_is_rejected() {
         assert_eq!(output.status.code(), Some(2));
         assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--manual'"));
     }
+}
+
+#[test]
+fn workflow_schedule_pause_and_resume_fields_are_nested() {
+    let (_, _, body) = run(
+        &[
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--schedule-cron",
+            "*/30 * * * * *",
+            "--schedule-enabled",
+            "false",
+        ],
+        "POST",
+        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        workflow_response(),
+        json!({"database":"analytics"}),
+    );
+    assert_eq!(
+        body["schedule"],
+        json!({"cron":"*/30 * * * * *","enabled":false})
+    );
+    assert!(body.get("enabled").is_none());
+    for (flags, schedule) in [
+        (vec!["--schedule-enabled", "true"], json!({"enabled":true})),
+        (
+            vec!["--schedule-cron", "0 * * * *", "--schedule-enabled", "true"],
+            json!({"cron":"0 * * * *","enabled":true}),
+        ),
+        (
+            vec![
+                "--schedule-cron",
+                "0 * * * *",
+                "--schedule-enabled",
+                "false",
+            ],
+            json!({"cron":"0 * * * *","enabled":false}),
+        ),
+    ] {
+        let mut args = vec!["workflow", "update", "wf-1"];
+        args.extend(flags);
+        let (_, _, body) = run(
+            &args,
+            "PATCH",
+            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            workflow_response(),
+            json!({}),
+        );
+        assert_eq!(body, json!({"schedule":schedule}));
+    }
+}
+
+#[test]
+fn workflow_manual_schedule_rejects_pause_flags_before_http() {
+    for args in [
+        vec![
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--schedule-enabled",
+            "false",
+        ],
+        vec![
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--schedule-cron",
+            "null",
+            "--schedule-enabled",
+            "false",
+        ],
+        vec![
+            "workflow",
+            "update",
+            "wf-1",
+            "--schedule-cron",
+            "null",
+            "--schedule-enabled",
+            "true",
+        ],
+        vec![
+            "workflow",
+            "update",
+            "wf-1",
+            "--schedule-cron",
+            "null",
+            "--schedule-enabled",
+            "false",
+        ],
+    ] {
+        let mut command = vec!["--json", "--org", "team", "--cluster", "prod"];
+        command.extend(args);
+        let (output, _, bodies) = common::run_cli(&[], &command, &json!({"database":"analytics"}));
+        assert!(!output.status.success());
+        assert!(bodies.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("requires --schedule-cron") || error.contains("cannot be combined"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn workflow_cron_validation_errors_are_returned_by_the_api() {
+    let (output, _, bodies) = common::run_cli(
+        &[(
+            "POST /v1/workflows?organization=team&cluster=prod".into(),
+            "400 Bad Request",
+            json!({"message":"Invalid workflow cron", "hint":"Cron must have 5 or 6 fields."}),
+        )],
+        &[
+            "--json",
+            "workflow",
+            "create",
+            "--name",
+            "alerts",
+            "--sql",
+            "SELECT 1",
+            "--schedule-cron",
+            "invalid-cron",
+        ],
+        &json!({"default_organization":"team","cluster":"prod","database":"analytics"}),
+    );
+    assert!(!output.status.success());
+    assert_eq!(bodies[0]["schedule"]["cron"], "invalid-cron");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Cron must have 5 or 6 fields"));
 }
