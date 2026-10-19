@@ -1,3 +1,5 @@
+#[path = "live_platform/storage.rs"]
+mod storage;
 #[path = "live_platform/workflows.rs"]
 mod workflows;
 

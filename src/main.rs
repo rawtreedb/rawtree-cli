@@ -1,10 +1,12 @@
 mod cli;
 mod client;
+mod cluster_identity;
 mod commands;
 mod config;
 mod constants;
 mod org;
 mod output;
+mod s3_storage;
 
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
@@ -321,13 +323,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     json,
                 )
             }
-            DatabaseCommand::Create { name } => {
+            DatabaseCommand::Create { name, s3_storage } => {
                 let effective_org = resolve_effective_org(&client, cli_org.clone());
                 commands::database::create(
                     &client,
                     &name,
                     effective_org.as_deref(),
                     effective_cluster.as_deref(),
+                    s3_storage,
                     json,
                 )
             }
@@ -383,6 +386,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     min_size,
                     max_size,
                     idle_timeout_minutes,
+                    s3_storage,
+                    identity,
                 } => commands::cluster::create(
                     &client,
                     commands::cluster::ClusterCreateOptions {
@@ -393,6 +398,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         min_size,
                         max_size,
                         idle_timeout_minutes,
+                        s3_storage,
+                        identity,
                     },
                     json,
                 ),
