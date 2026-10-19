@@ -382,19 +382,19 @@ rtree cluster create \
   --name customer-data \
   --replicas 1 \
   --min-size 2:8 \
-  --s3-data-bucket acme-rawtree-data \
-  --s3-data-path rawtree/data \
-  --s3-backup-bucket acme-rawtree-backups \
-  --s3-backup-path rawtree/backups \
-  --s3-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access \
-  --s3-storage-external-id rawtree-example
+  --s3-storage-data-bucket acme-rawtree-data \
+  --s3-storage-data-path rawtree/data \
+  --s3-storage-backups-bucket acme-rawtree-backups \
+  --s3-storage-backups-path rawtree/backups \
+  --s3-storage-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access \
+  --s3-storage-access-external-id rawtree-example
 # Or choose explicit cluster identity with RawTree-managed default storage
 rtree cluster create \
   --name database-storage \
   --replicas 1 \
   --min-size 2:8 \
-  --s3-storage-external-id rawtree-database-access \
-  --s3-storage-resource-tag rawtree-customer-database
+  --s3-storage-access-external-id rawtree-database-access \
+  --s3-storage-access-resource-tag rawtree-customer-database
 rtree cluster use production
 rtree cluster status production
 rtree cluster update production --idle-timeout-minutes 60
@@ -412,22 +412,34 @@ catalog. Run `rtree cluster sizes` to see the currently available sizes; add
 `--idle-timeout-minutes` is optional on create and update; omit it to use the
 server default on create, and pass `0` to disable automatic idling.
 
-Cluster creation forwards `--s3-storage-external-id` and `--s3-storage-resource-tag` when supplied.
+Cluster creation forwards `--s3-storage-access-external-id` and `--s3-storage-access-resource-tag` when supplied.
 The API generates omitted identity values independently as `rawtree-<UUID>`
 using secure randomness and returns the saved values. The CLI does not generate
 identity values. Both are immutable after creation.
-Custom cluster storage requires `--s3-storage-external-id` to match the customer IAM role's
-trust policy. `--s3-storage-resource-tag` may be supplied or generated.
+Custom cluster storage requires `--s3-storage-access-external-id` to match the customer IAM role's
+trust policy. `--s3-storage-access-resource-tag` may be supplied or generated.
 
-Cluster and database creation share `--s3-data-bucket`, `--s3-backup-bucket`, and
-`--s3-role-arn`; all three are required if any S3 option is supplied. The optional
-`--s3-data-path` and `--s3-backup-path` specify object-key prefixes.
+Flag names follow the API field paths:
+
+| Flag | API field | Available on |
+| --- | --- | --- |
+| `--s3-storage-data-bucket` | `s3_storage.data.bucket` | Cluster and database creation |
+| `--s3-storage-data-path` | `s3_storage.data.path` | Cluster and database creation |
+| `--s3-storage-backups-bucket` | `s3_storage.backups.bucket` | Cluster and database creation |
+| `--s3-storage-backups-path` | `s3_storage.backups.path` | Cluster and database creation |
+| `--s3-storage-role-arn` | `s3_storage.role_arn` | Cluster and database creation |
+| `--s3-storage-access-external-id` | `s3_storage_access.external_id` | Cluster creation only |
+| `--s3-storage-access-resource-tag` | `s3_storage_access.resource_tag` | Cluster creation only |
+
+Cluster and database creation share `--s3-storage-data-bucket`, `--s3-storage-backups-bucket`, and
+`--s3-storage-role-arn`; all three are required if any destination or role option is supplied. The optional
+`--s3-storage-data-path` and `--s3-storage-backups-path` specify object-key prefixes.
 
 ```sh
 rtree --org acme --cluster production database create analytics \
-  --s3-data-bucket acme-rawtree-data \
-  --s3-backup-bucket acme-rawtree-backups \
-  --s3-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access
+  --s3-storage-data-bucket acme-rawtree-data \
+  --s3-storage-backups-bucket acme-rawtree-backups \
+  --s3-storage-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access
 ```
 
 Database creation reuses the cluster's saved identity: no external ID or tag is
@@ -447,8 +459,9 @@ and preserves cluster `s3_storage_access.external_id` and
 `s3_storage_access.resource_tag`; role ARNs and credentials are not returned. Older clusters without
 saved identity show `not configured` in status output.
 
-The old `--s3-external-id`, `--database-s3-external-id`, `--database-bucket-tag`,
-and plural `--s3-backups-*` flags are removed. This CLI targets
+The former `--s3-data-*`, `--s3-backup-*`, `--s3-backups-*`, `--s3-role-arn`,
+`--s3-storage-external-id`, `--s3-storage-resource-tag`, and legacy database
+identity flags are rejected. This CLI targets
 [Platform PR #1482](https://github.com/rawtreedb/rawtree-platform/pull/1482) and
 must be released with that server contract.
 

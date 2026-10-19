@@ -3,11 +3,11 @@ mod common;
 use serde_json::{json, Value};
 
 const S3_ARGS: &[&str] = &[
-    "--s3-data-bucket",
+    "--s3-storage-data-bucket",
     "customer-data",
-    "--s3-backup-bucket",
+    "--s3-storage-backups-bucket",
     "customer-backups",
-    "--s3-role-arn",
+    "--s3-storage-role-arn",
     "arn:aws:iam::123456789012:role/RawTreeS3Access",
 ];
 
@@ -54,9 +54,9 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
         ];
         args.extend_from_slice(S3_ARGS);
         args.extend_from_slice(&[
-            "--s3-data-path",
+            "--s3-storage-data-path",
             "events/",
-            "--s3-backup-path",
+            "--s3-storage-backups-path",
             "snapshots/",
         ]);
         let (output, saved, bodies) = common::run_cli(
@@ -129,14 +129,14 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
         }
         if with_identity {
             args.extend_from_slice(&[
-                "--s3-storage-external-id",
+                "--s3-storage-access-external-id",
                 "rawtree-example",
-                "--s3-storage-resource-tag",
+                "--s3-storage-access-resource-tag",
                 "customer-buckets",
             ]);
         }
         if with_storage && !with_identity {
-            args.extend_from_slice(&["--s3-storage-external-id", "rawtree-example"]);
+            args.extend_from_slice(&["--s3-storage-access-external-id", "rawtree-example"]);
         }
         let mut response = cluster();
         if !with_storage {
@@ -185,8 +185,8 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
 fn invalid_storage_flags_fail_before_any_api_request() {
     for (command, flags, error) in [(
         vec!["database", "create", "analytics"],
-        vec!["--s3-data-bucket", "customer-data"],
-        "--s3-backup-bucket",
+        vec!["--s3-storage-data-bucket", "customer-data"],
+        "--s3-storage-backups-bucket",
     )] {
         let mut args = vec!["--org", "team", "--cluster", "prod"];
         args.extend(command);
@@ -253,24 +253,54 @@ fn cluster_list_and_status_show_storage_without_an_organization_envelope() {
 }
 
 #[test]
-fn obsolete_identity_and_plural_backup_flags_are_rejected() {
-    for flag in [
+fn obsolete_and_database_identity_flags_are_rejected() {
+    let obsolete = [
         "--external-id",
         "--resource-tag",
         "--s3-external-id",
         "--database-s3-external-id",
         "--database-bucket-tag",
+        "--s3-data-bucket",
+        "--s3-data-path",
+        "--s3-backup-bucket",
+        "--s3-backup-path",
         "--s3-backups-bucket",
+        "--s3-backups-path",
+        "--s3-role-arn",
         "--s3-storage-external-id",
         "--s3-storage-resource-tag",
+    ];
+    for command in [
+        vec!["database", "create", "analytics"],
+        vec![
+            "cluster",
+            "create",
+            "--name",
+            "production",
+            "--replicas",
+            "1",
+            "--min-size",
+            "2:8",
+        ],
     ] {
-        let (output, _, bodies) = common::run_cli(
-            &[],
-            &["database", "create", "analytics", flag, "obsolete"],
-            &json!({}),
-        );
-        assert!(!output.status.success(), "{flag}");
-        assert!(bodies.is_empty());
+        let mut rejected = obsolete.to_vec();
+        if command[0] == "database" {
+            rejected.extend([
+                "--s3-storage-access-external-id",
+                "--s3-storage-access-resource-tag",
+            ]);
+        }
+        for flag in rejected {
+            let mut args = command.clone();
+            args.extend([flag, "obsolete"]);
+            let (output, _, bodies) = common::run_cli(&[], &args, &json!({}));
+            assert!(!output.status.success(), "{flag}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("unexpected argument"),
+                "{flag}"
+            );
+            assert!(bodies.is_empty());
+        }
     }
 }
 
