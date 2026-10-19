@@ -125,7 +125,8 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let s3_storage = options.s3_storage.to_json()?;
-    let (_, sizes) = load_cluster_sizes(client)?;
+    let client = client.for_region(options.organization, options.region_id)?;
+    let (_, sizes) = load_cluster_sizes(&client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
         .max_size
@@ -136,7 +137,7 @@ pub fn create(
         anyhow::bail!("Maximum size must be at least as large as the minimum size");
     }
 
-    let body = create_request_body(
+    let mut body = create_request_body(
         options.name,
         options.replicas,
         min_size,
@@ -146,6 +147,9 @@ pub fn create(
         options.identity,
     );
 
+    if let Some(region_id) = options.region_id {
+        body["region_id"] = json!(region_id);
+    }
     let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
     let created: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
@@ -173,6 +177,7 @@ pub fn create(
 }
 
 pub struct ClusterCreateOptions<'a> {
+    pub region_id: Option<&'a str>,
     pub organization: Option<&'a str>,
     pub name: &'a str,
     pub replicas: u32,
@@ -282,6 +287,25 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
         println!("{table}");
     });
 
+    Ok(())
+}
+
+pub fn regions(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
+    let response =
+        client.list_regions(organization.context("Choose an organization with --org.")?)?;
+    output::print_result(&response, json_mode, |response| {
+        let mut table = new_cli_table();
+        table.set_header(vec!["ID", "Name", "Cloud region", "Enabled"]);
+        for region in &response.regions {
+            table.add_row(vec![
+                region.id.clone(),
+                region.name.clone(),
+                region.cloud_region.clone(),
+                region.enabled.to_string(),
+            ]);
+        }
+        println!("{table}");
+    });
     Ok(())
 }
 

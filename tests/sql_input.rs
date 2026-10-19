@@ -3,7 +3,7 @@ mod common;
 use serde_json::{json, Value};
 
 fn config() -> Value {
-    json!({"token": "fixture-token", "database": "analytics", "default_organization": "team", "cluster": "prod"})
+    json!({"token": "rt_fixture", "database": "analytics", "default_organization": "team", "cluster": "prod"})
 }
 
 fn response(command: &str) -> (String, &'static str, Value) {

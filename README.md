@@ -32,6 +32,18 @@ cargo build --release
 ./target/release/rtree --help
 ```
 
+## Create a cluster in a region
+
+Use a user login and select a region from the organization's catalog:
+
+```sh
+rtree --org acme cluster regions
+rtree --org acme cluster sizes --region-id <REGION_ID>
+rtree --org acme cluster create --region-id <REGION_ID> --name production --replicas 2 --min-size 2:8
+```
+
+Size discovery and creation use the selected region's deployment. Omitting `--region-id` preserves the default backend. A selected region without a valid deployment is rejected, except for the legacy public US East region. API keys keep their embedded routing and cannot override it with `--region-id`.
+
 ## Update
 
 If you installed with the GitHub Releases installer, update in place:

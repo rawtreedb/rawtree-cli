@@ -318,12 +318,21 @@ pub enum ClusterCommand {
     /// List dedicated clusters
     List,
     /// List the CPU and memory pairs available for dedicated clusters
-    Sizes,
+    Sizes {
+        /// Region ID from `rtree cluster regions`; omit for the default backend
+        #[arg(long)]
+        region_id: Option<String>,
+    },
+    /// List regions available to the selected organization
+    Regions,
     /// Create a dedicated cluster
     #[command(
         after_help = "Sizes use CPU_CORES:MEMORY_GIB (for example, 2:8). Run `rtree cluster sizes` to list the available sizes."
     )]
     Create {
+        /// Region ID from `rtree cluster regions`; omit for the default backend
+        #[arg(long)]
+        region_id: Option<String>,
         /// Cluster name
         #[arg(long)]
         name: String,
