@@ -440,9 +440,10 @@ storage. The CLI does not create AWS buckets or IAM roles or migrate existing
 data. Omitting S3 options uses RawTree-managed cluster storage or, for a database,
 inherits its cluster's storage.
 
-The API payload has a flat `s3_storage` object containing `data_bucket`,
-`data_path`, `backup_bucket`, `backup_path`, and `role_arn`. List/status JSON
-preserves the flat bucket/path metadata and cluster `s3_storage_access.external_id` and
+The API payload has an `s3_storage` object containing `data` and `backups`
+destinations (each with `bucket` and optional `path`), plus `role_arn`. List/status
+JSON always includes both destinations with explicit paths for custom storage
+and preserves cluster `s3_storage_access.external_id` and
 `s3_storage_access.resource_tag`; role ARNs and credentials are not returned. Older clusters without
 saved identity show `not configured` in status output.
 

@@ -42,10 +42,8 @@ impl S3StorageArgs {
         let role_arn = required_s3_value(&self.s3_role_arn, "--s3-role-arn")?;
 
         Ok(Some(json!({
-            "data_bucket": data_bucket,
-            "data_path": self.s3_data_path.as_deref().unwrap_or(""),
-            "backup_bucket": backups_bucket,
-            "backup_path": self.s3_backup_path.as_deref().unwrap_or(""),
+            "data": { "bucket": data_bucket, "path": self.s3_data_path.as_deref().unwrap_or("") },
+            "backups": { "bucket": backups_bucket, "path": self.s3_backup_path.as_deref().unwrap_or("") },
             "role_arn": role_arn,
         })))
     }
@@ -70,8 +68,12 @@ fn required_s3_value<'a>(value: &'a Option<String>, flag: &str) -> Result<&'a st
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct S3StorageMetadata {
-    pub(crate) data_bucket: String,
-    pub(crate) data_path: String,
-    pub(crate) backup_bucket: String,
-    pub(crate) backup_path: String,
+    pub(crate) data: S3StorageDestination,
+    pub(crate) backups: S3StorageDestination,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct S3StorageDestination {
+    pub(crate) bucket: String,
+    pub(crate) path: String,
 }

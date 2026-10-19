@@ -13,8 +13,8 @@ const S3_ARGS: &[&str] = &[
 
 fn storage() -> Value {
     json!({
-        "data_bucket": "customer-data", "data_path": "",
-        "backup_bucket": "customer-backups", "backup_path": "",
+        "data": { "bucket": "customer-data", "path": "" },
+        "backups": { "bucket": "customer-backups", "path": "" },
         "role_arn": "arn:aws:iam::123456789012:role/RawTreeS3Access"
     })
 }
@@ -26,8 +26,8 @@ fn cluster() -> Value {
         "resources": null, "can_pause": false, "can_resume": false,
         "idle_timeout_minutes": 15,
         "s3_storage": {
-            "data_bucket": "customer-data", "data_path": "",
-            "backup_bucket": "customer-backups", "backup_path": ""
+            "data": { "bucket": "customer-data", "path": "" },
+            "backups": { "bucket": "customer-backups", "path": "" }
         },
         "s3_storage_access": {"external_id": "rawtree-example", "resource_tag": "customer-buckets"}
     })
@@ -82,8 +82,8 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
             String::from_utf8_lossy(&output.stderr)
         );
         let mut expected = storage();
-        expected["data_path"] = json!("events/");
-        expected["backup_path"] = json!("snapshots/");
+        expected["data"]["path"] = json!("events/");
+        expected["backups"]["path"] = json!("snapshots/");
         assert_eq!(
             bodies,
             vec![
@@ -107,7 +107,7 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
 }
 
 #[test]
-fn cluster_creation_forwards_optional_identity_and_flat_storage() {
+fn cluster_creation_forwards_optional_identity_and_nested_storage() {
     for (with_storage, with_identity) in
         [(false, false), (true, false), (false, true), (true, true)]
     {
