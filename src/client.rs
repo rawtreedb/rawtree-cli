@@ -1,3 +1,4 @@
+mod discovery;
 mod regions;
 mod routing;
 #[cfg(test)]
@@ -39,11 +40,18 @@ impl ApiClient {
     }
 
     fn unrouted_request(&self, method: reqwest::Method, path: &str) -> RequestBuilder {
-        let request = with_client_header(
-            self.client
-                .request(method, format!("{}{}", self.base_url, path)),
-        );
-        let request = match &self.deployment {
+        self.deployment_request(method, path, self.deployment.as_ref())
+    }
+
+    fn deployment_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        deployment: Option<&(String, String)>,
+    ) -> RequestBuilder {
+        let url = routing::deployment_url(&format!("{}{}", self.base_url, path), deployment);
+        let request = with_client_header(self.client.request(method, url));
+        let request = match deployment {
             Some((deployment, region)) => request
                 .header("X-RawTree-Deployment-Id", deployment)
                 .header("X-RawTree-Region", region),
@@ -135,9 +143,17 @@ impl ApiClient {
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let req = self.routed_request(reqwest::Method::GET, path)?;
-        let resp = req.send().context("failed to connect to server")?;
-        let value: Value = handle_response(resp)?;
+        let url = reqwest::Url::parse(&format!("{}{}", self.base_url, path))?;
+        let organization = url.query_pairs().find(|(key, _)| key == "organization");
+        let value: Value = if url.path() == "/v1/clusters"
+            && self.has_user_credential()
+            && self.deployment.is_none()
+        {
+            self.discover_clusters(organization.as_ref().map(|(_, name)| name.as_ref()), None)?
+        } else {
+            let req = self.routed_request(reqwest::Method::GET, path)?;
+            handle_response(req.send().context("failed to connect to server")?)?
+        };
         self.remember_routing_metadata(path, &value);
         serde_json::from_value(value).context("failed to parse server response")
     }

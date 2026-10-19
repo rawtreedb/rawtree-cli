@@ -126,12 +126,8 @@ impl ApiClient {
             self.routing.clusters.borrow_mut().clear();
             *self.routing.organizations.borrow_mut() = None;
         }
-        let mut request = self.unrouted_request(method, path);
-        if let Some((deployment, region)) = pair {
-            request = request
-                .header("X-RawTree-Deployment-Id", deployment)
-                .header("X-RawTree-Region", region);
-        }
+        let request =
+            self.deployment_request(method, path, pair.as_ref().or(self.deployment.as_ref()));
         before_deadline(request, deadline)
     }
 
@@ -166,10 +162,8 @@ impl ApiClient {
         let clusters = match cached {
             Some(clusters) => clusters,
             None => {
-                let response: Clusters = handle_response(
-                    before_deadline(self.unrouted_request(Method::GET, &collection), deadline)?
-                        .send()?,
-                )?;
+                let response: Clusters =
+                    serde_json::from_value(self.discover_clusters(Some(&organization), deadline)?)?;
                 self.routing
                     .clusters
                     .borrow_mut()
@@ -192,7 +186,10 @@ impl ApiClient {
     }
 }
 
-fn before_deadline(request: RequestBuilder, deadline: Option<Instant>) -> Result<RequestBuilder> {
+pub(super) fn before_deadline(
+    request: RequestBuilder,
+    deadline: Option<Instant>,
+) -> Result<RequestBuilder> {
     match deadline {
         Some(deadline) => {
             let remaining = deadline
@@ -251,7 +248,7 @@ pub(super) fn valid_routing(deployment: &str, region: &str) -> bool {
     let mut parts = region.rsplit('-');
     let number = parts.next().unwrap_or_default();
     let names: Vec<_> = parts.collect();
-    deployment.len() == 8
+    matches!(deployment.len(), 8 | 32)
         && deployment
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -263,4 +260,31 @@ pub(super) fn valid_routing(deployment: &str, region: &str) -> bool {
         && names
             .iter()
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase()))
+}
+
+/// Only public RawTree API origins use deployment hosts; custom endpoints keep their URL.
+pub(super) fn deployment_url(url: &str, pair: Option<&(String, String)>) -> String {
+    let Some((deployment, region)) =
+        pair.filter(|(deployment, region)| valid_routing(deployment, region))
+    else {
+        return url.to_owned();
+    };
+    let Ok(mut target) = Url::parse(url) else {
+        return url.to_owned();
+    };
+    if !matches!(
+        target.origin().ascii_serialization().as_str(),
+        "https://api.rawtree.com" | "https://api.rawtree.dev"
+    ) {
+        return url.to_owned();
+    }
+    let host = target.host_str().unwrap_or_default().replacen(
+        "api.",
+        &format!("api.{deployment}.{region}.aws."),
+        1,
+    );
+    if target.set_host(Some(&host)).is_err() {
+        return url.to_owned();
+    }
+    target.to_string()
 }

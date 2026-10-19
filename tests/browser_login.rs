@@ -45,7 +45,15 @@ fn organizations(names: &[&str]) -> Response {
     (
         "GET /v1/organizations".into(),
         "200 OK",
-        json!({"organizations": names.iter().map(|name| json!({"name": name, "role": "owner"})).collect::<Vec<_>>()}),
+        json!({"organizations": names.iter().map(|name| json!({"name": name, "organization_id": format!("{name}-id"), "role": "owner"})).collect::<Vec<_>>()}),
+    )
+}
+
+fn regions() -> Response {
+    (
+        "GET /v1/organizations/team-id/regions".into(),
+        "200 OK",
+        json!({"regions":[{"id":"legacy", "name":"Virginia", "cloud_region":"us-east-1", "deployment_id":null, "organization_id":null, "enabled":true}]}),
     )
 }
 
@@ -122,7 +130,12 @@ fn missing_organization_returns_available_choices_without_saving_authentication(
 fn missing_cluster_returns_choices_in_the_selected_organization() {
     for names in [vec![], vec!["production", "staging"]] {
         let mut responses = approved_login();
-        responses.extend([organizations(&["team", "other"]), clusters(&names)]);
+        responses.extend([
+            organizations(&["team", "other"]),
+            organizations(&["team"]),
+            regions(),
+            clusters(&names),
+        ]);
         assert_selection(
             &responses,
             &["login", "--org", "team"],
@@ -137,6 +150,8 @@ fn missing_database_returns_choices_in_the_selected_cluster() {
         let mut responses = approved_login();
         responses.extend([
             organizations(&["team"]),
+            organizations(&["team"]),
+            regions(),
             clusters(&["staging", "production"]),
             databases(&names),
         ]);
@@ -161,6 +176,8 @@ fn approval_is_reported_before_polling_completes_and_only_once() {
     );
     responses.extend([
         organizations(&["team"]),
+        organizations(&["team"]),
+        regions(),
         clusters(&["production"]),
         databases(&["analytics"]),
     ]);
@@ -203,6 +220,8 @@ fn explicit_json_and_selectors_complete_login_with_no_browser() {
     let mut responses = approved_login();
     responses.extend([
         organizations(&["other", "team"]),
+        organizations(&["team"]),
+        regions(),
         clusters(&["staging", "production"]),
         databases(&["billing", "analytics"]),
     ]);
@@ -239,7 +258,11 @@ fn invalid_selectors_return_json_errors_and_preserve_config() {
         let mut responses = approved_login();
         responses.push(organizations(&["team"]));
         if flag != "--org" {
-            responses.push(clusters(&["production"]));
+            responses.extend([
+                organizations(&["team"]),
+                regions(),
+                clusters(&["production"]),
+            ]);
         }
         if flag == "--database" {
             responses.push(databases(&["analytics"]));
@@ -259,10 +282,12 @@ fn invalid_selectors_return_json_errors_and_preserve_config() {
 
 #[test]
 fn discovery_errors_are_not_treated_as_empty_choices_or_success() {
-    for stage in 0..3 {
+    for stage in 0..5 {
         let mut responses = approved_login();
         let discovery = [
             organizations(&["team"]),
+            organizations(&["team"]),
+            regions(),
             clusters(&["production"]),
             databases(&["analytics"]),
         ];
