@@ -29,12 +29,20 @@ fn cluster_identity_is_generated_persisted_and_read_back() {
     assert!(readback.status.success(), "cluster status failed");
     let readback: Value = serde_json::from_slice(&readback.stdout).expect("status JSON");
     for field in ["external_id", "resource_tag"] {
-        let value = created[field].as_str().expect("saved identity");
+        let value = created["s3_storage_access"][field]
+            .as_str()
+            .expect("saved identity");
         let id =
             uuid::Uuid::parse_str(value.strip_prefix("rawtree-").expect("prefix")).expect("UUID");
         assert_eq!(id.get_version_num(), 4);
-        assert_eq!(readback[field], created[field]);
+        assert_eq!(
+            readback["s3_storage_access"][field],
+            created["s3_storage_access"][field]
+        );
     }
-    assert_ne!(created["external_id"], created["resource_tag"]);
+    assert_ne!(
+        created["s3_storage_access"]["external_id"],
+        created["s3_storage_access"]["resource_tag"]
+    );
     assert!(created["s3_storage"].is_null());
 }

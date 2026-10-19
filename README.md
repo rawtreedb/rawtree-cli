@@ -387,14 +387,14 @@ rtree cluster create \
   --s3-backup-bucket acme-rawtree-backups \
   --s3-backup-path rawtree/backups \
   --s3-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access \
-  --external-id rawtree-example
+  --s3-storage-external-id rawtree-example
 # Or choose explicit cluster identity with RawTree-managed default storage
 rtree cluster create \
   --name database-storage \
   --replicas 1 \
   --min-size 2:8 \
-  --external-id rawtree-database-access \
-  --resource-tag rawtree-customer-database
+  --s3-storage-external-id rawtree-database-access \
+  --s3-storage-resource-tag rawtree-customer-database
 rtree cluster use production
 rtree cluster status production
 rtree cluster update production --idle-timeout-minutes 60
@@ -412,12 +412,12 @@ catalog. Run `rtree cluster sizes` to see the currently available sizes; add
 `--idle-timeout-minutes` is optional on create and update; omit it to use the
 server default on create, and pass `0` to disable automatic idling.
 
-Cluster creation forwards `--external-id` and `--resource-tag` when supplied.
+Cluster creation forwards `--s3-storage-external-id` and `--s3-storage-resource-tag` when supplied.
 The API generates omitted identity values independently as `rawtree-<UUID>`
 using secure randomness and returns the saved values. The CLI does not generate
 identity values. Both are immutable after creation.
-Custom cluster storage requires `--external-id` to match the customer IAM role's
-trust policy. `--resource-tag` may be supplied or generated.
+Custom cluster storage requires `--s3-storage-external-id` to match the customer IAM role's
+trust policy. `--s3-storage-resource-tag` may be supplied or generated.
 
 Cluster and database creation share `--s3-data-bucket`, `--s3-backup-bucket`, and
 `--s3-role-arn`; all three are required if any S3 option is supplied. The optional
@@ -442,8 +442,8 @@ inherits its cluster's storage.
 
 The API payload has a flat `s3_storage` object containing `data_bucket`,
 `data_path`, `backup_bucket`, `backup_path`, and `role_arn`. List/status JSON
-preserves the flat bucket/path metadata and top-level cluster `external_id` and
-`resource_tag`; role ARNs and credentials are not returned. Older clusters without
+preserves the flat bucket/path metadata and cluster `s3_storage_access.external_id` and
+`s3_storage_access.resource_tag`; role ARNs and credentials are not returned. Older clusters without
 saved identity show `not configured` in status output.
 
 The old `--s3-external-id`, `--database-s3-external-id`, `--database-bucket-tag`,

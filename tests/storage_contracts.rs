@@ -29,7 +29,7 @@ fn cluster() -> Value {
             "data_bucket": "customer-data", "data_path": "",
             "backup_bucket": "customer-backups", "backup_path": ""
         },
-        "external_id": "rawtree-example", "resource_tag": "customer-buckets"
+        "s3_storage_access": {"external_id": "rawtree-example", "resource_tag": "customer-buckets"}
     })
 }
 
@@ -60,11 +60,18 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
             "snapshots/",
         ]);
         let (output, saved, bodies) = common::run_cli(
-            &[(
-                "POST /v1/databases?organization=team%20alpha&cluster=prod%2Feu".into(),
-                if success { "200 OK" } else { "400 Bad Request" },
-                response.clone(),
-            )],
+            &[
+                (
+                    "GET /v1/clusters?organization=team%20alpha".into(),
+                    "200 OK",
+                    json!({"clusters": []}),
+                ),
+                (
+                    "POST /v1/databases?organization=team%20alpha&cluster=prod%2Feu".into(),
+                    if success { "200 OK" } else { "400 Bad Request" },
+                    response.clone(),
+                ),
+            ],
             &args,
             &original,
         );
@@ -79,7 +86,10 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
         expected["backup_path"] = json!("snapshots/");
         assert_eq!(
             bodies,
-            vec![json!({"name": "analytics", "s3_storage": expected})]
+            vec![
+                Value::Null,
+                json!({"name": "analytics", "s3_storage": expected})
+            ]
         );
         if success {
             assert_eq!(
@@ -119,14 +129,14 @@ fn cluster_creation_forwards_optional_identity_and_flat_storage() {
         }
         if with_identity {
             args.extend_from_slice(&[
-                "--external-id",
+                "--s3-storage-external-id",
                 "rawtree-example",
-                "--resource-tag",
+                "--s3-storage-resource-tag",
                 "customer-buckets",
             ]);
         }
         if with_storage && !with_identity {
-            args.extend_from_slice(&["--external-id", "rawtree-example"]);
+            args.extend_from_slice(&["--s3-storage-external-id", "rawtree-example"]);
         }
         let mut response = cluster();
         if !with_storage {
@@ -162,10 +172,10 @@ fn cluster_creation_forwards_optional_identity_and_flat_storage() {
             expected["s3_storage"] = storage();
         }
         if with_identity || with_storage {
-            expected["external_id"] = json!("rawtree-example");
+            expected["s3_storage_access"]["external_id"] = json!("rawtree-example");
         }
         if with_identity {
-            expected["resource_tag"] = json!("customer-buckets");
+            expected["s3_storage_access"]["resource_tag"] = json!("customer-buckets");
         }
         assert_eq!(bodies[1], expected);
     }
@@ -228,8 +238,11 @@ fn cluster_list_and_status_show_storage_without_an_organization_envelope() {
                     &response
                 };
                 assert_eq!(item["s3_storage"], cluster()["s3_storage"]);
-                assert_eq!(item["external_id"], "rawtree-example");
-                assert_eq!(item["resource_tag"], "customer-buckets");
+                assert_eq!(item["s3_storage_access"]["external_id"], "rawtree-example");
+                assert_eq!(
+                    item["s3_storage_access"]["resource_tag"],
+                    "customer-buckets"
+                );
                 assert!(item["s3_storage"].get("role_arn").is_none());
             } else {
                 assert!(stdout.contains("customer-owned S3"), "{stdout}");
@@ -242,12 +255,14 @@ fn cluster_list_and_status_show_storage_without_an_organization_envelope() {
 #[test]
 fn obsolete_identity_and_plural_backup_flags_are_rejected() {
     for flag in [
+        "--external-id",
+        "--resource-tag",
         "--s3-external-id",
         "--database-s3-external-id",
         "--database-bucket-tag",
         "--s3-backups-bucket",
-        "--external-id",
-        "--resource-tag",
+        "--s3-storage-external-id",
+        "--s3-storage-resource-tag",
     ] {
         let (output, _, bodies) = common::run_cli(
             &[],
@@ -263,8 +278,7 @@ fn obsolete_identity_and_plural_backup_flags_are_rejected() {
 fn managed_cluster_storage_and_inherited_database_storage_have_distinct_labels() {
     let mut managed = cluster();
     managed["s3_storage"] = Value::Null;
-    managed["external_id"] = Value::Null;
-    managed["resource_tag"] = Value::Null;
+    managed["s3_storage_access"] = Value::Null;
     for action in [
         vec!["cluster", "list"],
         vec!["cluster", "status", "production"],
@@ -323,7 +337,7 @@ fn cluster_identity_validation_errors_come_from_the_api() {
             (
                 "POST /v1/clusters?organization=team".into(),
                 "400 Bad Request",
-                json!({"message": "Custom S3 storage requires external_id."}),
+                json!({"message": "Custom S3 storage requires s3_storage_access.external_id."}),
             ),
         ],
         &[
@@ -345,7 +359,9 @@ fn cluster_identity_validation_errors_come_from_the_api() {
         &json!({}),
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("requires external_id"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires s3_storage_access.external_id")
+    );
     assert!(bodies[1].get("external_id").is_none());
     assert!(bodies[1].get("resource_tag").is_none());
 }

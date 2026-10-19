@@ -46,10 +46,14 @@ struct ClusterItem {
     #[serde(default)]
     s3_storage: Option<S3StorageMetadata>,
     #[serde(default)]
-    external_id: Option<String>,
-    #[serde(default)]
-    resource_tag: Option<String>,
+    s3_storage_access: Option<S3StorageAccess>,
     idle_timeout_minutes: u64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct S3StorageAccess {
+    external_id: String,
+    resource_tag: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -162,11 +166,19 @@ pub fn create(
         );
         println!(
             "External ID: {}",
-            created.external_id.as_deref().unwrap_or("not configured")
+            created
+                .s3_storage_access
+                .as_ref()
+                .map(|access| access.external_id.as_str())
+                .unwrap_or("not configured")
         );
         println!(
             "Resource tag: {}",
-            created.resource_tag.as_deref().unwrap_or("not configured")
+            created
+                .s3_storage_access
+                .as_ref()
+                .map(|access| access.resource_tag.as_str())
+                .unwrap_or("not configured")
         );
         println!(
             "Run `rtree cluster status {}` to check provisioning progress.",
@@ -279,7 +291,13 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
                     cluster.s3_storage.as_ref(),
                     "RawTree-managed",
                 )),
-                Cell::new(cluster.resource_tag.as_deref().unwrap_or("—")),
+                Cell::new(
+                    cluster
+                        .s3_storage_access
+                        .as_ref()
+                        .map(|access| access.resource_tag.as_str())
+                        .unwrap_or("—"),
+                ),
                 Cell::new(format_created_at(&cluster.created_at)),
                 Cell::new(&cluster.id),
             ]);
@@ -376,11 +394,19 @@ pub fn status(
         );
         println!(
             "External ID: {}",
-            cluster.external_id.as_deref().unwrap_or("not configured")
+            cluster
+                .s3_storage_access
+                .as_ref()
+                .map(|access| access.external_id.as_str())
+                .unwrap_or("not configured")
         );
         println!(
             "Resource tag: {}",
-            cluster.resource_tag.as_deref().unwrap_or("not configured")
+            cluster
+                .s3_storage_access
+                .as_ref()
+                .map(|access| access.resource_tag.as_str())
+                .unwrap_or("not configured")
         );
         if let Some(message) = cluster.status.message.as_deref() {
             println!("Message: {message}");
@@ -548,10 +574,10 @@ fn create_request_body(
         },
     });
     if let Some(external_id) = identity.external_id {
-        body["external_id"] = json!(external_id);
+        body["s3_storage_access"]["external_id"] = json!(external_id);
     }
     if let Some(resource_tag) = identity.resource_tag {
-        body["resource_tag"] = json!(resource_tag);
+        body["s3_storage_access"]["resource_tag"] = json!(resource_tag);
     }
     if let Some(idle_timeout_minutes) = idle_timeout_minutes {
         body["idle_timeout_minutes"] = json!(idle_timeout_minutes);
@@ -792,7 +818,7 @@ mod tests {
                     "max_size": {"cpu_cores": 64, "memory_gib": 256}
                 },
                 "idle_timeout_minutes": 30,
-                "external_id": "rawtree-test", "resource_tag": "test-tag"
+                "s3_storage_access": {"external_id": "rawtree-test", "resource_tag": "test-tag"}
             })
         );
     }
@@ -811,8 +837,7 @@ mod tests {
             can_pause: true,
             can_resume: false,
             s3_storage: None,
-            external_id: None,
-            resource_tag: None,
+            s3_storage_access: None,
             idle_timeout_minutes: 15,
         }
     }

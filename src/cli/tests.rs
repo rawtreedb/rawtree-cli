@@ -97,8 +97,7 @@ fn global_api_key_parses_before_subcommand() {
 
 #[test]
 fn cluster_list_parses() {
-    let cli =
-        Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
+    let cli = Cli::try_parse_from(["rtree", "cluster", "list"]).expect("cluster list should parse");
     assert!(matches!(
         cli.command,
         Command::Cluster {
