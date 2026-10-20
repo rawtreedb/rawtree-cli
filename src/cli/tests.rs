@@ -606,6 +606,99 @@ fn workflow_update_rejects_conflicting_flags() {
 }
 
 #[test]
+fn workflow_sink_flags_enforce_their_target_type() {
+    for (accepted, args) in [
+        (
+            false,
+            vec![
+                "create",
+                "--name",
+                "a",
+                "--sql",
+                "x",
+                "--sink-header",
+                "A: b",
+            ],
+        ),
+        (
+            true,
+            vec![
+                "create",
+                "--name",
+                "a",
+                "--sql",
+                "x",
+                "--sink-http",
+                "https://a.example",
+                "--sink-header",
+                "A: b",
+            ],
+        ),
+        (false, vec!["sink", "create", "wf-1"]),
+        (
+            false,
+            vec![
+                "sink",
+                "create",
+                "wf-1",
+                "--table",
+                "t",
+                "--http",
+                "https://a.example",
+            ],
+        ),
+        (
+            false,
+            vec!["sink", "create", "wf-1", "--table", "t", "--header", "A: b"],
+        ),
+        (
+            true,
+            vec![
+                "sink",
+                "create",
+                "wf-1",
+                "--http",
+                "https://a.example",
+                "--header",
+                "A: b",
+            ],
+        ),
+        (
+            false,
+            vec![
+                "sink",
+                "update",
+                "wf-1",
+                "s-1",
+                "--table",
+                "t",
+                "--url",
+                "https://a.example",
+            ],
+        ),
+        (
+            true,
+            vec![
+                "sink",
+                "update",
+                "wf-1",
+                "s-1",
+                "--header",
+                "A: b",
+                "--remove-header",
+                "C",
+            ],
+        ),
+        (true, vec!["sink", "schema", "--type", "http"]),
+        (false, vec!["sink", "schema", "--type", "queue"]),
+    ] {
+        let mut command = vec!["rtree", "workflow"];
+        command.extend(&args);
+        assert_eq!(Cli::try_parse_from(command).is_ok(), accepted, "{args:?}");
+    }
+}
+
+#[test]
 fn workflow_cron_and_time_ranges_are_validated() {
     assert!(Cli::try_parse_from([
         "rtree",

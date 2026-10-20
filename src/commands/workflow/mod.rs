@@ -1,3 +1,5 @@
+pub mod sink;
+
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use comfy_table::{Cell, CellAlignment};
@@ -5,6 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use self::sink::SinkArgs;
 use super::logs::parse_duration;
 use super::table_output::new_cli_table;
 use crate::cli::WorkflowTimeRange;
@@ -147,7 +150,7 @@ pub struct CreateWorkflow {
     pub sql: String,
     pub cron: Option<String>,
     pub enabled: Option<bool>,
-    pub sinks: Vec<String>,
+    pub sinks: SinkArgs,
 }
 
 pub struct UpdateWorkflow {
@@ -174,22 +177,11 @@ fn print_response<T: DeserializeOwned>(
     Ok(())
 }
 
-fn parse_sinks(sinks: &[String]) -> Result<Vec<Value>> {
-    sinks
-        .iter()
-        .map(|sink| match serde_json::from_str::<Value>(sink) {
-            Ok(value @ Value::Object(_)) => Ok(value),
-            _ => bail!(
-                "invalid --sink '{sink}': expected a JSON object such as {{\"type\":\"table\",\"settings\":{{\"database\":\"analytics\",\"table\":\"alerts\"}}}}"
-            ),
-        })
-        .collect()
-}
-
 fn create_body(request: CreateWorkflow) -> Result<Value> {
     if request.enabled.is_some() && request.cron.is_none() {
         bail!("--schedule-enabled requires --schedule-cron with a cron expression; manual-only workflows have no schedule to pause");
     }
+    let sinks = sink::build(&request.sinks, &request.database)?;
     let schedule = request
         .cron
         .map(|cron| json!({"cron": cron, "enabled": request.enabled.unwrap_or(true)}));
@@ -197,7 +189,7 @@ fn create_body(request: CreateWorkflow) -> Result<Value> {
         "name": request.name,
         "query": {"database": request.database, "sql": request.sql},
         "schedule": schedule,
-        "sinks": parse_sinks(&request.sinks)?,
+        "sinks": sinks,
     }))
 }
 
@@ -237,7 +229,9 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
         }
     }
     if let Some(sinks) = request.sinks {
-        body.insert("sinks".into(), Value::Array(parse_sinks(&sinks)?));
+        let sinks = sink::read_json_args(&sinks)?;
+        sink::validate(&sinks)?;
+        body.insert("sinks".into(), Value::Array(sinks));
     }
     if body.is_empty() {
         bail!("nothing to update: pass at least one of --name, --database, --sql, --schedule-cron, --schedule-enabled, --sink, or --clear-sinks");
@@ -701,7 +695,12 @@ mod tests {
             sql: "SELECT 1".into(),
             cron: None,
             enabled: None,
-            sinks: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
+            sinks: SinkArgs {
+                tables: vec![],
+                urls: vec![],
+                headers: vec![],
+                json: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
+            },
         })
         .unwrap();
         assert_eq!(
@@ -720,7 +719,12 @@ mod tests {
             sql: "SELECT 1".into(),
             cron: Some("* * * * *".into()),
             enabled: None,
-            sinks: vec!["[]".into()],
+            sinks: SinkArgs {
+                tables: vec![],
+                urls: vec![],
+                headers: vec![],
+                json: vec!["42".into()],
+            },
         })
         .unwrap_err();
         assert!(err.to_string().contains("invalid --sink"));
