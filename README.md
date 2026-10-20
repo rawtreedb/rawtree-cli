@@ -307,16 +307,16 @@ Workflows run saved SQL on demand or on a schedule and deliver results to sinks.
 
 ```sh
 rtree workflow list
-rtree workflow create --name errors --database analytics --interval-seconds 60 \
+rtree workflow create --name errors --database analytics --schedule-cron "* * * * *" \
   --sql "INSERT INTO error_counts SELECT count() FROM events WHERE level = 'error'"
 rtree workflow create --name on-demand --database analytics --sql "SELECT 1"
-rtree workflow create --name alerts --disabled --sql - \
+rtree workflow create --name alerts --schedule-cron "* * * * *" --schedule-enabled false --sql - \
   --sink '{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}' \
   < alerts.sql
 rtree workflow get <id>
-rtree workflow update <id> --interval-seconds 300
-rtree workflow update <id> --interval-seconds null
-rtree workflow update <id> --disable
+rtree workflow update <id> --schedule-cron "*/5 * * * *"
+rtree workflow update <id> --schedule-cron null
+rtree workflow update <id> --schedule-enabled false
 rtree workflow update <id> --clear-sinks
 rtree workflow delete <id>
 
@@ -333,17 +333,23 @@ the environment, or the saved defaults). API keys must have admin permission.
 The CLI sends `--database` and `--sql` inside the API's `query` object. On `update`,
 each flag changes only that query field; the other field stays unchanged.
 
-Creating a workflow without `--interval-seconds` makes it manual-only. The CLI
-explicitly sends `interval_seconds: null`, so the API's default interval is not used.
-Use `--interval-seconds null` to remove an existing schedule, matching the API's
-`interval_seconds: null`. The same value is accepted on `create`.
-An interval restores recurring execution, subject to the enabled state; use
-`--enable` as well if the workflow is paused. Omitting `--interval-seconds` on `update`
-preserves the current mode.
-`--disable` pauses scheduled runs while retaining the interval. Manual runs remain
-available in either mode, including while paused. Text output shows status as
-`active`, `paused`, or `manual`, the next scheduled run when available, and HTTP
-sink URLs.
+Creating a workflow without `--schedule-cron` makes it manual-only. The CLI explicitly
+sends `schedule: null`, preserving its manual-only default. Use `--schedule-cron null` to
+remove an existing schedule. The obsolete `--interval-seconds` flag is rejected.
+
+`--schedule-cron "*/5 * * * *"` runs every five minutes in UTC. Five-field expressions use
+minute, hour, day-of-month, month, and day-of-week; six fields include leading
+seconds. The API validates the expression. Requests nest cron and pause state in
+`schedule`, for example `{"schedule":{"cron":"*/5 * * * *","enabled":false}}`.
+
+On `update`, omitting `--schedule-cron` preserves the schedule. `--schedule-enabled false` pauses it and
+`--schedule-enabled true` resumes it without changing the cron expression. Adding cron to a
+manual-only workflow enables scheduling by default; changing an existing cron
+preserves its pause state unless you also pass `--schedule-enabled true|false`.
+`--schedule-enabled` accepts an explicit boolean and requires a cron expression on `create`. `--schedule-cron null` cannot be
+combined with pause/resume flags. Manual runs remain available while paused.
+Text output shows `active`, `paused`, or `manual`, the UTC cron expression, and
+the next scheduled run when available. JSON output preserves the API response.
 
 Sinks are JSON objects passed with `--sink`, up to five. Each has a `type` and a
 nested `settings` object: `{"database","table"}` for `table` sinks and
@@ -377,6 +383,24 @@ rtree cluster create \
   --min-size 2:8 \
   --max-size 64:256 \
   --idle-timeout-minutes 30
+# Or create a cluster with customer-owned S3 storage
+rtree cluster create \
+  --name customer-data \
+  --replicas 1 \
+  --min-size 2:8 \
+  --s3-storage-data-bucket acme-rawtree-data \
+  --s3-storage-data-path rawtree/data \
+  --s3-storage-backups-bucket acme-rawtree-backups \
+  --s3-storage-backups-path rawtree/backups \
+  --s3-storage-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access \
+  --s3-storage-access-external-id rawtree-example
+# Or choose explicit cluster identity with RawTree-managed default storage
+rtree cluster create \
+  --name database-storage \
+  --replicas 1 \
+  --min-size 2:8 \
+  --s3-storage-access-external-id rawtree-database-access \
+  --s3-storage-access-resource-tag rawtree-customer-database
 rtree cluster use production
 rtree cluster status production
 rtree cluster update production --idle-timeout-minutes 60
@@ -393,6 +417,59 @@ catalog. Run `rtree cluster sizes` to see the currently available sizes; add
 `--json` for a machine-readable response.
 `--idle-timeout-minutes` is optional on create and update; omit it to use the
 server default on create, and pass `0` to disable automatic idling.
+
+Cluster creation forwards `--s3-storage-access-external-id` and `--s3-storage-access-resource-tag` when supplied.
+The API generates omitted identity values independently as `rawtree-<UUID>`
+using secure randomness and returns the saved values. The CLI does not generate
+identity values. Both are immutable after creation.
+Custom cluster storage requires `--s3-storage-access-external-id` to match the customer IAM role's
+trust policy. `--s3-storage-access-resource-tag` may be supplied or generated.
+
+Flag names follow the API field paths:
+
+| Flag | API field | Available on |
+| --- | --- | --- |
+| `--s3-storage-data-bucket` | `s3_storage.data.bucket` | Cluster and database creation |
+| `--s3-storage-data-path` | `s3_storage.data.path` | Cluster and database creation |
+| `--s3-storage-backups-bucket` | `s3_storage.backups.bucket` | Cluster and database creation |
+| `--s3-storage-backups-path` | `s3_storage.backups.path` | Cluster and database creation |
+| `--s3-storage-role-arn` | `s3_storage.role_arn` | Cluster and database creation |
+| `--s3-storage-access-external-id` | `s3_storage_access.external_id` | Cluster creation only |
+| `--s3-storage-access-resource-tag` | `s3_storage_access.resource_tag` | Cluster creation only |
+
+Cluster and database creation share `--s3-storage-data-bucket`, `--s3-storage-backups-bucket`, and
+`--s3-storage-role-arn`; all three are required if any destination or role option is supplied. The optional
+`--s3-storage-data-path` and `--s3-storage-backups-path` specify object-key prefixes.
+
+```sh
+rtree --org acme --cluster production database create analytics \
+  --s3-storage-data-bucket acme-rawtree-data \
+  --s3-storage-backups-bucket acme-rawtree-backups \
+  --s3-storage-role-arn arn:aws:iam::123456789012:role/RawTreeS3Access
+```
+
+Database creation reuses the cluster's saved identity: no external ID or tag is
+accepted on database commands. Use `rtree cluster status production` to read the
+External ID for the IAM trust policy and the resource tag value. Tag eligible
+customer buckets and roles with `rawtree.com/cluster=<resource-tag>`.
+
+These flags configure new resources; the API verifies access and provisions
+storage. The CLI does not create AWS buckets or IAM roles or migrate existing
+data. Omitting S3 options uses RawTree-managed cluster storage or, for a database,
+inherits its cluster's storage.
+
+The API payload has an `s3_storage` object containing `data` and `backups`
+destinations (each with `bucket` and optional `path`), plus `role_arn`. List/status
+JSON always includes both destinations with explicit paths for custom storage
+and preserves cluster `s3_storage_access.external_id` and
+`s3_storage_access.resource_tag`; role ARNs and credentials are not returned. Older clusters without
+saved identity show `not configured` in status output.
+
+The former `--s3-data-*`, `--s3-backup-*`, `--s3-backups-*`, `--s3-role-arn`,
+`--s3-storage-external-id`, `--s3-storage-resource-tag`, and legacy database
+identity flags are rejected. This CLI targets
+[Platform PR #1482](https://github.com/rawtreedb/rawtree-platform/pull/1482) and
+must be released with that server contract.
 
 Cluster lifecycle and provisioning changes are asynchronous. The `create`,
 `stop`, `resume`, and `delete` commands return as soon as the API accepts the

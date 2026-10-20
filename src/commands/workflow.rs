@@ -44,23 +44,27 @@ struct Workflow {
     id: String,
     name: String,
     query: WorkflowQuery,
-    enabled: bool,
     revision: i64,
-    /// `None` for manual-only workflows, which have no schedule.
-    interval_seconds: Option<i64>,
-    next_run_at: Option<String>,
+    schedule: Option<WorkflowSchedule>,
     created_at: String,
     updated_at: String,
     #[serde(default)]
     sinks: Vec<Value>,
 }
 
+#[derive(Deserialize)]
+struct WorkflowSchedule {
+    cron: String,
+    enabled: bool,
+    next_run_at: Option<String>,
+}
+
 impl Workflow {
     fn status(&self) -> &'static str {
-        match (self.interval_seconds, self.enabled) {
-            (None, _) => "manual",
-            (Some(_), true) => "active",
-            (Some(_), false) => "paused",
+        match &self.schedule {
+            None => "manual",
+            Some(schedule) if schedule.enabled => "active",
+            Some(_) => "paused",
         }
     }
 }
@@ -141,8 +145,8 @@ pub struct CreateWorkflow {
     pub name: String,
     pub database: String,
     pub sql: String,
-    pub interval_seconds: Option<u32>,
-    pub disabled: bool,
+    pub cron: Option<String>,
+    pub enabled: Option<bool>,
     pub sinks: Vec<String>,
 }
 
@@ -150,7 +154,7 @@ pub struct UpdateWorkflow {
     pub name: Option<String>,
     pub database: Option<String>,
     pub sql: Option<String>,
-    pub interval_seconds: Option<Option<u32>>,
+    pub cron: Option<Option<String>>,
     pub enabled: Option<bool>,
     pub sinks: Option<Vec<String>>,
 }
@@ -183,11 +187,16 @@ fn parse_sinks(sinks: &[String]) -> Result<Vec<Value>> {
 }
 
 fn create_body(request: CreateWorkflow) -> Result<Value> {
+    if request.enabled.is_some() && request.cron.is_none() {
+        bail!("--schedule-enabled requires --schedule-cron with a cron expression; manual-only workflows have no schedule to pause");
+    }
+    let schedule = request
+        .cron
+        .map(|cron| json!({"cron": cron, "enabled": request.enabled.unwrap_or(true)}));
     Ok(json!({
         "name": request.name,
         "query": {"database": request.database, "sql": request.sql},
-        "enabled": !request.disabled,
-        "interval_seconds": request.interval_seconds,
+        "schedule": schedule,
         "sinks": parse_sinks(&request.sinks)?,
     }))
 }
@@ -207,17 +216,31 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
     if !query.is_empty() {
         body.insert("query".into(), Value::Object(query));
     }
-    if let Some(enabled) = request.enabled {
-        body.insert("enabled".into(), json!(enabled));
-    }
-    if let Some(interval) = request.interval_seconds {
-        body.insert("interval_seconds".into(), json!(interval));
+    match request.cron {
+        Some(None) => {
+            if request.enabled.is_some() {
+                bail!("--schedule-cron null cannot be combined with --schedule-enabled");
+            }
+            body.insert("schedule".into(), Value::Null);
+        }
+        cron => {
+            let mut schedule = Map::new();
+            if let Some(Some(cron)) = cron {
+                schedule.insert("cron".into(), json!(cron));
+            }
+            if let Some(enabled) = request.enabled {
+                schedule.insert("enabled".into(), json!(enabled));
+            }
+            if !schedule.is_empty() {
+                body.insert("schedule".into(), Value::Object(schedule));
+            }
+        }
     }
     if let Some(sinks) = request.sinks {
         body.insert("sinks".into(), Value::Array(parse_sinks(&sinks)?));
     }
     if body.is_empty() {
-        bail!("nothing to update: pass at least one of --name, --database, --sql, --interval-seconds, --enable, --disable, --sink, or --clear-sinks");
+        bail!("nothing to update: pass at least one of --name, --database, --sql, --schedule-cron, --schedule-enabled, --sink, or --clear-sinks");
     }
     Ok(Value::Object(body))
 }
@@ -298,15 +321,6 @@ fn format_ms(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
-fn format_interval(seconds: Option<i64>) -> String {
-    match seconds {
-        None => "—".into(),
-        Some(s) if s % 3600 == 0 => format!("{}h", s / 3600),
-        Some(s) if s % 60 == 0 => format!("{}m", s / 60),
-        Some(s) => format!("{s}s"),
-    }
-}
-
 fn describe_sink(sink: &Value) -> String {
     let id = sink["id"].as_str().unwrap_or("—");
     let settings = &sink["settings"];
@@ -343,10 +357,21 @@ fn print_workflow(workflow: &Workflow) {
     println!("  name:     {}", workflow.name);
     println!("  database: {}", workflow.query.database);
     println!("  status:   {}", workflow.status());
-    println!("  interval: {}", format_interval(workflow.interval_seconds));
+    println!(
+        "  cron:     {}",
+        workflow
+            .schedule
+            .as_ref()
+            .map(|s| s.cron.as_str())
+            .unwrap_or("—")
+    );
     println!(
         "  next run: {}",
-        workflow.next_run_at.as_deref().unwrap_or("—")
+        workflow
+            .schedule
+            .as_ref()
+            .and_then(|s| s.next_run_at.as_deref())
+            .unwrap_or("—")
     );
     println!("  revision: {}", workflow.revision);
     println!("  created:  {}", workflow.created_at);
@@ -374,16 +399,34 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
         }
         let mut table = new_cli_table();
         table.set_header(vec![
-            "name", "database", "status", "interval", "next run", "sinks", "updated", "id",
+            "name",
+            "database",
+            "status",
+            "cron (UTC)",
+            "next run",
+            "sinks",
+            "updated",
+            "id",
         ]);
         for workflow in &resp.workflows {
             table.add_row(vec![
                 Cell::new(&workflow.name),
                 Cell::new(&workflow.query.database),
                 Cell::new(workflow.status()),
-                Cell::new(format_interval(workflow.interval_seconds))
-                    .set_alignment(CellAlignment::Right),
-                Cell::new(workflow.next_run_at.as_deref().unwrap_or("—")),
+                Cell::new(
+                    workflow
+                        .schedule
+                        .as_ref()
+                        .map(|s| s.cron.as_str())
+                        .unwrap_or("—"),
+                ),
+                Cell::new(
+                    workflow
+                        .schedule
+                        .as_ref()
+                        .and_then(|s| s.next_run_at.as_deref())
+                        .unwrap_or("—"),
+                ),
                 Cell::new(workflow.sinks.len()).set_alignment(CellAlignment::Right),
                 Cell::new(&workflow.updated_at),
                 Cell::new(&workflow.id),
@@ -651,13 +694,13 @@ mod tests {
     }
 
     #[test]
-    fn create_body_sends_defaults_explicitly_and_rejects_non_object_sinks() {
+    fn create_body_sends_manual_schedule_and_rejects_non_object_sinks() {
         let body = create_body(CreateWorkflow {
             name: "alerts".into(),
             database: "analytics".into(),
             sql: "SELECT 1".into(),
-            interval_seconds: None,
-            disabled: true,
+            cron: None,
+            enabled: None,
             sinks: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
         })
         .unwrap();
@@ -666,8 +709,7 @@ mod tests {
             json!({
                 "name": "alerts",
                 "query": {"database": "analytics", "sql": "SELECT 1"},
-                "enabled": false,
-                "interval_seconds": null,
+                "schedule": null,
                 "sinks": [{"type": "table", "settings": {"database": "a", "table": "b"}}],
             })
         );
@@ -676,8 +718,8 @@ mod tests {
             name: "alerts".into(),
             database: "analytics".into(),
             sql: "SELECT 1".into(),
-            interval_seconds: Some(60),
-            disabled: false,
+            cron: Some("* * * * *".into()),
+            enabled: None,
             sinks: vec!["[]".into()],
         })
         .unwrap_err();
@@ -690,7 +732,7 @@ mod tests {
             name: None,
             database: None,
             sql: None,
-            interval_seconds: None,
+            cron: None,
             enabled: None,
             sinks: None,
         };
@@ -700,34 +742,26 @@ mod tests {
             name: None,
             database: None,
             sql: None,
-            interval_seconds: Some(Some(30)),
+            cron: Some(Some("*/30 * * * * *".into())),
             enabled: Some(false),
             sinks: Some(vec![]),
         })
         .unwrap();
         assert_eq!(
             body,
-            json!({"interval_seconds": 30, "enabled": false, "sinks": []})
+            json!({"schedule": {"cron": "*/30 * * * * *", "enabled": false}, "sinks": []})
         );
 
         let body = update_body(UpdateWorkflow {
             name: None,
             database: None,
             sql: Some("SELECT 2".into()),
-            interval_seconds: None,
+            cron: None,
             enabled: None,
             sinks: None,
         })
         .unwrap();
         assert_eq!(body, json!({"query": {"sql": "SELECT 2"}}));
-    }
-
-    #[test]
-    fn format_interval_shows_only_scheduled_durations() {
-        assert_eq!(format_interval(None), "—");
-        assert_eq!(format_interval(Some(7200)), "2h");
-        assert_eq!(format_interval(Some(120)), "2m");
-        assert_eq!(format_interval(Some(45)), "45s");
     }
 
     #[test]
