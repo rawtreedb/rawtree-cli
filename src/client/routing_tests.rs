@@ -522,27 +522,48 @@ fn public_origins_use_deployment_hosts_and_keep_paths_queries_and_headers() {
 }
 
 #[test]
-fn complete_region_metadata_wins_over_gateway_duplicates_in_either_order() {
-    for gateway_first in [true, false] {
-        let mut responses = multi_region_catalog("1234abcd");
-        responses[2].1["clusters"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"id":"eu","name":"europe"}));
-        if !gateway_first {
-            responses[1].1["regions"].as_array_mut().unwrap().swap(0, 1);
-            responses.swap(2, 3);
+fn owning_catalog_wins_over_duplicates_in_either_order() {
+    for source in ["gateway", "same-region-deployment"] {
+        for region_id in [Value::Null, json!("eu")] {
+            for owner_first in [true, false] {
+                let mut responses = multi_region_catalog("1234abcd");
+                if source == "same-region-deployment" {
+                    responses[1].1["regions"][3]["enabled"] = json!(false);
+                    responses[1].1["regions"][0] = json!({
+                        "id":"other", "name":"Other Ireland", "cloud_region":"eu-west-1",
+                        "deployment_id":"abcd1234", "organization_id":ORG, "enabled":true
+                    });
+                }
+                responses[2].1["clusters"] = json!([{
+                    "id":"eu", "name":"europe", "region_id":region_id,
+                    "deployment_id":"stale", "cloud_region":"us-east-1", "status":"stale"
+                }]);
+                for cluster in responses[3].1["clusters"].as_array_mut().unwrap() {
+                    cluster["status"] = json!("running");
+                }
+                if owner_first {
+                    responses[1].1["regions"].as_array_mut().unwrap().swap(0, 1);
+                    responses.swap(2, 3);
+                }
+                responses.push(("200 OK", json!({})));
+                let (base, server) = server(responses);
+                let client = ApiClient::new(base, Some("session.fixture".into()));
+                let catalog: Value = client.get("/v1/clusters?organization=acme").unwrap();
+                assert_eq!(catalog["clusters"].as_array().unwrap().len(), 1);
+                assert_eq!(
+                    catalog["clusters"][0]["s3_storage"],
+                    json!({"data":{"bucket":"data"}})
+                );
+                assert_eq!(catalog["clusters"][0]["status"], "running");
+                let _: Value = client
+                    .get("/v1/databases?organization=acme&cluster=europe")
+                    .unwrap();
+                let requests = server.join().unwrap();
+                let headers = &requests.last().unwrap().headers;
+                assert_eq!(headers["x-rawtree-region"], "eu-west-1");
+                assert_eq!(headers["x-rawtree-deployment-id"], "1234abcd");
+            }
         }
-        responses.push(("200 OK", json!({})));
-        let (base, server) = server(responses);
-        let client = ApiClient::new(base, Some("session.fixture".into()));
-        let _: Value = client
-            .get("/v1/databases?organization=acme&cluster=europe")
-            .unwrap();
-        assert_eq!(
-            server.join().unwrap().last().unwrap().headers["x-rawtree-region"],
-            "eu-west-1"
-        );
     }
 }
 

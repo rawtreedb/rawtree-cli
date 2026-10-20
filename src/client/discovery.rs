@@ -10,6 +10,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, time::Instant};
 
+// Metadata identifies placement; only the owning catalog supplies authoritative fields.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CatalogAuthority {
+    Fallback,
+    RegionMetadata,
+    OwningDeployment,
+}
+
 #[derive(Deserialize)]
 struct Organization {
     organization_id: String,
@@ -115,19 +123,34 @@ impl ApiClient {
                         .get("region_id")
                         .and_then(Value::as_str)
                         .filter(|id| !id.is_empty());
+                    let mut authority = CatalogAuthority::Fallback;
                     if let Some(region_id) = region_id {
                         let region = regions.get(region_id).with_context(|| {
                             format!("Region '{region_id}' for cluster '{id}' was not found.")
                         })?;
+                        let owns_cluster = match deployment.as_ref() {
+                            Some((id, cloud_region)) => {
+                                region.deployment_id.as_ref() == Some(id)
+                                    && region.cloud_region == *cloud_region
+                            }
+                            None => region.deployment_id.is_none(),
+                        };
+                        authority = if owns_cluster {
+                            CatalogAuthority::OwningDeployment
+                        } else {
+                            CatalogAuthority::RegionMetadata
+                        };
                         cluster["deployment_id"] = json!(region.deployment_id);
                         cluster["cloud_region"] = json!(region.cloud_region);
                     }
-                    // A gateway fallback must never replace an authoritative regional record.
-                    match positions.get(id) {
-                        Some(&index) if region_id.is_some() => clusters[index] = cluster,
+                    match positions.get_mut(id) {
+                        Some((index, previous)) if authority > *previous => {
+                            clusters[*index] = cluster;
+                            *previous = authority;
+                        }
                         Some(_) => {}
                         None => {
-                            positions.insert(id.to_owned(), clusters.len());
+                            positions.insert(id.to_owned(), (clusters.len(), authority));
                             clusters.push(cluster);
                         }
                     }
