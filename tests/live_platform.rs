@@ -4,7 +4,8 @@ mod storage;
 mod workflows;
 
 use std::env;
-use std::process::{Command, Output};
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
@@ -30,7 +31,7 @@ impl LiveCli {
         }
     }
 
-    fn execute(&self, args: &[&str], token: Option<&str>) -> Output {
+    fn command(&self, args: &[&str], token: Option<&str>) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rtree"));
         for (name, _) in env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
             command.env_remove(name);
@@ -45,7 +46,11 @@ impl LiveCli {
         if let Some(token) = token {
             command.env("RAWTREE_API_KEY", token);
         }
-        command.output().expect("run rtree")
+        command
+    }
+
+    fn execute(&self, args: &[&str], token: Option<&str>) -> Output {
+        self.command(args, token).output().expect("run rtree")
     }
 
     fn json(&self, args: &[&str]) -> Value {
@@ -68,23 +73,45 @@ impl LiveCli {
 fn logout_removes_saved_authentication_against_real_platform() {
     let cli = LiveCli::from_environment();
     let email = env::var("RAWTREE_LIVE_EMAIL").expect("RAWTREE_LIVE_EMAIL is required");
-    let password = env::var("RAWTREE_LIVE_PASSWORD").expect("RAWTREE_LIVE_PASSWORD is required");
     let config_path = cli.home.path().join(".config/rtree/config.json");
     assert!(!config_path.exists());
-    let login = cli.json_with_token(
-        &[
-            "--org",
-            &cli.organization,
-            "--cluster",
-            &cli.cluster,
-            "login",
-            "--email",
-            &email,
-            "--password",
-            &password,
-        ],
-        None,
-    );
+    let mut child = cli
+        .command(
+            &[
+                "--org",
+                &cli.organization,
+                "--cluster",
+                &cli.cluster,
+                "login",
+                "--no-browser",
+                "--database",
+                "default",
+                "--timeout-seconds",
+                "60",
+            ],
+            None,
+        )
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start browser login");
+    let mut approval_event = String::new();
+    BufReader::new(child.stderr.take().expect("login events"))
+        .read_line(&mut approval_event)
+        .expect("read device approval event");
+    let event: Value = serde_json::from_str(&approval_event).expect("device approval JSON");
+    assert_eq!(event["event"], "device_approval_required");
+    reqwest::blocking::Client::new()
+        .post(format!("{}/v1/auth/cli/device/approve", cli.url))
+        .bearer_auth(&cli.token)
+        .json(&json!({"user_code": event["user_code"]}))
+        .send()
+        .expect("approve device")
+        .error_for_status()
+        .expect("device approved");
+    let output = child.wait_with_output().expect("finish browser login");
+    assert!(output.status.success(), "browser login failed");
+    let login: Value = serde_json::from_slice(&output.stdout).expect("login JSON");
     assert_eq!(login["status"], "logged_in");
     assert_eq!(login["email"], email);
 

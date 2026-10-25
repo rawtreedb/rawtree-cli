@@ -100,11 +100,6 @@ pub enum Command {
         after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\",\"cluster\":\"<name>\"}\n\nNon-interactive login:\n  JSON is automatic when stdin is not a terminal. Read the device approval link\n  from a JSON event on stderr while login is running. Missing selections return\n  JSON choices on stdout and exit code 2. Rerun with --org, --cluster, or\n  --database; each retry requires approval again."
     )]
     Login {
-        #[arg(long, hide = true)]
-        email: Option<String>,
-        /// Password (prompted interactively if omitted)
-        #[arg(long, requires = "email", hide = true)]
-        password: Option<String>,
         /// Do not try to open the browser automatically
         #[arg(long, default_value_t = false)]
         no_browser: bool,

@@ -1,6 +1,6 @@
 mod selection;
 
-use selection::{resolve_auth_selection, resolve_browser_auth_selection, SelectionError};
+use selection::{resolve_browser_auth_selection, SelectionError};
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -253,29 +253,6 @@ fn map_config_read_error(err: anyhow::Error) -> anyhow::Error {
     output::coded_error("config_read_failed", format!("{:#}", err), 1)
 }
 
-fn update_and_save_config(
-    client: &ApiClient,
-    resp: &AuthResponse,
-    cli_org: Option<&str>,
-    cli_cluster: Option<&str>,
-    cli_database: Option<&str>,
-) -> Result<AuthSelection> {
-    let mut cfg = config::load()?;
-    let env_org = std::env::var("RAWTREE_ORG").ok();
-    let selection = resolve_auth_selection(
-        &client.base_url,
-        &resp.token,
-        cli_org,
-        cli_cluster,
-        cli_database,
-        env_org.as_deref(),
-        cfg.default_organization.as_deref(),
-    )?;
-    apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
-    config::save(&cfg)?;
-    Ok(selection)
-}
-
 fn update_and_save_browser_config(
     client: &ApiClient,
     resp: &AuthResponse,
@@ -320,48 +297,6 @@ fn print_selected_context(selection: &AuthSelection) {
 
 fn clear_auth_config(cfg: &mut config::Config) {
     *cfg = config::Config::default();
-}
-
-pub fn login(
-    client: &ApiClient,
-    email: &str,
-    password: &str,
-    organization: Option<String>,
-    cluster: Option<String>,
-    database: Option<String>,
-    json_mode: bool,
-) -> Result<()> {
-    let resp: AuthResponse = client.post(
-        "/v1/auth/login",
-        &json!({"email": email, "password": password}),
-    )?;
-
-    let selection = update_and_save_config(
-        client,
-        &resp,
-        organization.as_deref(),
-        cluster.as_deref(),
-        database.as_deref(),
-    )?;
-    let selected_organization = selection.organization.clone();
-    let selected_cluster = selection.cluster.clone();
-    let selected_database = selection.database.clone();
-
-    output::print_result(
-        &json!({
-            "email": resp.email,
-            "status": "logged_in",
-            "selected_organization": selected_organization,
-            "selected_cluster": selected_cluster,
-            "selected_database": selected_database,
-        }),
-        json_mode,
-        |_| {
-            println!("Logged in as {}.", resp.email);
-            print_selected_context(&selection);
-        },
-    );
-    Ok(())
 }
 
 pub fn login_with_api_key(
