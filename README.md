@@ -543,8 +543,10 @@ To run the real test locally, start Platform from its checkout with
 `RAWTREE_LIVE_API_URL=http://localhost:18087` and the
 `RAWTREE_LIVE_SESSION_TOKEN`, `RAWTREE_LIVE_ORGANIZATION`, and
 `RAWTREE_LIVE_CLUSTER` values from that checkout's ignored `.env.local`.
-Also set `RAWTREE_LIVE_EMAIL` and `RAWTREE_LIVE_PASSWORD` from
-`RAWTREE_LOCAL_BOOTSTRAP_EMAIL` and `RAWTREE_LOCAL_BOOTSTRAP_PASSWORD` in the same file.
+Also set `RAWTREE_LIVE_EMAIL` from
+`RAWTREE_LOCAL_BOOTSTRAP_EMAIL` in the same file. The login test approves the
+CLI device challenge with that bootstrap session, then checks saved-session use
+and logout against the real API.
 Run `cargo test --locked --test live_platform -- --ignored` in this checkout.
 
 Run locally:

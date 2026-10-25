@@ -199,26 +199,12 @@ fn effective_json_mode(cli: &Cli, stdin_is_terminal: bool) -> bool {
     cli.json || (matches!(cli.command, Command::Login { .. }) && !stdin_is_terminal)
 }
 
-fn prompt_password_if_missing(password: Option<String>) -> Result<String> {
-    match password {
-        Some(p) => Ok(p),
-        None => {
-            let p = rpassword::prompt_password("Password: ")?;
-            if p.is_empty() {
-                anyhow::bail!("password cannot be empty");
-            }
-            Ok(p)
-        }
-    }
-}
-
 fn should_prompt_for_login_method(
-    email: Option<&str>,
     json_mode: bool,
     stdin_is_terminal: bool,
     stdout_is_terminal: bool,
 ) -> bool {
-    email.is_none() && !json_mode && stdin_is_terminal && stdout_is_terminal
+    !json_mode && stdin_is_terminal && stdout_is_terminal
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
@@ -239,18 +225,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
     match command {
         Command::Login {
-            email,
-            password,
             no_browser,
             timeout_seconds,
             database,
         } => {
             if let Some(api_key) = cli_api_key {
-                if email.is_some() || password.is_some() {
-                    anyhow::bail!(
-                        "--api-key cannot be used with --email or --password during login"
-                    );
-                }
                 commands::auth::login_with_api_key(
                     &client,
                     &api_key,
@@ -260,7 +239,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     json,
                 )
             } else if should_prompt_for_login_method(
-                email.as_deref(),
                 json,
                 io::stdin().is_terminal(),
                 io::stdout().is_terminal(),
@@ -289,17 +267,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         )
                     }
                 }
-            } else if let Some(email) = email {
-                let password = prompt_password_if_missing(password)?;
-                commands::auth::login(
-                    &client,
-                    &email,
-                    &password,
-                    cli_org.clone(),
-                    login_cluster.clone(),
-                    database,
-                    json,
-                )
             } else {
                 return commands::auth::login_with_browser(
                     &client,
@@ -914,24 +881,18 @@ mod tests {
 
     #[test]
     fn plain_terminal_login_prompts_for_login_method() {
-        assert!(should_prompt_for_login_method(None, false, true, true));
+        assert!(should_prompt_for_login_method(false, true, true));
     }
 
     #[test]
     fn explicit_or_non_interactive_login_skips_login_method_prompt() {
-        assert!(!should_prompt_for_login_method(
-            Some("user@example.com"),
-            false,
-            true,
-            true
-        ));
-        assert!(!should_prompt_for_login_method(None, true, true, true));
-        assert!(!should_prompt_for_login_method(None, false, false, true));
+        assert!(!should_prompt_for_login_method(true, true, true));
+        assert!(!should_prompt_for_login_method(false, false, true));
     }
 
     #[test]
     fn redirected_stdout_skips_login_method_prompt() {
-        assert!(!should_prompt_for_login_method(None, false, true, false));
+        assert!(!should_prompt_for_login_method(false, true, false));
     }
 
     #[test]

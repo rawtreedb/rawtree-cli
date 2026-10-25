@@ -259,34 +259,24 @@ fn login_with_token_flag_is_rejected() {
 }
 
 #[test]
-fn login_with_password_requires_email() {
-    let result = Cli::try_parse_from(["rtree", "login", "--password", "secret123"]);
-    assert!(result.is_err(), "password without email should fail");
+fn password_login_flags_are_rejected() {
+    for flags in [
+        vec!["--email", "user@example.com"],
+        vec!["--password", "secret"],
+        vec!["--email", "user@example.com", "--password", "secret"],
+    ] {
+        let mut args = vec!["rtree", "login"];
+        args.extend(flags);
+        assert!(Cli::try_parse_from(args).is_err());
+    }
 }
 
 #[test]
-fn login_with_api_key_conflicts_with_email() {
-    let cli = Cli::try_parse_from([
-        "rtree",
-        "login",
-        "--api-key",
-        "rt_abc123",
-        "--email",
-        "user@example.com",
-    ])
-    .expect("global --api-key is parsed before runtime login validation");
-    assert_eq!(cli.api_key.as_deref(), Some("rt_abc123"));
-}
-
-#[test]
-fn login_with_database_without_email_is_allowed_for_interactive_flow() {
+fn login_with_database_is_allowed_for_interactive_flow() {
     let cli = Cli::try_parse_from(["rtree", "login", "--database", "analytics"])
         .expect("login with --database should parse");
     match cli.command {
-        Command::Login {
-            email, database, ..
-        } => {
-            assert!(email.is_none());
+        Command::Login { database, .. } => {
             assert_eq!(database.as_deref(), Some("analytics"));
         }
         _ => panic!("expected login command"),
