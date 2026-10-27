@@ -92,6 +92,8 @@ struct ApiErrorResponse {
 
 enum CliDeviceTokenPoll {
     Pending,
+    /// The auth endpoints are rate limited per IP; wait `Retry-After` (if sent) and poll again.
+    RateLimited(Option<Duration>),
     Approved(CliDeviceTokenResponse),
 }
 
@@ -408,7 +410,12 @@ fn poll_cli_device_token(base_url: &str, device_code: &str) -> Result<CliDeviceT
 
     let status = response.status();
     let status_code = status.as_u16();
+    let retry_after = retry_after(response.headers());
     let body = response.text().context("failed to read response body")?;
+
+    if status_code == 429 {
+        return Ok(CliDeviceTokenPoll::RateLimited(retry_after));
+    }
 
     if status.is_success() {
         let parsed = serde_json::from_str::<CliDeviceTokenResponse>(&body)
@@ -427,6 +434,26 @@ fn poll_cli_device_token(base_url: &str, device_code: &str) -> Result<CliDeviceT
     }
 
     Err(format_api_error(status_code, &body))
+}
+
+// shortcut: only the delta-seconds form of Retry-After is parsed (what the API sends); an
+// HTTP-date falls back to the poll interval.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let seconds = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds))
+}
+
+fn login_timed_out(total_timeout_seconds: u64) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Browser login timed out after {} seconds. Run `rtree login` to try again.",
+        total_timeout_seconds
+    )
 }
 
 pub fn login_with_browser(
@@ -526,12 +553,20 @@ pub fn login_with_browser(
             }
             CliDeviceTokenPoll::Pending => {
                 if Instant::now() >= deadline {
-                    anyhow::bail!(
-                        "Browser login timed out after {} seconds. Run `rtree login` to try again.",
-                        total_timeout_seconds
-                    );
+                    return Err(login_timed_out(total_timeout_seconds));
                 }
                 thread::sleep(Duration::from_secs(poll_interval_seconds));
+            }
+            CliDeviceTokenPoll::RateLimited(retry_after) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(login_timed_out(total_timeout_seconds));
+                }
+                let wait = retry_after
+                    .unwrap_or_default()
+                    .max(Duration::from_secs(poll_interval_seconds))
+                    .min(deadline - now);
+                thread::sleep(wait);
             }
         }
     }
