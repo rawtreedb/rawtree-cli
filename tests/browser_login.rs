@@ -248,6 +248,52 @@ fn rate_limited_polling_waits_for_retry_after_and_keeps_polling() {
 }
 
 #[test]
+fn paused_cluster_is_resumed_before_database_selection() {
+    let mut responses = approved_login();
+    responses.extend([
+        organizations(&["team"]),
+        organizations(&["team"]),
+        regions(),
+        clusters(&["production"]),
+        (
+            "GET /v1/databases?organization=team&cluster=production".into(),
+            "409 Conflict",
+            json!({"error": "cluster_paused", "message": "Cluster is paused.", "hint": "Resume the cluster before sending data requests."}),
+        ),
+        (
+            "POST /v1/clusters/production/resume?organization=team".into(),
+            "200 OK",
+            json!({"id": "production", "name": "production", "status": {"phase": "resuming", "ready": false}}),
+        ),
+        // The resume POST clears the client's routing cache, so the next request re-discovers it.
+        organizations(&["team"]),
+        regions(),
+        clusters(&["production"]),
+        databases(&["analytics"]),
+    ]);
+    let (output, saved, _) = common::run_cli(
+        &responses,
+        &["login", "--org", "team", "--cluster", "production"],
+        &original_config(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stderr_records(&output),
+        vec![
+            approval_event(600),
+            json!({"event": "cluster_resuming", "organization": "team", "cluster": "production"})
+        ]
+    );
+    assert_eq!(saved["token"], "new-session-fixture");
+    assert_eq!(saved["cluster"], "production");
+    assert_eq!(saved["database"], "analytics");
+}
+
+#[test]
 fn explicit_json_and_selectors_complete_login_with_no_browser() {
     let mut responses = approved_login();
     responses.extend([
