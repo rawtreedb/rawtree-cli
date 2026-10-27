@@ -1,7 +1,10 @@
 use std::io::{self, Write};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use super::{read_selection_input, AuthSelection};
 use crate::{client::ApiClient, org};
@@ -112,8 +115,13 @@ struct ListDatabasesResponse {
 
 #[derive(Deserialize)]
 struct ClusterSelectionItem {
+    id: String,
     name: String,
 }
+
+/// How long login waits for a paused cluster it resumed to accept data requests again.
+const CLUSTER_RESUME_TIMEOUT: Duration = Duration::from_secs(300);
+const CLUSTER_RESUME_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 struct ListClustersResponse {
@@ -171,10 +179,69 @@ fn list_databases_for_organization(
 fn list_clusters_for_organization(
     client: &ApiClient,
     organization_name: &str,
-) -> Result<Vec<String>> {
+) -> Result<Vec<ClusterSelectionItem>> {
     let path = org::scoped_path("/v1/clusters", Some(organization_name), None);
     let resp: ListClustersResponse = client.get(&path)?;
-    Ok(resp.clusters.into_iter().map(|item| item.name).collect())
+    Ok(resp.clusters)
+}
+
+// shortcut: ApiClient flattens server errors to text, so this matches the rendered 409 message;
+// switch to the `cluster_paused` error code if the client starts preserving it.
+fn is_cluster_paused(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}");
+    message.contains("(409)") && message.contains("Cluster is paused")
+}
+
+/// Lists databases, resuming the selected cluster first if it is paused (idle clusters
+/// auto-pause), then waiting until it serves data requests again.
+fn list_databases_resuming_cluster(
+    client: &ApiClient,
+    organization: &str,
+    cluster: Option<&ClusterSelectionItem>,
+    json_mode: bool,
+) -> Result<Vec<String>> {
+    let cluster_name = cluster.map(|item| item.name.as_str());
+    let first = list_databases_for_organization(client, organization, cluster_name);
+    let (Err(error), Some(cluster)) = (&first, cluster) else {
+        return first;
+    };
+    if !is_cluster_paused(error) {
+        return first;
+    }
+
+    if json_mode {
+        eprintln!(
+            "{}",
+            json!({"event": "cluster_resuming", "organization": organization, "cluster": cluster.name})
+        );
+    } else {
+        println!(
+            "Cluster '{}' is paused. Resuming it and waiting until it is ready...",
+            cluster.name
+        );
+    }
+    let path = format!(
+        "/v1/clusters/{}/resume?organization={}",
+        urlencoding::encode(&cluster.id),
+        urlencoding::encode(organization)
+    );
+    client
+        .post_empty::<Value>(&path)
+        .with_context(|| format!("failed to resume cluster '{}'", cluster.name))?;
+
+    let deadline = Instant::now() + CLUSTER_RESUME_TIMEOUT;
+    loop {
+        match list_databases_for_organization(client, organization, cluster_name) {
+            // While resuming, the API answers 409 (still paused) or 503 (no healthy upstream yet).
+            Err(error)
+                if (is_cluster_paused(&error) || format!("{error:#}").contains("(503)"))
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(CLUSTER_RESUME_POLL_INTERVAL);
+            }
+            result => return result,
+        }
+    }
 }
 
 pub(super) fn resolve_browser_auth_selection(
@@ -233,18 +300,22 @@ pub(super) fn resolve_browser_auth_selection(
     let cluster = select_or_prompt(
         Choices::Cluster {
             organization: organization.clone(),
-            clusters,
+            clusters: clusters.iter().map(|item| item.name.clone()).collect(),
         },
         cli_cluster,
         json_mode,
     )?;
-    let databases = list_databases_for_organization(&client, &organization, cluster.as_deref())
-        .with_context(|| {
-            format!(
-                "failed to list databases for organization '{}'",
-                organization
-            )
-        });
+    let selected_cluster = cluster
+        .as_deref()
+        .and_then(|name| clusters.iter().find(|item| item.name == name));
+    let databases =
+        list_databases_resuming_cluster(&client, &organization, selected_cluster, json_mode)
+            .with_context(|| {
+                format!(
+                    "failed to list databases for organization '{}'",
+                    organization
+                )
+            });
     let database = match databases {
         Ok(databases) => select_or_prompt(
             Choices::Database {
