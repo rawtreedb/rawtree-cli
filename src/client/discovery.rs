@@ -19,7 +19,7 @@ const MAX_CATALOG_WORKERS: usize = 8;
 const REGIONAL_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Deserialize, serde::Serialize)]
-pub(super) struct UnavailableRegion {
+pub(crate) struct UnavailableRegion {
     pub id: String,
     pub name: String,
 }

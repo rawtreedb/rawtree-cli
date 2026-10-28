@@ -225,3 +225,29 @@ fn missing_cluster_in_partial_catalog_never_falls_back_to_gateway() {
         .iter()
         .any(|path| path.starts_with("GET /v1/tables?")));
 }
+
+#[test]
+fn management_commands_report_outages_for_missing_targets_in_partial_catalogs() {
+    for target in ["missing-cluster", "44444444-4444-4444-8444-444444444444"] {
+        for command in ["status", "update", "stop", "resume", "delete"] {
+            let mut args = vec!["--json", "cluster", command, target];
+            if command == "update" {
+                args.extend(["--idle-timeout-minutes", "60"]);
+            }
+            let (output, requests, _) = run(&args, Failure::Http(503), false);
+            assert!(!output.status.success(), "{command} {target}");
+            assert!(output.stdout.is_empty());
+            let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert!(
+                error["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Some regions are unavailable"),
+                "{command} {target}: {error}"
+            );
+            assert_ne!(error["error"]["code"], "cluster_not_found");
+            assert_eq!(requests.len(), 5, "only discovery should run: {requests:?}");
+            assert!(requests.iter().all(|request| request.starts_with("GET ")));
+        }
+    }
+}
