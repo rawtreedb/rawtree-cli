@@ -7,7 +7,6 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use self::sink::SinkArgs;
 use super::logs::parse_duration;
 use super::table_output::new_cli_table;
 use crate::cli::WorkflowTimeRange;
@@ -127,7 +126,7 @@ pub struct CreateWorkflow {
     pub sql: String,
     pub cron: Option<String>,
     pub enabled: Option<bool>,
-    pub sinks: SinkArgs,
+    pub sinks: Vec<String>,
 }
 
 pub struct UpdateWorkflow {
@@ -158,7 +157,7 @@ fn create_body(request: CreateWorkflow) -> Result<Value> {
     if request.enabled.is_some() && request.cron.is_none() {
         bail!("--schedule-enabled requires --schedule-cron with a cron expression; manual-only workflows have no schedule to pause");
     }
-    let sinks = sink::build(&request.sinks, &request.database)?;
+    let sinks = sink::read_json_args(&request.sinks)?;
     let schedule = request
         .cron
         .map(|cron| json!({"cron": cron, "enabled": request.enabled.unwrap_or(true)}));
@@ -207,7 +206,6 @@ fn update_body(request: UpdateWorkflow) -> Result<Value> {
     }
     if let Some(sinks) = request.sinks {
         let sinks = sink::read_json_args(&sinks)?;
-        sink::validate(&sinks)?;
         body.insert("sinks".into(), Value::Array(sinks));
     }
     if body.is_empty() {
@@ -421,7 +419,14 @@ pub fn create(
     request: CreateWorkflow,
     json_mode: bool,
 ) -> Result<()> {
-    let value: Value = client.post(&scope.path(""), &create_body(request)?)?;
+    let body = create_body(request)?;
+    let value: Value =
+        client
+            .post(&scope.path(""), &body)
+            .map_err(|error| match body["sinks"].as_array() {
+                Some(sinks) if !sinks.is_empty() => sink::with_schema_hint(error),
+                _ => error,
+            })?;
     print_response(value, json_mode, |workflow: Workflow| {
         println!("Workflow '{}' created:", workflow.name);
         print_workflow(&workflow);
@@ -435,7 +440,14 @@ pub fn update(
     request: UpdateWorkflow,
     json_mode: bool,
 ) -> Result<()> {
-    let value: Value = client.patch(&scope.workflow_path(id, ""), &update_body(request)?)?;
+    let body = update_body(request)?;
+    let value: Value =
+        client
+            .patch(&scope.workflow_path(id, ""), &body)
+            .map_err(|error| match body["sinks"].as_array() {
+                Some(sinks) if !sinks.is_empty() => sink::with_schema_hint(error),
+                _ => error,
+            })?;
     print_response(value, json_mode, |workflow: Workflow| {
         println!("Workflow '{}' updated:", workflow.name);
         print_workflow(&workflow);
@@ -631,12 +643,7 @@ mod tests {
             sql: "SELECT 1".into(),
             cron: None,
             enabled: None,
-            sinks: SinkArgs {
-                tables: vec![],
-                urls: vec![],
-                headers: vec![],
-                json: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
-            },
+            sinks: vec![r#"{"type":"table","settings":{"database":"a","table":"b"}}"#.into()],
         })
         .unwrap();
         assert_eq!(
@@ -655,12 +662,7 @@ mod tests {
             sql: "SELECT 1".into(),
             cron: Some("* * * * *".into()),
             enabled: None,
-            sinks: SinkArgs {
-                tables: vec![],
-                urls: vec![],
-                headers: vec![],
-                json: vec!["42".into()],
-            },
+            sinks: vec!["42".into()],
         })
         .unwrap_err();
         assert!(err.to_string().contains("invalid --sink"));

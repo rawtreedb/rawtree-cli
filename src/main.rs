@@ -17,7 +17,7 @@ use clap_complete::generate;
 
 use cli::{
     Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand,
-    ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand, WorkflowSinkCommand,
+    ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -526,10 +526,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Workflow {
-            action:
-                WorkflowCommand::Sink {
-                    action: WorkflowSinkCommand::Schema { sink_type },
-                },
+            action: WorkflowCommand::SinkSchema { sink_type },
         } => commands::workflow::sink::schema(sink_type, json),
         Command::Workflow { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
@@ -544,9 +541,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     sql,
                     schedule_cron,
                     schedule_enabled,
-                    sink_tables,
-                    sink_urls,
-                    sink_headers,
                     sinks,
                 } => {
                     ensure_single_stdin_reader(Some(&sql), &sinks)?;
@@ -559,12 +553,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                             sql: read_sql_arg(sql)?,
                             cron: schedule_cron.and_then(|cron| cron.0),
                             enabled: schedule_enabled,
-                            sinks: commands::workflow::sink::SinkArgs {
-                                tables: sink_tables,
-                                urls: sink_urls,
-                                headers: sink_headers,
-                                json: sinks,
-                            },
+                            sinks,
                         },
                         json,
                     )
@@ -624,62 +613,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     cursor.as_deref(),
                     json,
                 ),
-                WorkflowCommand::Sink { action } => match action {
-                    WorkflowSinkCommand::List { workflow_id } => {
-                        commands::workflow::sink::list(&client, &scope, &workflow_id, json)
-                    }
-                    WorkflowSinkCommand::Create {
-                        workflow_id,
-                        table,
-                        http,
-                        headers,
-                    } => commands::workflow::sink::create(
-                        &client,
-                        &scope,
-                        &workflow_id,
-                        match (table, http) {
-                            (Some(table), _) => commands::workflow::sink::NewSink::Table(table),
-                            (None, Some(url)) => {
-                                commands::workflow::sink::NewSink::Http { url, headers }
-                            }
-                            (None, None) => unreachable!("clap requires --table or --http"),
-                        },
-                        json,
-                    ),
-                    WorkflowSinkCommand::Update {
-                        workflow_id,
-                        sink_id,
-                        table,
-                        url,
-                        headers,
-                        remove_headers,
-                    } => commands::workflow::sink::update(
-                        &client,
-                        &scope,
-                        &workflow_id,
-                        &sink_id,
-                        commands::workflow::sink::SinkChanges {
-                            table,
-                            url,
-                            headers,
-                            remove_headers,
-                        },
-                        json,
-                    ),
-                    WorkflowSinkCommand::Delete {
-                        workflow_id,
-                        sink_id,
-                    } => commands::workflow::sink::delete(
-                        &client,
-                        &scope,
-                        &workflow_id,
-                        &sink_id,
-                        json,
-                    ),
-                    WorkflowSinkCommand::Schema { .. } => {
-                        unreachable!("sink schema needs no workflow scope")
-                    }
-                },
+                WorkflowCommand::SinkSchema { .. } => {
+                    unreachable!("sink-schema needs no workflow scope")
+                }
             }
         }
         Command::Logs {
