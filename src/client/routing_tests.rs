@@ -19,7 +19,9 @@ fn server(responses: Vec<(&'static str, Value)>) -> (String, thread::JoinHandle<
     let base = format!("http://{}", listener.local_addr().unwrap());
     let handle = thread::spawn(move || {
         let mut requests = Vec::new();
-        for (status, payload) in responses {
+        let mut responses: Vec<_> = responses.into_iter().enumerate().collect();
+        let mut regional_targets = Vec::new();
+        while !responses.is_empty() {
             let deadline = Instant::now() + Duration::from_secs(5);
             let mut socket = loop {
                 match listener.accept() {
@@ -54,15 +56,49 @@ fn server(responses: Vec<(&'static str, Value)>) -> (String, thread::JoinHandle<
                 .unwrap_or(0);
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
+            let index = if first.starts_with("GET /v1/clusters?") && !regional_targets.is_empty() {
+                let pair = headers
+                    .get("x-rawtree-deployment-id")
+                    .zip(headers.get("x-rawtree-region"))
+                    .map(|(id, region)| (id.clone(), region.clone()));
+                regional_targets
+                    .iter()
+                    .position(|target| *target == pair)
+                    .expect("unexpected regional request")
+            } else {
+                0
+            };
+            if first.starts_with("GET /v1/clusters?") && !regional_targets.is_empty() {
+                regional_targets.remove(index);
+            }
+            let (order, (status, payload)) = responses.remove(index);
+            if let Some(regions) = payload["regions"].as_array() {
+                regional_targets.clear();
+                for region in regions.iter().filter(|region| region["enabled"] == true) {
+                    let pair = region["deployment_id"]
+                        .as_str()
+                        .zip(region["cloud_region"].as_str())
+                        .filter(|(id, region)| super::routing::valid_routing(id, region))
+                        .map(|(id, region)| (id.to_owned(), region.to_owned()));
+                    if !regional_targets.contains(&pair) {
+                        regional_targets.push(pair);
+                    }
+                }
+            }
             let response = payload.to_string();
             write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
-            requests.push(Request {
-                path: first.trim().to_owned(),
-                headers,
-                body,
-            });
+            requests.push((
+                order,
+                Request {
+                    path: first.trim().to_owned(),
+                    headers,
+                    body,
+                },
+            ));
         }
-        requests
+        // Return requests in fixture order so assertions do not depend on scheduling.
+        requests.sort_by_key(|(order, _)| *order);
+        requests.into_iter().map(|(_, request)| request).collect()
     });
     (base, handle)
 }
@@ -455,21 +491,28 @@ fn discovery_runs_before_a_direct_cluster_request_and_retries_after_regional_fai
         "503 Service Unavailable",
         json!({"message":"Europe unavailable"}),
     );
+    responses.push(("200 OK", json!({"tables":[]})));
     responses.extend(multi_region_catalog("1234abcd"));
     responses.push(("200 OK", json!({"data":[]})));
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".into()));
+    let partial: Value = client.get("/v1/clusters?organization=acme").unwrap();
+    assert_eq!(partial["clusters"].as_array().unwrap().len(), 1);
+    assert_eq!(partial["unavailable_regions"].as_array().unwrap().len(), 2);
+    let _: Value = client
+        .get("/v1/tables?organization=acme&cluster=america")
+        .unwrap();
     assert!(client
-        .get::<Value>("/v1/clusters?organization=acme")
+        .get::<Value>("/v1/databases?organization=acme&cluster=europe")
         .unwrap_err()
         .to_string()
-        .contains("Europe unavailable"));
+        .contains("Some regions are unavailable"));
     let _: Value = client
         .get("/v1/databases?organization=acme&cluster=europe")
         .unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 9);
-    assert_eq!(requests[8].headers["x-rawtree-region"], "eu-west-1");
+    assert_eq!(requests.len(), 10);
+    assert_eq!(requests[9].headers["x-rawtree-region"], "eu-west-1");
 }
 
 #[test]
@@ -580,4 +623,122 @@ fn api_keys_preserve_the_public_gateway_url() {
         .unwrap();
     assert_eq!(request.url().host_str(), Some("api.rawtree.com"));
     assert!(!request.headers().contains_key("x-rawtree-region"));
+}
+
+#[test]
+fn empty_partial_catalog_is_marked_and_explicit_refresh_replaces_it() {
+    let mut responses = multi_region_catalog("1234abcd");
+    responses[2].1["clusters"] = json!([]);
+    responses[3] = (
+        "503 Service Unavailable",
+        json!({"message":"Europe unavailable"}),
+    );
+    responses.extend(multi_region_catalog("1234abcd"));
+    responses.push(("200 OK", json!({"tables":[]})));
+    let (base, server) = server(responses);
+    let client = ApiClient::new(base, Some("session.fixture".into()));
+    let partial: Value = client.get("/v1/clusters?organization=acme").unwrap();
+    assert_eq!(partial["clusters"], json!([]));
+    assert_eq!(partial["unavailable_regions"].as_array().unwrap().len(), 2);
+    let refreshed: Value = client.get("/v1/clusters?organization=acme").unwrap();
+    assert!(refreshed.get("unavailable_regions").is_none());
+    let _: Value = client
+        .get("/v1/tables?organization=acme&cluster=europe")
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 9);
+    assert_eq!(requests[8].headers["x-rawtree-deployment-id"], "1234abcd");
+}
+
+#[test]
+fn all_organization_discovery_is_concurrent_and_retains_healthy_catalogs() {
+    for reverse in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let read = || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "catalog requests must run concurrently across organizations"
+                            );
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                        Err(error) => panic!("accept: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                (socket, first)
+            };
+            let reply = |socket: &mut std::net::TcpStream, status: u16, body: Value| {
+                let body = body.to_string();
+                write!(socket, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            };
+            let (mut socket, first) = read();
+            assert!(first.starts_with("GET /v1/organizations "));
+            let mut organizations = vec![
+                json!({"organization_id":"acme-id","name":"acme"}),
+                json!({"organization_id":"other-id","name":"other"}),
+            ];
+            if reverse {
+                organizations.reverse();
+            }
+            reply(&mut socket, 200, json!({"organizations":organizations}));
+            for _ in 0..2 {
+                let (mut socket, first) = read();
+                assert!(first.contains("/regions "));
+                reply(
+                    &mut socket,
+                    200,
+                    json!({"regions":[{"id":"legacy", "name":"Virginia", "cloud_region":"us-east-1", "deployment_id":null, "enabled":true}]}),
+                );
+            }
+            // Accept both catalog requests before replying to either. A serial
+            // implementation cannot satisfy this barrier, even with a short timeout.
+            let catalogs = [read(), read()];
+            for (mut socket, first) in catalogs {
+                if first.contains("organization=acme ") {
+                    reply(
+                        &mut socket,
+                        200,
+                        json!({"clusters":[{"id":"healthy", "name":"production", "region_id":"legacy"}]}),
+                    );
+                } else {
+                    assert!(first.contains("organization=other "));
+                    reply(
+                        &mut socket,
+                        503,
+                        json!({"message":"Other organization unavailable"}),
+                    );
+                }
+            }
+        });
+        let client = ApiClient::new(base, Some("session.fixture".into()));
+        let catalog: Value = client.get("/v1/clusters").unwrap();
+        assert_eq!(catalog["clusters"].as_array().unwrap().len(), 1);
+        assert_eq!(catalog["clusters"][0]["id"], "healthy");
+        assert_eq!(
+            catalog["unavailable_regions"],
+            json!([{"id":"legacy", "name":"Virginia"}])
+        );
+        server.join().unwrap();
+    }
 }

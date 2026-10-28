@@ -256,8 +256,20 @@ pub fn update(
 
 pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
     let (value, resp) = load_dedicated_clusters(client, organization)?;
-
-    output::print_result(&value, json_mode, |_| {
+    output::print_result(&value, json_mode, |value| {
+        if let Some(regions) = value["unavailable_regions"]
+            .as_array()
+            .filter(|regions| !regions.is_empty())
+        {
+            let names = regions
+                .iter()
+                .filter_map(|region| region["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!(
+                "Warning: Some regions are unavailable ({names}). Cluster discovery is incomplete."
+            );
+        }
         if resp.clusters.is_empty() {
             println!("{}", empty_list_message(&resp, organization));
             return;

@@ -1,4 +1,4 @@
-use super::{handle_response, ApiClient};
+use super::{discovery::UnavailableRegion, handle_response, ApiClient};
 use anyhow::{Context, Result};
 use reqwest::{blocking::RequestBuilder, Method, Url};
 use serde::Deserialize;
@@ -26,15 +26,17 @@ struct Cluster {
     #[serde(default)]
     cloud_region: Option<String>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Clusters {
     clusters: Vec<Cluster>,
+    #[serde(default)]
+    unavailable_regions: Vec<UnavailableRegion>,
 }
 
 #[derive(Default)]
 pub(super) struct RoutingCache {
     organizations: RefCell<Option<(Instant, Vec<Organization>)>>,
-    clusters: RefCell<HashMap<String, (Instant, Vec<Cluster>)>>,
+    clusters: RefCell<HashMap<String, (Instant, Clusters)>>,
 }
 
 impl ApiClient {
@@ -52,10 +54,10 @@ impl ApiClient {
                 url.query_pairs().find(|(key, _)| key == "organization")
             {
                 if let Ok(response) = serde_json::from_value::<Clusters>(value.clone()) {
-                    self.routing.clusters.borrow_mut().insert(
-                        clusters_path(&organization),
-                        (Instant::now(), response.clusters),
-                    );
+                    self.routing
+                        .clusters
+                        .borrow_mut()
+                        .insert(clusters_path(&organization), (Instant::now(), response));
                 }
             }
         }
@@ -167,14 +169,22 @@ impl ApiClient {
                 self.routing
                     .clusters
                     .borrow_mut()
-                    .insert(collection, (Instant::now(), response.clusters.clone()));
-                response.clusters
+                    .insert(collection, (Instant::now(), response.clone()));
+                response
             }
         };
-        let target = clusters.iter().find(|item| match &cluster {
+        let target = clusters.clusters.iter().find(|item| match &cluster {
             ClusterSelector::Id(id) => item.id == *id,
             ClusterSelector::Name(name) => item.name == *name,
         });
+        if target.is_none() && !clusters.unavailable_regions.is_empty() {
+            // Keep known routes usable, but retry missing routes after a region recovers.
+            self.routing
+                .clusters
+                .borrow_mut()
+                .remove(&clusters_path(&organization));
+            anyhow::bail!("Some regions are unavailable. Cannot resolve the selected cluster; retry when regional discovery recovers.");
+        }
         let pair = target.and_then(|item| {
             item.deployment_id
                 .as_deref()
