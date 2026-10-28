@@ -1,4 +1,5 @@
 mod discovery;
+pub(crate) use discovery::UnavailableRegion;
 mod regions;
 mod routing;
 #[cfg(test)]

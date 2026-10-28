@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
 use crate::cli::ClusterSizeArg;
-use crate::client::ApiClient;
+use crate::client::{ApiClient, UnavailableRegion};
 use crate::cluster_identity::ClusterIdentityArgs;
 use crate::config;
 use crate::output;
@@ -16,6 +16,8 @@ use crate::s3_storage::{format_storage, S3StorageArgs, S3StorageMetadata};
 struct ListClustersResponse {
     organization: Option<OrganizationRef>,
     clusters: Vec<ClusterItem>,
+    #[serde(default)]
+    unavailable_regions: Vec<UnavailableRegion>,
 }
 
 #[derive(Deserialize)]
@@ -215,7 +217,7 @@ pub fn update(
     }
 
     let (_, response) = load_dedicated_clusters(client, organization)?;
-    let cluster = resolve_cluster(&response.clusters, name_or_id)?;
+    let cluster = resolve_cluster(&response, name_or_id)?;
     let mut body = serde_json::Map::new();
     if let Some(name) = name {
         body.insert("name".to_string(), json!(name));
@@ -256,8 +258,18 @@ pub fn update(
 
 pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
     let (value, resp) = load_dedicated_clusters(client, organization)?;
-
     output::print_result(&value, json_mode, |_| {
+        if !resp.unavailable_regions.is_empty() {
+            let names = resp
+                .unavailable_regions
+                .iter()
+                .map(|region| region.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!(
+                "Warning: Some regions are unavailable ({names}). Cluster discovery is incomplete."
+            );
+        }
         if resp.clusters.is_empty() {
             println!("{}", empty_list_message(&resp, organization));
             return;
@@ -377,7 +389,7 @@ pub fn status(
     json_mode: bool,
 ) -> Result<()> {
     let (_, resp) = load_dedicated_clusters(client, organization)?;
-    let cluster = resolve_cluster(&resp.clusters, name_or_id)?;
+    let cluster = resolve_cluster(&resp, name_or_id)?;
 
     output::print_result(cluster, json_mode, |cluster| {
         println!("Cluster: {}", cluster.name);
@@ -452,7 +464,7 @@ pub fn delete(
     json_mode: bool,
 ) -> Result<()> {
     let (_, resp) = load_dedicated_clusters(client, organization)?;
-    let cluster = resolve_cluster(&resp.clusters, name_or_id)?.clone();
+    let cluster = resolve_cluster(&resp, name_or_id)?.clone();
     let path = cluster_path(&cluster.id, None, organization);
     let result: DeleteClusterResponse = client.delete(&path)?;
     let value = delete_output(&cluster, result.deleted);
@@ -588,11 +600,17 @@ fn create_request_body(
     body
 }
 
-fn resolve_cluster<'a>(clusters: &'a [ClusterItem], name_or_id: &str) -> Result<&'a ClusterItem> {
-    clusters
+fn resolve_cluster<'a>(
+    catalog: &'a ListClustersResponse,
+    name_or_id: &str,
+) -> Result<&'a ClusterItem> {
+    catalog.clusters
         .iter()
         .find(|cluster| cluster.name == name_or_id || cluster.id == name_or_id)
         .ok_or_else(|| {
+            if !catalog.unavailable_regions.is_empty() {
+                return anyhow::anyhow!("Some regions are unavailable. Cannot resolve cluster '{name_or_id}'; retry when regional discovery recovers.");
+            }
             output::coded_error(
                 "cluster_not_found",
                 format!("Dedicated cluster '{name_or_id}' not found."),
@@ -609,7 +627,7 @@ fn request_lifecycle(
     json_mode: bool,
 ) -> Result<()> {
     let (_, resp) = load_dedicated_clusters(client, organization)?;
-    let cluster = resolve_cluster(&resp.clusters, name_or_id)?;
+    let cluster = resolve_cluster(&resp, name_or_id)?;
     let path = cluster_path(&cluster.id, Some(action.path_segment()), organization);
     let value: Value = client.post_empty(&path)?;
     let updated: ClusterItem =
@@ -844,7 +862,11 @@ mod tests {
 
     #[test]
     fn resolves_dedicated_cluster_by_name_or_id() {
-        let clusters = vec![cluster()];
+        let clusters = ListClustersResponse {
+            organization: None,
+            clusters: vec![cluster()],
+            unavailable_regions: vec![],
+        };
         assert_eq!(
             resolve_cluster(&clusters, "production")
                 .expect("cluster by name")
@@ -868,6 +890,22 @@ mod tests {
         assert_eq!(cli_error.exit_code(), 4);
     }
 
+    #[test]
+    fn partial_catalog_resolves_known_clusters_and_reports_outages_for_missing_targets() {
+        let catalog: ListClustersResponse = serde_json::from_value(json!({
+            "clusters": [cluster_json()],
+            "unavailable_regions": [{"id":"oregon", "name":"Oregon"}]
+        }))
+        .unwrap();
+        for selector in ["dev", "11111111-1111-1111-1111-111111111111"] {
+            assert_eq!(resolve_cluster(&catalog, selector).unwrap().name, "dev");
+        }
+        for selector in ["missing", "22222222-2222-4222-8222-222222222222"] {
+            let error = resolve_cluster(&catalog, selector).err().unwrap();
+            assert!(error.to_string().contains("Some regions are unavailable"));
+        }
+    }
+
     fn cluster_json() -> serde_json::Value {
         json!({
             "id": "11111111-1111-1111-1111-111111111111",
@@ -888,7 +926,7 @@ mod tests {
                 .expect("response without organization");
         assert!(resp.organization.is_none());
         assert_eq!(
-            resolve_cluster(&resp.clusters, "dev").expect("cluster").id,
+            resolve_cluster(&resp, "dev").expect("cluster").id,
             "11111111-1111-1111-1111-111111111111"
         );
     }
