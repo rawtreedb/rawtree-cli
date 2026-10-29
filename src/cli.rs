@@ -566,13 +566,6 @@ pub enum WorkflowCommand {
         #[arg(long)]
         cursor: Option<String>,
     },
-    /// Show workflow execution, match, delivery, and error counts
-    Metrics {
-        /// Workflow ID
-        id: String,
-        #[command(flatten)]
-        range: WorkflowTimeRange,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -593,7 +586,7 @@ impl FromStr for WorkflowCronArg {
     }
 }
 
-/// Time window for workflow logs and metrics. Defaults to the last 24 hours; at most 7 days.
+/// Time window for workflow logs. Defaults to the last 24 hours; at most 7 days.
 #[derive(clap::Args, Debug, Default)]
 pub struct WorkflowTimeRange {
     /// Start this long ago (e.g., 1h, 30m, 7d)

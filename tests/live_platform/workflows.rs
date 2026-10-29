@@ -74,7 +74,7 @@ fn wait_for_run(cli: &LiveCli, id: &str, run_id: &str, status: &str) -> Value {
 
 #[test]
 #[ignore = "requires a bootstrapped Platform Docker Compose stack"]
-fn workflow_manual_runs_deliver_rows_and_expose_logs_and_metrics() {
+fn workflow_manual_runs_deliver_rows_and_expose_logs() {
     with_workflow("SELECT 42 AS value", |cli, database, id| {
         cli.json(&["table", "create", "results", "--database", database]);
         let sink = json!({"type": "table", "settings": {"database": database, "table": "results"}})
@@ -120,15 +120,6 @@ fn workflow_manual_runs_deliver_rows_and_expose_logs_and_metrics() {
             },
         );
         assert!(logs["from"].as_i64().unwrap() < logs["to"].as_i64().unwrap());
-        wait_for(
-            "workflow metrics",
-            || cli.json(&["workflow", "metrics", id, "--since", "1h"]),
-            |result| {
-                result["totals"]["executions"] == 1
-                    && result["totals"]["matches"] == 1
-                    && result["totals"]["sink_events"] == 1
-            },
-        );
         assert_eq!(cli.json(&["workflow", "get", id]), definition);
         let cleared = cli.json(&["workflow", "update", id, "--clear-sinks"]);
         assert_eq!(cleared["sinks"], json!([]));

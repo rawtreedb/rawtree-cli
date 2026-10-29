@@ -118,29 +118,6 @@ struct WorkflowLogsResponse {
     to: i64,
 }
 
-#[derive(Deserialize)]
-struct MetricCounts {
-    executions: u64,
-    matches: u64,
-    sink_events: u64,
-    errors: u64,
-}
-
-#[derive(Deserialize)]
-struct MetricPoint {
-    bucket_ms: i64,
-    #[serde(flatten)]
-    counts: MetricCounts,
-}
-
-#[derive(Deserialize)]
-struct WorkflowMetricsResponse {
-    points: Vec<MetricPoint>,
-    totals: MetricCounts,
-    from: i64,
-    to: i64,
-}
-
 pub struct CreateWorkflow {
     pub name: String,
     pub database: String,
@@ -626,47 +603,6 @@ pub fn logs(
                 format_ms(resp.to)
             );
         }
-    })
-}
-
-pub fn metrics(
-    client: &ApiClient,
-    scope: &WorkflowScope,
-    id: &str,
-    range: &WorkflowTimeRange,
-    json_mode: bool,
-) -> Result<()> {
-    let params = window_params(range)?;
-    let path = with_params(scope.workflow_path(id, "/metrics"), &params);
-    let value: Value = client.get(&path)?;
-    print_response(value, json_mode, |resp: WorkflowMetricsResponse| {
-        println!(
-            "Workflow metrics from {} to {}:",
-            format_ms(resp.from),
-            format_ms(resp.to)
-        );
-        let mut table = new_cli_table();
-        table.set_header(vec![
-            "bucket",
-            "executions",
-            "matches",
-            "sink events",
-            "errors",
-        ]);
-        let row = |label: String, counts: &MetricCounts| {
-            vec![
-                Cell::new(label),
-                Cell::new(counts.executions).set_alignment(CellAlignment::Right),
-                Cell::new(counts.matches).set_alignment(CellAlignment::Right),
-                Cell::new(counts.sink_events).set_alignment(CellAlignment::Right),
-                Cell::new(counts.errors).set_alignment(CellAlignment::Right),
-            ]
-        };
-        for point in &resp.points {
-            table.add_row(row(format_ms(point.bucket_ms), &point.counts));
-        }
-        table.add_row(row("total".to_string(), &resp.totals));
-        println!("{table}");
     })
 }
 
