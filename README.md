@@ -324,7 +324,6 @@ rtree workflow run <id> --idempotency-key deploy-42
 rtree workflow runs <id>
 rtree workflow cancel <id> <run-id>
 rtree workflow logs <id> --since 1h
-rtree workflow metrics <id> --since 7d
 ```
 
 Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
@@ -358,7 +357,7 @@ list. Include each existing sink's `id` to keep it; an existing HTTP sink may om
 `settings`, or its `url` or `headers`, to retain them.
 
 `run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
-same run instead of starting another. Logs and metrics cover the last 24 hours by
+same run instead of starting another. Logs cover the last 24 hours by
 default, at most 7 days. Use `--since`/`--until` or `--start-time`/`--end-time`
 to change the window.
 
@@ -515,7 +514,7 @@ It also logs in with the local test user's email and password, verifies API acce
 using the saved session, logs out, and checks that credentials are cleared and API
 access requires authentication again.
 Workflow tests cover definition updates, manual and scheduled execution,
-pause/resume, cancellation, idempotency, table sink delivery, logs, and metrics.
+pause/resume, cancellation, idempotency, table sink delivery, and logs.
 They run through the real CLI and clean up their workflows and databases.
 The Platform repository continues to test API endpoints directly.
 

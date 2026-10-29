@@ -571,9 +571,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     cursor.as_deref(),
                     json,
                 ),
-                WorkflowCommand::Metrics { id, range } => {
-                    commands::workflow::metrics(&client, &scope, &id, &range, json)
-                }
             }
         }
         Command::Logs {

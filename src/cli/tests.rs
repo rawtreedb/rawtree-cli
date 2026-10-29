@@ -620,12 +620,12 @@ fn workflow_cron_and_time_ranges_are_validated() {
         "2026-01-01T00:00:00Z",
     ])
     .is_err());
-    let cli = Cli::try_parse_from(["rtree", "workflow", "metrics", "wf-1", "--since", "2h"])
-        .expect("workflow metrics should parse");
+    let cli = Cli::try_parse_from(["rtree", "workflow", "logs", "wf-1", "--since", "2h"])
+        .expect("workflow logs should parse");
     assert!(matches!(
         cli.command,
         Command::Workflow {
-            action: WorkflowCommand::Metrics { range, .. }
+            action: WorkflowCommand::Logs { range, .. }
         } if range.since.as_deref() == Some("2h")
     ));
 }
@@ -677,4 +677,12 @@ fn workflow_schedule_enabled_requires_an_explicit_boolean() {
             assert!(Cli::try_parse_from(args).is_err());
         }
     }
+}
+
+#[test]
+fn workflow_metrics_command_is_removed() {
+    assert!(matches!(
+        Cli::try_parse_from(["rtree", "workflow", "metrics", "wf-1"]),
+        Err(error) if error.kind() == clap::error::ErrorKind::InvalidSubcommand
+    ));
 }
