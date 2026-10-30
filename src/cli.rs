@@ -510,9 +510,10 @@ pub(crate) const SINK_COMMAND_HELP: &str = r#"Sinks:
     http   {"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}
 
   update takes only the settings to change; the others keep their stored values.
-  In HTTP headers, a string sets a header and null removes it:
+  HTTP headers list every header to keep: null keeps a stored value and headers
+  left out are removed. This keeps Authorization, adds X-Region, and drops the rest:
     table  {"settings":{"table":"alerts_v2"}}
-    http   {"settings":{"headers":{"X-Team":null,"X-Region":"eu"}}}
+    http   {"settings":{"headers":{"Authorization":null,"X-Region":"eu"}}}
 
   rtree workflow sink create <id> @sink.json
   rtree workflow sink update <id> <sink-id> '{"settings":{"table":"alerts_v2"}}'

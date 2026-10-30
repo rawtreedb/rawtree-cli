@@ -397,9 +397,12 @@ send `{"type":"http","id":"<sink-id>"}` to keep one unchanged.
 `rtree workflow sink` changes one sink without resending the others, and takes the
 same JSON input as `--sink`. `create` takes a sink without an `id`. `update` takes
 the sink's ID, shown by `rtree workflow get`, and the settings to change, such as
-`{"settings":{"table":"alerts_v2"}}`; settings left out keep their stored values. In
-HTTP `headers`, a string sets a header and `null` removes it; headers left out are
-kept. A sink's type cannot change, so delete it and create a new one instead.
+`{"settings":{"table":"alerts_v2"}}`; settings left out keep their stored values.
+HTTP `headers` follow the same rules as in `--sink`: the map lists every header to
+keep, `null` keeps a stored value, and headers left out are removed. For example,
+`{"settings":{"headers":{"Authorization":null,"X-Region":"eu"}}}` keeps
+`Authorization`, adds `X-Region`, and removes any other header. A sink's type cannot
+change, so delete it and create a new one instead.
 
 `run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
 same run instead of starting another. Logs cover the last 24 hours by

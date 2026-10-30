@@ -79,12 +79,12 @@ const SINK_TYPES: [SinkType; 2] = [
             },
         ],
         rules: &[
-            "On `rtree workflow sink update`, null in headers removes a header and omitted names are kept.",
-            "When replacing the list, an existing HTTP sink (sent with its id) may omit settings, settings.url, or settings.headers to keep them. In a supplied headers map, null keeps the stored value and omitted names are removed.",
+            "A supplied headers map lists every header to keep: null keeps the stored value and omitted names are removed.",
+            "An existing HTTP sink may omit settings.url or settings.headers to keep them; when replacing the list it may also omit settings.",
             "URLs and header values cannot contain {{, %, or ${; percent-encoded URLs are not supported.",
         ],
         example: r#"{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}"#,
-        change_example: r#"{"settings":{"headers":{"X-Team":null,"X-Region":"eu"}}}"#,
+        change_example: r#"{"settings":{"headers":{"Authorization":null,"X-Region":"eu"}}}"#,
         existing_example: r#"{"type":"http","id":"<sink-id>"}"#,
     },
 ];

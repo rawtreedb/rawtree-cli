@@ -527,7 +527,7 @@ fn workflow_sink_commands_change_one_sink() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("changes.json");
-    let changes = json!({"settings": {"headers": {"X-Team": null, "X-Region": "eu"}}});
+    let changes = json!({"settings": {"headers": {"Authorization": null, "X-Region": "eu"}}});
     std::fs::write(&path, changes.to_string()).unwrap();
     let file_arg = format!("@{}", path.display());
     let (_, _, body) = run(
