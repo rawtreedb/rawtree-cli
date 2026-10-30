@@ -345,7 +345,11 @@ rtree workflow run <id> --idempotency-key deploy-42
 rtree workflow runs <id>
 rtree workflow cancel <id> <run-id>
 rtree workflow logs <id> --since 1h
-rtree workflow sink-schema --type http
+
+rtree workflow sink create <id> @http-sink.json
+rtree workflow sink update <id> <sink-id> '{"settings":{"table":"alerts_v2"}}'
+rtree workflow sink delete <id> <sink-id>
+rtree workflow sink schema --type http
 ```
 
 Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
@@ -381,7 +385,7 @@ sink has a `type` and its `settings`:
 {"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}
 ```
 
-`rtree workflow sink-schema` lists each type's fields, rules, and examples, in JSON
+`rtree workflow sink schema` lists each type's fields, rules, and examples, in JSON
 with `--json`. Sink files keep header credentials out of shell history. The API
 validates sinks and names the field it rejects.
 
@@ -389,6 +393,13 @@ On `update`, `--sink` replaces the whole list. Include each existing sink's `id`
 keep it; an existing HTTP sink may omit `settings`, or its `url` or `headers`, to
 retain them. `rtree workflow get` shows only the names of an HTTP sink's headers, so
 send `{"type":"http","id":"<sink-id>"}` to keep one unchanged.
+
+`rtree workflow sink` changes one sink without resending the others, and takes the
+same JSON input as `--sink`. `create` takes a sink without an `id`. `update` takes
+the sink's ID, shown by `rtree workflow get`, and the settings to change, such as
+`{"settings":{"table":"alerts_v2"}}`; settings left out keep their stored values. In
+HTTP `headers`, a string sets a header and `null` removes it; headers left out are
+kept. A sink's type cannot change, so delete it and create a new one instead.
 
 `run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
 same run instead of starting another. Logs cover the last 24 hours by
@@ -548,7 +559,8 @@ It also logs in with the local test user's email and password, verifies API acce
 using the saved session, logs out, and checks that credentials are cleared and API
 access requires authentication again.
 Workflow tests cover definition updates, manual and scheduled execution,
-pause/resume, cancellation, idempotency, table sink delivery, and logs.
+pause/resume, cancellation, idempotency, table sink delivery, per-sink changes,
+and logs.
 They run through the real CLI and clean up their workflows and databases.
 The Platform repository continues to test API endpoints directly.
 

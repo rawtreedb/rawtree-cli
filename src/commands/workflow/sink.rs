@@ -5,7 +5,9 @@ use comfy_table::Cell;
 use serde_json::{json, Value};
 
 use super::super::table_output::new_cli_table;
+use super::{describe_sink, WorkflowScope};
 use crate::cli::SinkTypeArg;
+use crate::client::ApiClient;
 use crate::output;
 
 /// Documents the platform's `MAX_SINKS`; the API enforces it.
@@ -24,10 +26,11 @@ struct SinkType {
     fields: &'static [SinkField],
     rules: &'static [&'static str],
     example: &'static str,
+    change_example: &'static str,
     existing_example: &'static str,
 }
 
-const SCHEMA_HINT: &str = "Run `rtree workflow sink-schema` for each sink type's fields.";
+const SCHEMA_HINT: &str = "Run `rtree workflow sink schema` for each sink type's fields.";
 
 const IDENTIFIER_RULE: &str =
     "Letters, digits, and '_', starting with a letter; at most 64 characters";
@@ -52,9 +55,10 @@ const SINK_TYPES: [SinkType; 2] = [
         ],
         rules: &[
             "Each table sink in a workflow must target a different database and table.",
-            "Existing table sinks are sent with their id and full settings.",
+            "When replacing the list, existing table sinks are sent with their id and full settings.",
         ],
         example: r#"{"type":"table","settings":{"database":"analytics","table":"alerts"}}"#,
+        change_example: r#"{"settings":{"table":"alerts_v2"}}"#,
         existing_example: r#"{"type":"table","id":"<sink-id>","settings":{"database":"analytics","table":"alerts"}}"#,
     },
     SinkType {
@@ -75,11 +79,12 @@ const SINK_TYPES: [SinkType; 2] = [
             },
         ],
         rules: &[
-            "An existing HTTP sink (sent with its id) may omit settings, settings.url, or settings.headers to keep them.",
-            "In a supplied headers map, null keeps the stored value and omitted names are removed.",
+            "On `rtree workflow sink update`, null in headers removes a header and omitted names are kept.",
+            "When replacing the list, an existing HTTP sink (sent with its id) may omit settings, settings.url, or settings.headers to keep them. In a supplied headers map, null keeps the stored value and omitted names are removed.",
             "URLs and header values cannot contain {{, %, or ${; percent-encoded URLs are not supported.",
         ],
         example: r#"{"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}"#,
+        change_example: r#"{"settings":{"headers":{"X-Team":null,"X-Region":"eu"}}}"#,
         existing_example: r#"{"type":"http","id":"<sink-id>"}"#,
     },
 ];
@@ -107,6 +112,7 @@ pub fn schema(sink_type_arg: Option<SinkTypeArg>, json_mode: bool) -> Result<()>
             })).collect::<Vec<_>>(),
             "rules": sink_type.rules,
             "example": serde_json::from_str::<Value>(sink_type.example).expect("valid example"),
+            "change_example": serde_json::from_str::<Value>(sink_type.change_example).expect("valid example"),
             "existing_example": serde_json::from_str::<Value>(sink_type.existing_example).expect("valid example"),
         })).collect::<Vec<_>>(),
     });
@@ -115,6 +121,9 @@ pub fn schema(sink_type_arg: Option<SinkTypeArg>, json_mode: bool) -> Result<()>
             "Each sink is a JSON object with a \"type\", its \"settings\", and an \"id\" when it already exists."
         );
         println!("A workflow has at most {MAX_SINKS} sinks.");
+        println!(
+            "`rtree workflow sink update` takes only the settings to change; the others keep their stored values."
+        );
         for sink_type in &types {
             println!();
             println!("{}: {}", sink_type.name, sink_type.description);
@@ -134,6 +143,8 @@ pub fn schema(sink_type_arg: Option<SinkTypeArg>, json_mode: bool) -> Result<()>
             }
             println!("  New sink:");
             println!("    {}", sink_type.example);
+            println!("  Change it with `rtree workflow sink update`:");
+            println!("    {}", sink_type.change_example);
             println!("  Keep an existing sink on `rtree workflow update`:");
             println!("    {}", sink_type.existing_example);
         }
@@ -141,43 +152,123 @@ pub fn schema(sink_type_arg: Option<SinkTypeArg>, json_mode: bool) -> Result<()>
     Ok(())
 }
 
+pub fn create(
+    client: &ApiClient,
+    scope: &WorkflowScope,
+    workflow_id: &str,
+    sink: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let body = read_object(sink, "sink", SINK_TYPES[0].example)?;
+    let value: Value = client
+        .post(&scope.workflow_path(workflow_id, "/sinks"), &body)
+        .map_err(with_schema_hint)?;
+    print_sink(
+        &value,
+        json_mode,
+        &format!("Sink added to workflow '{workflow_id}':"),
+    );
+    Ok(())
+}
+
+pub fn update(
+    client: &ApiClient,
+    scope: &WorkflowScope,
+    workflow_id: &str,
+    sink_id: &str,
+    changes: &str,
+    json_mode: bool,
+) -> Result<()> {
+    let body = read_object(changes, "changes", SINK_TYPES[0].change_example)?;
+    let value: Value = client
+        .patch(&sink_path(scope, workflow_id, sink_id), &body)
+        .map_err(with_schema_hint)?;
+    print_sink(&value, json_mode, &format!("Sink '{sink_id}' updated:"));
+    Ok(())
+}
+
+pub fn delete(
+    client: &ApiClient,
+    scope: &WorkflowScope,
+    workflow_id: &str,
+    sink_id: &str,
+    json_mode: bool,
+) -> Result<()> {
+    client.delete_no_content(&sink_path(scope, workflow_id, sink_id))?;
+    output::print_result(
+        &json!({"workflow_id": workflow_id, "sink_id": sink_id, "deleted": true}),
+        json_mode,
+        |_| println!("Sink '{sink_id}' removed from workflow '{workflow_id}'."),
+    );
+    Ok(())
+}
+
+fn sink_path(scope: &WorkflowScope, workflow_id: &str, sink_id: &str) -> String {
+    scope.workflow_path(
+        workflow_id,
+        &format!("/sinks/{}", urlencoding::encode(sink_id)),
+    )
+}
+
+fn print_sink(sink: &Value, json_mode: bool, heading: &str) {
+    output::print_result(sink, json_mode, |sink| {
+        println!("{heading}");
+        println!("  {}", describe_sink(sink));
+    });
+}
+
 /// Accepts inline JSON, `@path`, or `-` for stdin; each holds a sink object or
 /// an array of them.
 pub(super) fn read_json_args(args: &[String]) -> Result<Vec<Value>> {
     let mut sinks = Vec::new();
     for (index, arg) in args.iter().enumerate() {
-        let (label, text) = if arg == "-" {
-            let mut text = String::new();
-            std::io::stdin()
-                .read_to_string(&mut text)
-                .context("failed to read sinks from stdin")?;
-            ("from stdin".to_string(), text)
-        } else if let Some(path) = arg.strip_prefix('@') {
-            let text = std::fs::read_to_string(path)
-                .map_err(|error| invalid(format!("failed to read sink file '{path}': {error}")))?;
-            (format!("in '{path}'"), text)
-        } else {
-            // Inline JSON often carries header credentials, so errors name its
-            // position instead of echoing it.
-            (format!("#{}", index + 1), arg.clone())
-        };
-        match serde_json::from_str::<Value>(&text) {
-            Ok(sink @ Value::Object(_)) => sinks.push(sink),
-            Ok(Value::Array(items)) if items.iter().all(Value::is_object) => sinks.extend(items),
-            Ok(_) => {
+        match read_json(arg, "--sink", &format!("--sink #{}", index + 1))? {
+            (_, sink @ Value::Object(_)) => sinks.push(sink),
+            (_, Value::Array(items)) if items.iter().all(Value::is_object) => sinks.extend(items),
+            (label, _) => {
                 return Err(invalid(format!(
-                    "invalid --sink {label}: expected a JSON object or an array of objects, e.g. {}. {SCHEMA_HINT}",
+                    "invalid {label}: expected a JSON object or an array of objects, e.g. {}. {SCHEMA_HINT}",
                     SINK_TYPES[0].example
-                )))
-            }
-            Err(error) => {
-                return Err(invalid(format!(
-                    "invalid --sink {label}: not valid JSON ({error}). {SCHEMA_HINT}"
                 )))
             }
         }
     }
     Ok(sinks)
+}
+
+fn read_object(arg: &str, name: &str, example: &str) -> Result<Value> {
+    match read_json(arg, name, name)? {
+        (_, value @ Value::Object(_)) => Ok(value),
+        (label, _) => Err(invalid(format!(
+            "invalid {label}: expected a JSON object, e.g. {example}. {SCHEMA_HINT}"
+        ))),
+    }
+}
+
+/// Reads inline JSON, `@path`, or `-` for stdin, and returns it with the label
+/// errors use for it.
+fn read_json(arg: &str, name: &str, inline_label: &str) -> Result<(String, Value)> {
+    let (label, text) = if arg == "-" {
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .with_context(|| format!("failed to read {name} from stdin"))?;
+        (format!("{name} from stdin"), text)
+    } else if let Some(path) = arg.strip_prefix('@') {
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| invalid(format!("failed to read {name} file '{path}': {error}")))?;
+        (format!("{name} in '{path}'"), text)
+    } else {
+        // Inline JSON often carries header credentials, so errors name it
+        // instead of echoing it.
+        (inline_label.to_string(), arg.to_string())
+    };
+    match serde_json::from_str(&text) {
+        Ok(value) => Ok((label, value)),
+        Err(error) => Err(invalid(format!(
+            "invalid {label}: not valid JSON ({error}). {SCHEMA_HINT}"
+        ))),
+    }
 }
 
 fn invalid(message: String) -> anyhow::Error {
@@ -198,7 +289,7 @@ pub(super) fn with_schema_hint(error: anyhow::Error) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{SINK_HELP, SINK_UPDATE_HELP};
+    use crate::cli::{SINK_COMMAND_HELP, SINK_HELP, SINK_UPDATE_HELP};
 
     #[test]
     fn sink_files_and_inline_json_accept_objects_and_arrays() {
@@ -222,7 +313,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("--sink #2: not valid JSON"), "{err}");
-        assert!(err.contains("rtree workflow sink-schema"), "{err}");
+        assert!(err.contains("rtree workflow sink schema"), "{err}");
         assert!(!err.contains("secret-token"), "{err}");
         for value in ["42", r#"["table"]"#] {
             let err = read_json_args(&[value.into()]).unwrap_err().to_string();
@@ -250,8 +341,15 @@ mod tests {
     fn help_shows_each_sink_type_example() {
         for sink_type in &SINK_TYPES {
             serde_json::from_str::<Value>(sink_type.example).unwrap();
+            serde_json::from_str::<Value>(sink_type.change_example).unwrap();
             serde_json::from_str::<Value>(sink_type.existing_example).unwrap();
             assert!(SINK_HELP.contains(sink_type.example), "{}", sink_type.name);
+            assert!(
+                SINK_COMMAND_HELP.contains(sink_type.example)
+                    && SINK_COMMAND_HELP.contains(sink_type.change_example),
+                "{}",
+                sink_type.name
+            );
             assert!(
                 SINK_UPDATE_HELP.contains(sink_type.existing_example),
                 "{}",

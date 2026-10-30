@@ -499,7 +499,108 @@ fn rejected_sinks_point_to_the_schema() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown field `uri`"), "{stderr}");
-    assert!(stderr.contains("rtree workflow sink-schema"), "{stderr}");
+    assert!(stderr.contains("rtree workflow sink schema"), "{stderr}");
+}
+
+#[test]
+fn workflow_sink_commands_change_one_sink() {
+    let sink = json!({"type": "table", "id": "sink-2",
+        "settings": {"database": "analytics", "table": "alerts"}});
+    let (result, _, body) = run(
+        &[
+            "workflow",
+            "sink",
+            "create",
+            "wf-1",
+            r#"{"type":"table","settings":{"database":"analytics","table":"alerts"}}"#,
+        ],
+        "POST",
+        &format!("/v1/workflows/wf-1/sinks?{WORKFLOW_SCOPE}"),
+        sink.clone(),
+        json!({}),
+    );
+    assert_eq!(result, sink);
+    assert_eq!(
+        body,
+        json!({"type": "table", "settings": {"database": "analytics", "table": "alerts"}})
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("changes.json");
+    let changes = json!({"settings": {"headers": {"X-Team": null, "X-Region": "eu"}}});
+    std::fs::write(&path, changes.to_string()).unwrap();
+    let file_arg = format!("@{}", path.display());
+    let (_, _, body) = run(
+        &["workflow", "sink", "update", "wf-1", "sink 1", &file_arg],
+        "PATCH",
+        &format!("/v1/workflows/wf-1/sinks/sink%201?{WORKFLOW_SCOPE}"),
+        sink,
+        json!({}),
+    );
+    assert_eq!(body, changes);
+
+    let (result, _, _) = run(
+        &["workflow", "sink", "delete", "wf-1", "sink-2"],
+        "DELETE",
+        &format!("/v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
+        Value::Null,
+        json!({}),
+    );
+    assert_eq!(
+        result,
+        json!({"workflow_id": "wf-1", "sink_id": "sink-2", "deleted": true})
+    );
+}
+
+#[test]
+fn workflow_sink_human_output_describes_the_sink() {
+    let stdout = run_workflow_human(
+        &[
+            "workflow",
+            "sink",
+            "update",
+            "wf-1",
+            "sink-2",
+            r#"{"settings":{"table":"alerts_v2"}}"#,
+        ],
+        "PATCH",
+        &format!("/v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
+        json!({"type": "table", "id": "sink-2",
+            "settings": {"database": "analytics", "table": "alerts_v2"}}),
+    );
+    assert_eq!(
+        stdout,
+        "Sink 'sink-2' updated:\n  table analytics.alerts_v2  id=sink-2\n"
+    );
+}
+
+#[test]
+fn rejected_sink_changes_point_to_the_schema() {
+    let (output, _, _) = common::run_cli(
+        &[(
+            format!("PATCH /v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
+            "400 Bad Request",
+            json!({"message": "Invalid workflow sink.",
+                "hint": "A sink's type cannot change. Delete the sink and add a new one."}),
+        )],
+        &[
+            "--org",
+            "team alpha",
+            "--cluster",
+            "prod/eu",
+            "workflow",
+            "sink",
+            "update",
+            "wf-1",
+            "sink-2",
+            r#"{"type":"http","settings":{"url":"https://example.com"}}"#,
+        ],
+        &json!({}),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("type cannot change"), "{stderr}");
+    assert!(stderr.contains("rtree workflow sink schema"), "{stderr}");
 }
 
 #[test]

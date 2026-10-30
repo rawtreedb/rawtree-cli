@@ -596,11 +596,18 @@ fn workflow_update_rejects_conflicting_flags() {
 }
 
 #[test]
-fn workflow_sink_schema_accepts_known_types() {
+fn workflow_sink_commands_take_ids_and_json() {
     for (accepted, args) in [
-        (true, vec!["sink-schema"]),
-        (true, vec!["sink-schema", "--type", "http"]),
-        (false, vec!["sink-schema", "--type", "queue"]),
+        (true, vec!["sink", "schema"]),
+        (true, vec!["sink", "schema", "--type", "http"]),
+        (false, vec!["sink", "schema", "--type", "queue"]),
+        (false, vec!["sink-schema"]),
+        (true, vec!["sink", "create", "wf-1", "@sink.json"]),
+        (false, vec!["sink", "create", "wf-1"]),
+        (true, vec!["sink", "update", "wf-1", "sink-1", "-"]),
+        (false, vec!["sink", "update", "wf-1", "sink-1"]),
+        (true, vec!["sink", "delete", "wf-1", "sink-1"]),
+        (false, vec!["sink", "delete", "wf-1"]),
         (
             false,
             vec!["create", "--name", "a", "--sql", "x", "--sink-table", "t"],

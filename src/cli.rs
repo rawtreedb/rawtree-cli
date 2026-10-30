@@ -480,7 +480,7 @@ pub(crate) const SINK_HELP: &str = r#"Sinks:
 
   rtree workflow create --name alerts --sql 'SELECT ...' --sink @sinks.json
 
-Run `rtree workflow sink-schema` for each sink type's fields and rules."#;
+Run `rtree workflow sink schema` for each sink type's fields and rules."#;
 
 pub(crate) const SINK_UPDATE_HELP: &str = r#"Sinks:
   --sink replaces the whole list and takes the same input as on create. Include
@@ -496,7 +496,29 @@ pub(crate) const SINK_UPDATE_HELP: &str = r#"Sinks:
       --sink '{"type":"http","id":"<http-sink-id>"}' \
       --sink '{"type":"table","id":"<table-sink-id>","settings":{"database":"analytics","table":"alerts_v2"}}'
 
-Run `rtree workflow sink-schema` for each sink type's fields and rules."#;
+  To add, change, or remove one sink without resending the others, use
+  `rtree workflow sink`.
+
+Run `rtree workflow sink schema` for each sink type's fields and rules."#;
+
+pub(crate) const SINK_COMMAND_HELP: &str = r#"Sinks:
+  create and update take JSON: an object, @<path> to read a file, or - for stdin.
+  Sink IDs are shown by `rtree workflow get`.
+
+  create takes a sink without an id:
+    table  {"type":"table","settings":{"database":"analytics","table":"alerts"}}
+    http   {"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}
+
+  update takes only the settings to change; the others keep their stored values.
+  In HTTP headers, a string sets a header and null removes it:
+    table  {"settings":{"table":"alerts_v2"}}
+    http   {"settings":{"headers":{"X-Team":null,"X-Region":"eu"}}}
+
+  rtree workflow sink create <id> @sink.json
+  rtree workflow sink update <id> <sink-id> '{"settings":{"table":"alerts_v2"}}'
+  rtree workflow sink delete <id> <sink-id>
+
+Run `rtree workflow sink schema` for each sink type's fields and rules."#;
 
 #[derive(Subcommand)]
 pub enum WorkflowCommand {
@@ -604,8 +626,43 @@ pub enum WorkflowCommand {
         #[arg(long)]
         cursor: Option<String>,
     },
+    /// Add, change, or remove one of a workflow's sinks
+    #[command(after_help = SINK_COMMAND_HELP)]
+    Sink {
+        #[command(subcommand)]
+        action: WorkflowSinkCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WorkflowSinkCommand {
+    /// Add a sink to a workflow
+    Create {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink as a JSON object, @<path>, or - for stdin
+        #[arg(value_name = "JSON|@PATH|-")]
+        sink: String,
+    },
+    /// Change one sink; settings left out keep their stored values
+    Update {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink ID, from `rtree workflow get`
+        sink_id: String,
+        /// Changes as a JSON object with "settings", @<path>, or - for stdin
+        #[arg(value_name = "JSON|@PATH|-")]
+        changes: String,
+    },
+    /// Remove a sink from a workflow
+    Delete {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink ID, from `rtree workflow get`
+        sink_id: String,
+    },
     /// Show each sink type's JSON fields, rules, and examples
-    SinkSchema {
+    Schema {
         /// Sink type to describe; omit to describe every type
         #[arg(long = "type", value_enum)]
         sink_type: Option<SinkTypeArg>,
