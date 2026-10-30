@@ -16,8 +16,8 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
 use cli::{
-    Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand, ShellType,
-    TableCommand, WorkflowCommand,
+    Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand,
+    ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -313,6 +313,28 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 )
             }
         },
+        Command::ServiceAccount { action } => {
+            let organization = resolve_explicit_org(cli_org);
+            match action {
+                ServiceAccountCommand::List => {
+                    commands::service_account::list(&client, organization.as_deref(), json)
+                }
+                ServiceAccountCommand::Create {
+                    name,
+                    description,
+                    role,
+                } => commands::service_account::create(
+                    &client,
+                    organization.as_deref(),
+                    commands::service_account::CreateServiceAccount {
+                        name,
+                        description,
+                        role,
+                    },
+                    json,
+                ),
+            }
+        }
         Command::Organization { action } => match action {
             OrganizationCommand::List => commands::organization::list(&client, json),
             OrganizationCommand::Create { name } => {

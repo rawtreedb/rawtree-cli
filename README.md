@@ -169,7 +169,7 @@ API keys remain restricted to their bound cluster regardless of which selector s
 Top-level commands:
 
 - `login`, `logout`
-- `database`, `organization`, `cluster`, `key`, `table`, `workflow`
+- `database`, `organization`, `service-account`, `cluster`, `key`, `table`, `workflow`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -201,6 +201,26 @@ Database creation saves the selected organization, cluster, and new database loc
 With `--json`, creation returns `{"database":{"name":"analytics"}}`; listing returns
 `{"databases":[{"name":"analytics","s3_storage":null}]}`. Database output no longer
 adds organization metadata that is absent from the API response.
+
+### Service accounts
+
+Organization admins can create and list service accounts after `rtree login`:
+
+```sh
+rtree service-account create build-jobs --org team-alpha --description "CI workloads"
+rtree service-account create deployment --org team-alpha --role admin
+rtree service-account list --org team-alpha --json
+```
+
+Names are immutable and unique within the organization: use 1–128 lowercase
+letters or digits separated by single hyphens. Descriptions accept up to 2000
+UTF-8 bytes. The role defaults to `member`; `admin` is also supported. These
+commands create identities without credentials; API key permissions are
+configured separately. API keys cannot create or list service accounts.
+
+The commands use the usual organization selection (`--org`, `RAWTREE_ORG`, or
+the saved default), without requiring a cluster or database. JSON creation
+returns the account object; listing returns `{"service_accounts":[...]}`.
 
 ### Formatting SQL
 
