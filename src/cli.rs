@@ -128,6 +128,11 @@ pub enum Command {
         #[command(subcommand)]
         action: OrganizationCommand,
     },
+    /// Create and list organization service accounts (requires an organization admin)
+    ServiceAccount {
+        #[command(subcommand)]
+        action: ServiceAccountCommand,
+    },
     /// Inspect dedicated clusters
     Cluster {
         #[command(subcommand)]
@@ -277,6 +282,24 @@ pub enum DatabaseCommand {
     Delete {
         /// Database name
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ServiceAccountCommand {
+    /// List service accounts in the selected organization
+    List,
+    /// Create a service account; its name cannot be changed later
+    Create {
+        /// Lowercase letters and digits separated by single hyphens (1–128 characters)
+        #[arg(value_parser = crate::commands::service_account::parse_name)]
+        name: String,
+        /// Description (at most 2000 UTF-8 bytes)
+        #[arg(long, value_parser = crate::commands::service_account::parse_description)]
+        description: Option<String>,
+        /// Stored organization role; API key permissions are configured separately
+        #[arg(long, value_enum, default_value = "member")]
+        role: crate::commands::service_account::ServiceAccountRole,
     },
 }
 

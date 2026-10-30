@@ -1,3 +1,5 @@
+#[path = "live_platform/service_accounts.rs"]
+mod service_accounts;
 #[path = "live_platform/storage.rs"]
 mod storage;
 #[path = "live_platform/workflows.rs"]
