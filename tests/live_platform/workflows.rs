@@ -128,6 +128,40 @@ fn workflow_manual_runs_deliver_rows_and_expose_logs() {
 
 #[test]
 #[ignore = "requires a bootstrapped Platform Docker Compose stack"]
+fn workflow_sinks_can_be_added_changed_and_removed_one_at_a_time() {
+    with_workflow("SELECT 1 AS value", |cli, database, id| {
+        for table in ["results", "results_v2", "audit"] {
+            cli.json(&["table", "create", table, "--database", database]);
+        }
+        let table_sink = |table: &str| {
+            json!({"type": "table", "settings": {"database": database, "table": table}}).to_string()
+        };
+        let first = cli.json(&["workflow", "sink", "create", id, &table_sink("results")]);
+        let first_id = first["id"].as_str().unwrap();
+        let second = cli.json(&["workflow", "sink", "create", id, &table_sink("audit")]);
+
+        let changed = cli.json(&[
+            "workflow",
+            "sink",
+            "update",
+            id,
+            first_id,
+            r#"{"settings":{"table":"results_v2"}}"#,
+        ]);
+        assert_eq!(changed["id"], first_id);
+        assert_eq!(
+            changed["settings"],
+            json!({"database": database, "table": "results_v2"})
+        );
+
+        let deleted = cli.json(&["workflow", "sink", "delete", id, first_id]);
+        assert_eq!(deleted["deleted"], true);
+        assert_eq!(cli.json(&["workflow", "get", id])["sinks"], json!([second]));
+    });
+}
+
+#[test]
+#[ignore = "requires a bootstrapped Platform Docker Compose stack"]
 fn workflow_scheduled_runs_can_be_paused_and_switched_to_manual() {
     with_workflow("SELECT 1", |cli, _, id| {
         let scheduled = cli.json(&["workflow", "update", id, "--schedule-cron", "* * * * * *"]);
