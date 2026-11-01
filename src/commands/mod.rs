@@ -2,6 +2,8 @@ pub mod auth;
 pub mod cluster;
 pub mod database;
 pub mod docs;
+pub mod federation_issuer;
+pub mod federation_rule;
 pub mod format;
 pub mod insert;
 pub mod keys;

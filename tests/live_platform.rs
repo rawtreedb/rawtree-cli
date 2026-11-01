@@ -1,3 +1,5 @@
+#[path = "live_platform/federation.rs"]
+mod federation;
 #[path = "live_platform/service_accounts.rs"]
 mod service_accounts;
 #[path = "live_platform/storage.rs"]

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::client::ApiClient;
@@ -148,4 +148,35 @@ mod tests {
             "/v1/databases?cluster=production"
         );
     }
+}
+
+#[derive(Deserialize)]
+struct Organization {
+    organization_id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct OrganizationsResponse {
+    organizations: Vec<Organization>,
+}
+
+pub fn organization_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
+    let response: OrganizationsResponse = client.get("/v1/organizations")?;
+    let selected = match organization {
+        Some(name) => response
+            .organizations
+            .into_iter()
+            .find(|item| item.name == name)
+            .with_context(|| {
+                format!("Organization '{name}' was not found. Run `rtree organization list`.")
+            })?,
+        None => response.organizations.into_iter().next().context(
+            "No organization available. Run `rtree organization list` or select one with --org.",
+        )?,
+    };
+    Ok(format!(
+        "/v1/organizations/{}",
+        urlencoding::encode(&selected.organization_id)
+    ))
 }
