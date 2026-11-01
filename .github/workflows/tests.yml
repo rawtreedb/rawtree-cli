@@ -130,6 +130,7 @@ jobs:
         run: bash scripts/codex/run-local-compose.sh 18087 create --no-build
 
       - name: Start real Platform
+        id: start-platform
         working-directory: platform
         run: bash scripts/codex/run-local-compose.sh 18087 start --wait --wait-timeout 300
 
@@ -143,7 +144,12 @@ jobs:
       - name: Report Platform startup failure
         if: failure()
         working-directory: platform
-        run: bash scripts/codex/run-local-compose.sh 18087 ps --all
+        run: |
+          bash scripts/codex/run-local-compose.sh 18087 ps --all
+          if [ "${{ steps.start-platform.outcome }}" = failure ]; then
+            # Startup precedes identity bootstrap: retain the crash details, not credentials.
+            bash scripts/codex/run-local-compose.sh 18087 logs --no-color --tail 100 backend backend-query backend-ingestion global-backend
+          fi
 
       - name: Test CLI against real Platform
         working-directory: cli
