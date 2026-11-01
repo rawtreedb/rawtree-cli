@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -38,17 +38,6 @@ struct ServiceAccount {
     role: ServiceAccountRole,
 }
 
-#[derive(Deserialize)]
-struct Organization {
-    organization_id: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct OrganizationsResponse {
-    organizations: Vec<Organization>,
-}
-
 pub fn parse_name(name: &str) -> Result<String, String> {
     if name.len() > 128
         || !name.split('-').all(|part| {
@@ -71,22 +60,9 @@ pub fn parse_description(description: &str) -> Result<String, String> {
 }
 
 fn collection_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
-    let response: OrganizationsResponse = client.get("/v1/organizations")?;
-    let selected = match organization {
-        Some(name) => response
-            .organizations
-            .into_iter()
-            .find(|item| item.name == name)
-            .with_context(|| {
-                format!("Organization '{name}' was not found. Run `rtree organization list`.")
-            })?,
-        None => response.organizations.into_iter().next().context(
-            "No organization available. Run `rtree organization list` or select one with --org.",
-        )?,
-    };
     Ok(format!(
-        "/v1/organizations/{}/service-accounts",
-        urlencoding::encode(&selected.organization_id)
+        "{}/service-accounts",
+        crate::org::organization_path(client, organization)?
     ))
 }
 

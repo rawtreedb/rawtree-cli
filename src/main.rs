@@ -313,6 +313,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 )
             }
         },
+        Command::FederationIssuer { action } => {
+            let organization = resolve_explicit_org(cli_org);
+            commands::federation_issuer::run(&client, organization.as_deref(), action, json)
+        }
+        Command::FederationRule { action } => {
+            let organization = resolve_explicit_org(cli_org);
+            commands::federation_rule::run(
+                &client,
+                organization.as_deref(),
+                effective_cluster.as_deref(),
+                action,
+                json,
+            )
+        }
         Command::ServiceAccount { action } => {
             let organization = resolve_explicit_org(cli_org);
             match action {

@@ -133,6 +133,16 @@ pub enum Command {
         #[command(subcommand)]
         action: ServiceAccountCommand,
     },
+    /// Manage organization federation issuers (organization admin user credentials required)
+    FederationIssuer {
+        #[command(subcommand)]
+        action: crate::commands::federation_issuer::Command,
+    },
+    /// Manage cluster federation rules (organization admin user credentials required)
+    FederationRule {
+        #[command(subcommand)]
+        action: crate::commands::federation_rule::Command,
+    },
     /// Inspect dedicated clusters
     Cluster {
         #[command(subcommand)]
