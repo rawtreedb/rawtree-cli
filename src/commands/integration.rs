@@ -24,11 +24,11 @@ struct Integration {
     created_at: String,
 }
 
-fn integrations_path(organization: &str) -> String {
-    format!(
-        "/v1/organizations/{}/integrations",
-        urlencoding::encode(organization)
-    )
+fn integrations_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
+    Ok(format!(
+        "{}/integrations",
+        crate::org::organization_path(client, organization)?
+    ))
 }
 
 pub(crate) fn integrations_url(base_url: &str, organization: &str) -> String {
@@ -64,8 +64,8 @@ fn describe_settings(integration: &Integration) -> String {
     }
 }
 
-pub fn list(client: &ApiClient, organization: &str, json_mode: bool) -> Result<()> {
-    let value: Value = client.get(&integrations_path(organization))?;
+pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
+    let value: Value = client.get(&integrations_path(client, organization)?)?;
     print_response(value, json_mode, |resp: IntegrationsResponse| {
         if resp.integrations.is_empty() {
             if resp.slack_available {

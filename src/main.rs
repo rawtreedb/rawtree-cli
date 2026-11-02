@@ -544,22 +544,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         }
-        Command::Integration { action } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let organization = require_organization(effective_org.as_deref())?;
-            match action {
-                IntegrationCommand::List => {
-                    commands::integration::list(&client, organization, json)
-                }
-                IntegrationCommand::Add {
-                    kind: IntegrationKind::Slack,
-                } => commands::integration::add_slack(
+        Command::Integration { action } => match action {
+            IntegrationCommand::List => {
+                let organization = resolve_explicit_org(cli_org);
+                commands::integration::list(&client, organization.as_deref(), json)
+            }
+            IntegrationCommand::Add {
+                kind: IntegrationKind::Slack,
+            } => {
+                let effective_org = resolve_effective_org(&client, cli_org);
+                let organization = require_organization(effective_org.as_deref())?;
+                commands::integration::add_slack(
                     &commands::open::resolve_ui_base_url(&url),
                     organization,
                     json,
-                ),
+                )
             }
-        }
+        },
         Command::Workflow { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             let scope =

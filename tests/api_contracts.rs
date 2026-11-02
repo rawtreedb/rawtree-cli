@@ -844,7 +844,16 @@ fn workflow_cron_validation_errors_are_returned_by_the_api() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("Cron must have 5 or 6 fields"));
 }
 
-const INTEGRATIONS_PATH: &str = "/v1/organizations/team%20alpha/integrations";
+const ORGANIZATION_ID: &str = "00000000-0000-4000-8000-000000000001";
+const INTEGRATIONS_PATH: &str =
+    "/v1/organizations/00000000-0000-4000-8000-000000000001/integrations";
+
+fn organizations() -> Value {
+    json!({"organizations": [
+        {"organization_id": "00000000-0000-4000-8000-000000000002", "name": "other"},
+        {"organization_id": ORGANIZATION_ID, "name": "team alpha"}
+    ]})
+}
 
 fn integrations_response() -> Value {
     json!({"integrations": [{"id": "int-1", "organization_id": "org-1", "type": "slack",
@@ -852,11 +861,14 @@ fn integrations_response() -> Value {
         "created_at": "2026-10-26T15:59:44Z"}], "slack_available": true})
 }
 
-fn run_integration_human(args: &[&str], path: &str, response: Value) -> String {
+fn run_integration(args: &[&str], path: &str, response: Value) -> String {
     let mut command = vec!["--org", "team alpha"];
     command.extend_from_slice(args);
     let (output, _, _) = common::run_cli(
-        &[(format!("GET {path}"), "200 OK", response)],
+        &[
+            ("GET /v1/organizations".into(), "200 OK", organizations()),
+            (format!("GET {path}"), "200 OK", response),
+        ],
         &command,
         &json!({}),
     );
@@ -870,16 +882,17 @@ fn run_integration_human(args: &[&str], path: &str, response: Value) -> String {
 
 #[test]
 fn integration_list_preserves_json_and_renders_workspaces() {
-    let (result, _, _) = run(
-        &["integration", "list"],
-        "GET",
+    let result = run_integration(
+        &["--json", "integration", "list"],
         INTEGRATIONS_PATH,
         integrations_response(),
-        json!({}),
     );
-    assert_eq!(result, integrations_response());
+    assert_eq!(
+        serde_json::from_str::<Value>(&result).unwrap(),
+        integrations_response()
+    );
 
-    let text = run_integration_human(
+    let text = run_integration(
         &["integration", "list"],
         INTEGRATIONS_PATH,
         integrations_response(),
@@ -890,7 +903,7 @@ fn integration_list_preserves_json_and_renders_workspaces() {
         "{text}"
     );
 
-    let empty = run_integration_human(
+    let empty = run_integration(
         &["integration", "list"],
         INTEGRATIONS_PATH,
         json!({"integrations": [], "slack_available": true}),
