@@ -598,8 +598,8 @@ fn workflow_update_rejects_conflicting_flags() {
 #[test]
 fn workflow_sink_commands_take_ids_and_json() {
     for (accepted, args) in [
-        (true, vec!["sink", "schema"]),
-        (true, vec!["sink", "schema", "--type", "http"]),
+        (false, vec!["sink", "schema"]),
+        (false, vec!["sink", "schema", "--type", "http"]),
         (false, vec!["sink", "schema", "--type", "queue"]),
         (false, vec!["sink-schema"]),
         (true, vec!["sink", "create", "wf-1", "@sink.json"]),

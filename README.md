@@ -349,7 +349,10 @@ rtree workflow logs <id> --since 1h
 rtree workflow sink create <id> @http-sink.json
 rtree workflow sink update <id> <sink-id> '{"settings":{"table":"alerts_v2"}}'
 rtree workflow sink delete <id> <sink-id>
-rtree workflow sink schema --type http
+rtree workflow create --help
+rtree workflow update --help
+rtree workflow sink create --help
+rtree workflow sink update --help
 ```
 
 Workflow commands need both an organization and a cluster (`--org`/`--cluster`,
@@ -383,19 +386,34 @@ sink has a `type` and its `settings`:
 ```json
 {"type":"table","settings":{"database":"analytics","table":"alerts"}}
 {"type":"http","settings":{"url":"https://example.com/hook","headers":{"Authorization":"Bearer ..."}}}
+{"type":"slack","settings":{"integration_id":"<integration-id>","channel_name":"#alerts"}}
 ```
 
-`rtree workflow sink schema` lists each type's fields, rules, and examples, in JSON
-with `--json`. Sink files keep header credentials out of shell history. The API
-validates sinks and names the field it rejects.
+Each create/update command's `--help` documents the fields, rules, and examples
+for table, HTTP, and Slack sinks. Sink files keep header credentials out of shell
+history. The API validates sinks and names the field it rejects. `--sql -` and
+`--sink -` cannot both read stdin; use a file for one of them.
+
+Table sinks require `settings.database` and `settings.table`. New HTTP sinks
+require `settings.url`; `settings.headers` is optional. Slack sinks require the
+`settings.integration_id` UUID of a connected Slack integration in the workflow's
+organization and exactly one of `settings.channel_id` or `settings.channel_name`.
+The API resolves channel names to IDs when saving. The RawTree app must be a
+member of private channels.
 
 On `update`, `--sink` replaces the whole list. Include each existing sink's `id` to
 keep it; an existing HTTP sink may omit `settings`, or its `url` or `headers`, to
 retain them. `rtree workflow get` shows only the names of an HTTP sink's headers, so
 send `{"type":"http","id":"<sink-id>"}` to keep one unchanged.
+Existing table sinks require their full database/table settings. Existing Slack
+sinks require their integration ID and one channel field; use the saved channel
+ID to keep the same channel. Do not send both `channel_id` and `channel_name`
+from a workflow response back in a sink input. Omitting `--sink` keeps all sinks;
+`--clear-sinks` removes them all.
 
 `rtree workflow sink` changes one sink without resending the others, and takes the
-same JSON input as `--sink`. `create` takes a sink without an `id`. `update` takes
+same object, file, or stdin input as `--sink`, but does not accept arrays.
+`create` takes a sink without an `id`. `update` takes
 the sink's ID, shown by `rtree workflow get`, and the settings to change, such as
 `{"settings":{"table":"alerts_v2"}}`; settings left out keep their stored values.
 HTTP `headers` follow the same rules as in `--sink`: the map lists every header to
@@ -403,6 +421,17 @@ keep, `null` keeps a stored value, and headers left out are removed. For example
 `{"settings":{"headers":{"Authorization":null,"X-Region":"eu"}}}` keeps
 `Authorization`, adds `X-Region`, and removes any other header. A sink's type cannot
 change, so delete it and create a new one instead.
+
+To update one Slack sink, pass `{"settings":{"channel_name":"#alerts-v2"}}`
+or `{"settings":{"channel_id":"C0123456789"}}`. Omit both channel fields to
+keep the channel. `integration_id` is also optional on this partial update;
+omitting it keeps the connected integration. For example:
+
+```sh
+rtree workflow sink create <id> \
+  '{"type":"slack","settings":{"integration_id":"<integration-id>","channel_name":"#alerts"}}'
+rtree workflow sink update <id> <sink-id> '{"settings":{"channel_name":"#alerts-v2"}}'
+```
 
 `run` returns once the run is accepted. Reusing an `--idempotency-key` returns the
 same run instead of starting another. Logs cover the last 24 hours by

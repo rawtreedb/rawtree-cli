@@ -470,7 +470,7 @@ fn workflow_create_reads_sink_arrays_from_files() {
 }
 
 #[test]
-fn rejected_sinks_point_to_the_schema() {
+fn rejected_sinks_point_to_help() {
     let (output, _, _) = common::run_cli(
         &[(
             format!("POST /v1/workflows?{WORKFLOW_SCOPE}"),
@@ -499,7 +499,7 @@ fn rejected_sinks_point_to_the_schema() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown field `uri`"), "{stderr}");
-    assert!(stderr.contains("rtree workflow sink schema"), "{stderr}");
+    assert!(stderr.contains("rtree workflow sink --help"), "{stderr}");
 }
 
 #[test]
@@ -575,7 +575,7 @@ fn workflow_sink_human_output_describes_the_sink() {
 }
 
 #[test]
-fn rejected_sink_changes_point_to_the_schema() {
+fn rejected_sink_changes_point_to_help() {
     let (output, _, _) = common::run_cli(
         &[(
             format!("PATCH /v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
@@ -600,7 +600,7 @@ fn rejected_sink_changes_point_to_the_schema() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("type cannot change"), "{stderr}");
-    assert!(stderr.contains("rtree workflow sink schema"), "{stderr}");
+    assert!(stderr.contains("rtree workflow sink --help"), "{stderr}");
 }
 
 #[test]

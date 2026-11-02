@@ -525,12 +525,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         }
-        Command::Workflow {
-            action:
-                WorkflowCommand::Sink {
-                    action: WorkflowSinkCommand::Schema { sink_type },
-                },
-        } => commands::workflow::sink::schema(sink_type, json),
         Command::Workflow { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             let scope =
@@ -642,9 +636,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         &sink_id,
                         json,
                     ),
-                    WorkflowSinkCommand::Schema { .. } => {
-                        unreachable!("sink schema needs no workflow scope")
-                    }
                 },
             }
         }

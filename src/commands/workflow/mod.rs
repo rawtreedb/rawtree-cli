@@ -424,7 +424,7 @@ pub fn create(
         client
             .post(&scope.path(""), &body)
             .map_err(|error| match body["sinks"].as_array() {
-                Some(sinks) if !sinks.is_empty() => sink::with_schema_hint(error),
+                Some(sinks) if !sinks.is_empty() => sink::with_help_hint(error),
                 _ => error,
             })?;
     print_response(value, json_mode, |workflow: Workflow| {
@@ -445,7 +445,7 @@ pub fn update(
         client
             .patch(&scope.workflow_path(id, ""), &body)
             .map_err(|error| match body["sinks"].as_array() {
-                Some(sinks) if !sinks.is_empty() => sink::with_schema_hint(error),
+                Some(sinks) if !sinks.is_empty() => sink::with_help_hint(error),
                 _ => error,
             })?;
     print_response(value, json_mode, |workflow: Workflow| {
