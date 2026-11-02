@@ -169,7 +169,7 @@ API keys remain restricted to their bound cluster regardless of which selector s
 Top-level commands:
 
 - `login`, `logout`
-- `database`, `organization`, `service-account`, `federation-issuer`, `federation-rule`, `cluster`, `key`, `table`, `workflow`
+- `database`, `organization`, `integration`, `service-account`, `federation-issuer`, `federation-rule`, `cluster`, `key`, `table`, `workflow`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -448,7 +448,8 @@ require `settings.url`; `settings.headers` is optional. Slack sinks require the
 `settings.integration_id` UUID of a connected Slack integration in the workflow's
 organization and exactly one of `settings.channel_id` or `settings.channel_name`.
 The API resolves channel names to IDs when saving. The RawTree app must be a
-member of private channels.
+member of private channels. Find the integration ID with the
+[integration commands](#integrations).
 
 On `update`, `--sink` replaces the whole list. Include each existing sink's `id` to
 keep it; an existing HTTP sink may omit `settings`, or its `url` or `headers`, to
@@ -486,6 +487,27 @@ rtree workflow sink update <id> <sink-id> '{"settings":{"channel_name":"#alerts-
 same run instead of starting another. Logs cover the last 24 hours by
 default, at most 7 days. Use `--since`/`--until` or `--start-time`/`--end-time`
 to change the window.
+
+### Integrations
+
+Integrations connect an organization to external services. Slack integrations
+let workflow sinks post to Slack channels.
+
+```sh
+rtree integration add slack
+rtree integration list
+```
+
+`add slack` opens the organization's integrations page in the browser, where
+Slack's consent flow runs, and prints its URL. The page follows the API URL
+(`--api-url` or `RAWTREE_API_URL`): hosted APIs open `rawtree.com`, or `rawtree.dev`
+for development APIs, and other APIs,
+such as a local gateway, open their own origin. `RAWTREE_UI_URL` overrides it.
+`list` shows each integration's ID and Slack workspace. Integration commands need
+an organization (`--org`, `RAWTREE_ORG`, or the saved default) and a user login
+(`rtree login`); API keys are not accepted. Any organization member can list
+integrations; connecting one requires an organization admin. JSON output
+preserves the API response.
 
 ### Request logs
 

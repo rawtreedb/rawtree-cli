@@ -16,8 +16,9 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
 use cli::{
-    Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand,
-    ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand, WorkflowSinkCommand,
+    Cli, ClusterCommand, Command, DatabaseCommand, IntegrationCommand, IntegrationKind, KeyCommand,
+    OrganizationCommand, ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand,
+    WorkflowSinkCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -176,15 +177,19 @@ fn ensure_single_stdin_reader(sql: Option<&str>, sinks: &[String]) -> Result<()>
     Ok(())
 }
 
+fn require_organization(organization: Option<&str>) -> Result<&str> {
+    organization.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No organization specified. Use --org, RAWTREE_ORG env, or `rtree organization use <name>`"
+        )
+    })
+}
+
 fn require_workflow_scope<'a>(
     organization: Option<&'a str>,
     cluster: Option<&'a str>,
 ) -> Result<commands::workflow::WorkflowScope<'a>> {
-    let organization = organization.ok_or_else(|| {
-        anyhow::anyhow!(
-            "No organization specified. Use --org, RAWTREE_ORG env, or `rtree organization use <name>`"
-        )
-    })?;
+    let organization = require_organization(organization)?;
     let cluster = cluster.ok_or_else(|| {
         anyhow::anyhow!(
             "No cluster specified. Use --cluster, RAWTREE_CLUSTER env, or `rtree cluster use <name>`"
@@ -537,6 +542,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         json,
                     )
                 }
+            }
+        }
+        Command::Integration { action } => {
+            let effective_org = resolve_effective_org(&client, cli_org.clone());
+            let organization = require_organization(effective_org.as_deref())?;
+            match action {
+                IntegrationCommand::List => {
+                    commands::integration::list(&client, organization, json)
+                }
+                IntegrationCommand::Add {
+                    kind: IntegrationKind::Slack,
+                } => commands::integration::add_slack(
+                    &commands::open::resolve_ui_base_url(&url),
+                    organization,
+                    json,
+                ),
             }
         }
         Command::Workflow { action } => {

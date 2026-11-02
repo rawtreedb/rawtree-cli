@@ -13,6 +13,7 @@ const NEW_SINKS: &str = r##"New sinks:
   slack: settings.integration_id is the UUID of a connected Slack integration
   in the workflow's organization. Set exactly one of settings.channel_id or
   settings.channel_name. Channel names are resolved to IDs when saved.
+  Find the integration ID with `rtree integration list`.
     {"type":"slack","settings":{"integration_id":"<integration-id>","channel_id":"C0123456789"}}
     {"type":"slack","settings":{"integration_id":"<integration-id>","channel_name":"#alerts"}}"##;
 

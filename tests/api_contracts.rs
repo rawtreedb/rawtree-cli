@@ -843,3 +843,57 @@ fn workflow_cron_validation_errors_are_returned_by_the_api() {
     assert_eq!(bodies[0]["schedule"]["cron"], "invalid-cron");
     assert!(String::from_utf8_lossy(&output.stderr).contains("Cron must have 5 or 6 fields"));
 }
+
+const INTEGRATIONS_PATH: &str = "/v1/organizations/team%20alpha/integrations";
+
+fn integrations_response() -> Value {
+    json!({"integrations": [{"id": "int-1", "organization_id": "org-1", "type": "slack",
+        "settings": {"team_id": "T01", "team_name": "Acme", "bot_user_id": "U01", "scopes": ["chat:write"]},
+        "created_at": "2026-10-26T15:59:44Z"}], "slack_available": true})
+}
+
+fn run_integration_human(args: &[&str], path: &str, response: Value) -> String {
+    let mut command = vec!["--org", "team alpha"];
+    command.extend_from_slice(args);
+    let (output, _, _) = common::run_cli(
+        &[(format!("GET {path}"), "200 OK", response)],
+        &command,
+        &json!({}),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn integration_list_preserves_json_and_renders_workspaces() {
+    let (result, _, _) = run(
+        &["integration", "list"],
+        "GET",
+        INTEGRATIONS_PATH,
+        integrations_response(),
+        json!({}),
+    );
+    assert_eq!(result, integrations_response());
+
+    let text = run_integration_human(
+        &["integration", "list"],
+        INTEGRATIONS_PATH,
+        integrations_response(),
+    );
+    let row = text.lines().find(|line| line.contains("int-1")).unwrap();
+    assert!(
+        row.contains("slack") && row.contains("Acme (T01)"),
+        "{text}"
+    );
+
+    let empty = run_integration_human(
+        &["integration", "list"],
+        INTEGRATIONS_PATH,
+        json!({"integrations": [], "slack_available": true}),
+    );
+    assert!(empty.contains("rtree integration add slack"), "{empty}");
+}

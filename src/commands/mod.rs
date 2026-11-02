@@ -6,6 +6,7 @@ pub mod federation_issuer;
 pub mod federation_rule;
 pub mod format;
 pub mod insert;
+pub mod integration;
 pub mod keys;
 pub mod logs;
 pub mod open;
