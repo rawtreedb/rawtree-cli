@@ -5,8 +5,34 @@ use crate::output;
 
 const DEFAULT_UI_BASE_URL: &str = "https://rawtree.com";
 
-pub fn resolve_ui_base_url() -> String {
-    std::env::var("RAWTREE_UI_URL").unwrap_or_else(|_| DEFAULT_UI_BASE_URL.to_string())
+pub fn resolve_ui_base_url(api_url: &str) -> String {
+    std::env::var("RAWTREE_UI_URL").unwrap_or_else(|_| ui_base_url_for_api(api_url))
+}
+
+const HOSTED_DOMAINS: [&str; 2] = ["rawtree.com", "rawtree.dev"];
+
+/// Every hosted API, regional ones included, serves its UI from the root of its
+/// domain: rawtree.com in production, rawtree.dev in development. Other APIs,
+/// such as a local gateway, serve the UI from their own origin.
+fn ui_base_url_for_api(api_url: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(api_url) else {
+        return DEFAULT_UI_BASE_URL.to_string();
+    };
+    let Some(host) = url.host_str() else {
+        return DEFAULT_UI_BASE_URL.to_string();
+    };
+    HOSTED_DOMAINS
+        .into_iter()
+        .find(|domain| {
+            host == *domain
+                || host
+                    .strip_suffix(domain)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+        .map_or_else(
+            || url.origin().ascii_serialization(),
+            |domain| format!("https://{domain}"),
+        )
 }
 
 pub(crate) fn build_open_url(
@@ -55,7 +81,40 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::build_open_url;
+    use super::{build_open_url, ui_base_url_for_api};
+
+    #[test]
+    fn ui_base_url_follows_api_url() {
+        assert_eq!(
+            ui_base_url_for_api("https://api.rawtree.com"),
+            "https://rawtree.com"
+        );
+        assert_eq!(
+            ui_base_url_for_api("https://api.us-east-1.aws.rawtree.com/"),
+            "https://rawtree.com"
+        );
+        assert_eq!(
+            ui_base_url_for_api("https://api.rawtree.dev"),
+            "https://rawtree.dev"
+        );
+        assert_eq!(
+            ui_base_url_for_api("https://api.us-east-1.aws.rawtree.dev/"),
+            "https://rawtree.dev"
+        );
+        assert_eq!(
+            ui_base_url_for_api("https://notrawtree.dev"),
+            "https://notrawtree.dev"
+        );
+        assert_eq!(
+            ui_base_url_for_api("http://localhost:8082/"),
+            "http://localhost:8082"
+        );
+        assert_eq!(
+            ui_base_url_for_api("https://api.example.com/rawtree"),
+            "https://api.example.com"
+        );
+        assert_eq!(ui_base_url_for_api("not a url"), "https://rawtree.com");
+    }
 
     #[test]
     fn build_open_url_uses_base_url_when_database_context_missing() {

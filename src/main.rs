@@ -756,7 +756,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Status => commands::status::status(&url, json),
         Command::Update => commands::update::update(json),
         Command::Open { database } => {
-            let ui_base_url = commands::open::resolve_ui_base_url();
+            let ui_base_url = commands::open::resolve_ui_base_url(&url);
             let effective_org = resolve_effective_org(&client, cli_org);
             let database = resolve_optional_database(database);
             commands::open::open(

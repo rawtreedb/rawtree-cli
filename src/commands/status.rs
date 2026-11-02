@@ -34,7 +34,7 @@ pub fn status(resolved_url: &str, json_mode: bool) -> Result<()> {
     let database = cfg.default_database.clone();
     let organization = cfg.default_organization.clone();
     let cluster = cfg.default_cluster.clone();
-    let ui_base_url = open::resolve_ui_base_url();
+    let ui_base_url = open::resolve_ui_base_url(resolved_url);
     let dashboard_url = resolve_dashboard_url(
         &ui_base_url,
         authenticated,
