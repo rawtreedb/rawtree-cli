@@ -129,6 +129,12 @@ impl ApiClient {
         check_status(resp)
     }
 
+    pub fn put<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
+        let req = self.routed_request(reqwest::Method::PUT, path)?.json(body);
+        let resp = req.send().context("failed to connect to server")?;
+        handle_response(resp)
+    }
+
     pub fn patch<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
         let req = self
             .routed_request(reqwest::Method::PATCH, path)?

@@ -169,7 +169,7 @@ API keys remain restricted to their bound cluster regardless of which selector s
 Top-level commands:
 
 - `login`, `logout`
-- `database`, `organization`, `service-account`, `cluster`, `key`, `table`, `workflow`
+- `database`, `organization`, `service-account`, `federation-issuer`, `federation-rule`, `cluster`, `key`, `table`, `workflow`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -221,6 +221,55 @@ configured separately. API keys cannot create or list service accounts.
 The commands use the usual organization selection (`--org`, `RAWTREE_ORG`, or
 the saved default), without requiring a cluster or database. JSON creation
 returns the account object; listing returns `{"service_accounts":[...]}`.
+
+### Workload identity federation
+
+Manage organization issuers and cluster rules with `list`, `get ID`, `create`,
+`update ID`, and `delete ID`. Use `rtree login` as an organization admin. API keys
+and workload access tokens cannot manage federation configuration.
+
+```bash
+rtree federation-issuer create --org team-alpha --name github \
+  --issuer-url https://token.actions.githubusercontent.com --json
+rtree federation-issuer list --org team-alpha --json
+rtree federation-issuer get "$ISSUER_ID" --org team-alpha --json
+
+rtree federation-rule create --org team-alpha --cluster production \
+  --name ci-read --issuer-id "$ISSUER_ID" \
+  --allowed-audiences rawtree \
+  --claim-conditions '{"sub":"repo:acme/app:ref:refs/heads/main"}' \
+  --principal-type service_account --principal-id "$SERVICE_ACCOUNT_ID" \
+  --permission read_only --database default --enabled true --json
+rtree federation-rule list --org team-alpha --cluster production --json
+rtree federation-rule get "$RULE_ID" --org team-alpha --cluster production --json
+```
+
+Set the IDs from the create responses or existing resources. For a personal
+rule, use `--principal-type user` with your own user ID. Repeat
+`--allowed-audiences` for multiple audiences. Replace `--permission` with one or
+more `--database-roles ROLE` flags to use database roles; the two access modes
+are mutually exclusive. `--database` and `--enabled true|false` are explicit
+rule configuration, not inherited from the active database.
+
+Issuer discovery is the default. For a separate signing-key URL, pass
+`--jwks-source explicit_url --jwks-url https://issuer.example.com/keys`.
+
+**Updates replace the entire configuration (PUT).** Use `update ID` with all
+required create flags. Omitted optional fields, including description, are
+cleared. Changes invalidate existing workload tokens. Issuers can only be
+deleted after their referencing rules are deleted:
+
+```bash
+rtree federation-rule delete "$RULE_ID" --org team-alpha --cluster production --json
+rtree federation-issuer delete "$ISSUER_ID" --org team-alpha --json
+```
+
+`--json` preserves the API response: arrays for lists, full objects for
+get/create/update, and `null` for successful deletion. Objects include the
+configuration, IDs, and timestamps. Issuers use the organization UUID path;
+rules use `/v1/federation-rules` with organization and cluster query parameters.
+Rule scope must be selected through flags, environment variables, or saved CLI
+configuration. An unknown organization never falls back to another one.
 
 ### Formatting SQL
 
