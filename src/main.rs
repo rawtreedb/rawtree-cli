@@ -17,7 +17,7 @@ use clap_complete::generate;
 
 use cli::{
     Cli, ClusterCommand, Command, DatabaseCommand, KeyCommand, OrganizationCommand,
-    ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand,
+    ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand, WorkflowSinkCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -163,6 +163,17 @@ fn read_sql_arg(sql: String) -> Result<String> {
     } else {
         Ok(sql)
     }
+}
+
+fn ensure_single_stdin_reader(sql: Option<&str>, sinks: &[String]) -> Result<()> {
+    if sql == Some("-") && sinks.iter().any(|sink| sink == "-") {
+        return Err(output::coded_error(
+            "validation_error",
+            "--sql - and --sink - both read stdin; pass the sinks with --sink @<path> instead",
+            2,
+        ));
+    }
+    Ok(())
 }
 
 fn require_workflow_scope<'a>(
@@ -542,19 +553,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     schedule_cron,
                     schedule_enabled,
                     sinks,
-                } => commands::workflow::create(
-                    &client,
-                    &scope,
-                    commands::workflow::CreateWorkflow {
-                        name,
-                        database: resolve_database(database)?,
-                        sql: read_sql_arg(sql)?,
-                        cron: schedule_cron.and_then(|cron| cron.0),
-                        enabled: schedule_enabled,
-                        sinks,
-                    },
-                    json,
-                ),
+                } => {
+                    ensure_single_stdin_reader(Some(&sql), &sinks)?;
+                    commands::workflow::create(
+                        &client,
+                        &scope,
+                        commands::workflow::CreateWorkflow {
+                            name,
+                            database: resolve_database(database)?,
+                            sql: read_sql_arg(sql)?,
+                            cron: schedule_cron.and_then(|cron| cron.0),
+                            enabled: schedule_enabled,
+                            sinks,
+                        },
+                        json,
+                    )
+                }
                 WorkflowCommand::Update {
                     id,
                     name,
@@ -564,20 +578,23 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     schedule_enabled,
                     sinks,
                     clear_sinks,
-                } => commands::workflow::update(
-                    &client,
-                    &scope,
-                    &id,
-                    commands::workflow::UpdateWorkflow {
-                        name,
-                        database,
-                        sql: sql.map(read_sql_arg).transpose()?,
-                        cron: schedule_cron.map(|cron| cron.0),
-                        enabled: schedule_enabled,
-                        sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
-                    },
-                    json,
-                ),
+                } => {
+                    ensure_single_stdin_reader(sql.as_deref(), &sinks)?;
+                    commands::workflow::update(
+                        &client,
+                        &scope,
+                        &id,
+                        commands::workflow::UpdateWorkflow {
+                            name,
+                            database,
+                            sql: sql.map(read_sql_arg).transpose()?,
+                            cron: schedule_cron.map(|cron| cron.0),
+                            enabled: schedule_enabled,
+                            sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
+                        },
+                        json,
+                    )
+                }
                 WorkflowCommand::Delete { id } => {
                     commands::workflow::delete(&client, &scope, &id, json)
                 }
@@ -607,6 +624,33 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     cursor.as_deref(),
                     json,
                 ),
+                WorkflowCommand::Sink { action } => match action {
+                    WorkflowSinkCommand::Create { workflow_id, sink } => {
+                        commands::workflow::sink::create(&client, &scope, &workflow_id, &sink, json)
+                    }
+                    WorkflowSinkCommand::Update {
+                        workflow_id,
+                        sink_id,
+                        changes,
+                    } => commands::workflow::sink::update(
+                        &client,
+                        &scope,
+                        &workflow_id,
+                        &sink_id,
+                        &changes,
+                        json,
+                    ),
+                    WorkflowSinkCommand::Delete {
+                        workflow_id,
+                        sink_id,
+                    } => commands::workflow::sink::delete(
+                        &client,
+                        &scope,
+                        &workflow_id,
+                        &sink_id,
+                        json,
+                    ),
+                },
             }
         }
         Command::Logs {

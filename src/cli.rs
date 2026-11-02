@@ -1,3 +1,5 @@
+mod workflow_help;
+
 use std::{fmt, str::FromStr};
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -481,22 +483,6 @@ pub enum TableCommand {
     },
 }
 
-const SINK_HELP: &str = "Sinks are JSON objects with a type and its settings:\n  {\"type\":\"table\",\"settings\":{\"database\":\"analytics\",\"table\":\"alerts\"}}\n  {\"type\":\"http\",\"settings\":{\"url\":\"https://example.com/hook\",\"headers\":{\"Authorization\":\"Bearer ...\"}}}";
-
-const SINK_UPDATE_HELP: &str = r#"Sinks are JSON objects with a type and its settings. --sink replaces the whole
-list; include the "id" of existing sinks to keep them. An existing HTTP sink may
-omit "settings", or its "url" or "headers", to retain them, and a null header
-value keeps the stored value:
-  {"type":"table","id":"<sink-id>","settings":{"database":"analytics","table":"alerts"}}
-  {"type":"http","id":"<sink-id>"}
-  {"type":"http","settings":{"url":"https://example.com/hook"}}
-
-Example: keep an HTTP sink unchanged and point a table sink at another table.
-Find the sink IDs with `rtree workflow get <id>`, then pass every sink to keep:
-  rtree workflow update <id> \
-    --sink '{"type":"http","id":"<http-sink-id>"}' \
-    --sink '{"type":"table","id":"<table-sink-id>","settings":{"database":"analytics","table":"alerts_v2"}}'"#;
-
 #[derive(Subcommand)]
 pub enum WorkflowCommand {
     /// List workflows in the selected cluster
@@ -507,7 +493,7 @@ pub enum WorkflowCommand {
         id: String,
     },
     /// Create a workflow that runs SQL on demand or on a schedule
-    #[command(after_help = SINK_HELP)]
+    #[command(after_help = workflow_help::workflow_create())]
     Create {
         /// Workflow name (letters, digits, '-' and '_')
         #[arg(long)]
@@ -524,12 +510,12 @@ pub enum WorkflowCommand {
         /// Enable or pause the schedule (true or false); requires a cron expression
         #[arg(long, action = clap::ArgAction::Set, value_name = "BOOL")]
         schedule_enabled: Option<bool>,
-        /// Sink as a JSON object; repeat for up to five sinks
-        #[arg(long = "sink", value_name = "JSON")]
+        /// Sink as JSON (object or array), @<path>, or - for stdin
+        #[arg(long = "sink", value_name = "JSON|@PATH|-")]
         sinks: Vec<String>,
     },
     /// Update a workflow; omitted fields are left unchanged
-    #[command(after_help = SINK_UPDATE_HELP)]
+    #[command(after_help = workflow_help::workflow_update())]
     Update {
         /// Workflow ID
         id: String,
@@ -548,8 +534,12 @@ pub enum WorkflowCommand {
         /// Enable or pause scheduled runs (true or false); omit to preserve the state
         #[arg(long, action = clap::ArgAction::Set, value_name = "BOOL")]
         schedule_enabled: Option<bool>,
-        /// Sink as a JSON object; replaces all sinks. Repeat for up to five.
-        #[arg(long = "sink", value_name = "JSON", conflicts_with = "clear_sinks")]
+        /// Sink as JSON (object or array), @<path>, or - for stdin; replaces all sinks
+        #[arg(
+            long = "sink",
+            value_name = "JSON|@PATH|-",
+            conflicts_with = "clear_sinks"
+        )]
         sinks: Vec<String>,
         /// Remove all sinks
         #[arg(long)]
@@ -598,6 +588,44 @@ pub enum WorkflowCommand {
         /// Cursor from a previous page
         #[arg(long)]
         cursor: Option<String>,
+    },
+    /// Add, change, or remove one of a workflow's sinks
+    #[command(after_help = workflow_help::SINK_COMMAND_HELP)]
+    Sink {
+        #[command(subcommand)]
+        action: WorkflowSinkCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WorkflowSinkCommand {
+    /// Add a sink to a workflow
+    #[command(after_help = workflow_help::sink_create())]
+    Create {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink as a JSON object, @<path>, or - for stdin
+        #[arg(value_name = "JSON|@PATH|-")]
+        sink: String,
+    },
+    /// Change one sink; omitted fields are preserved except supplied header maps
+    #[command(after_help = workflow_help::sink_update())]
+    Update {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink ID, from `rtree workflow get`
+        sink_id: String,
+        /// Changes as a JSON object with "settings", @<path>, or - for stdin
+        #[arg(value_name = "JSON|@PATH|-")]
+        changes: String,
+    },
+    /// Remove a sink from a workflow
+    #[command(after_help = workflow_help::SINK_DELETE_HELP)]
+    Delete {
+        /// Workflow ID
+        workflow_id: String,
+        /// Sink ID, from `rtree workflow get`
+        sink_id: String,
     },
 }
 
