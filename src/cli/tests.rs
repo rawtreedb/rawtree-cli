@@ -710,3 +710,9 @@ fn workflow_metrics_command_is_removed() {
         Err(error) if error.kind() == clap::error::ErrorKind::InvalidSubcommand
     ));
 }
+
+#[test]
+fn integration_add_accepts_only_known_kinds() {
+    assert!(Cli::try_parse_from(["rtree", "integration", "add", "slack"]).is_ok());
+    assert!(Cli::try_parse_from(["rtree", "integration", "add", "teams"]).is_err());
+}

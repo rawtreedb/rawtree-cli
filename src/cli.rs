@@ -145,6 +145,11 @@ pub enum Command {
         #[command(subcommand)]
         action: crate::commands::federation_rule::Command,
     },
+    /// Manage organization integrations (organization member user credentials required)
+    Integration {
+        #[command(subcommand)]
+        action: IntegrationCommand,
+    },
     /// Inspect dedicated clusters
     Cluster {
         #[command(subcommand)]
@@ -265,6 +270,22 @@ pub enum Command {
         #[arg(value_enum)]
         shell: ShellType,
     },
+}
+
+#[derive(Subcommand)]
+pub enum IntegrationCommand {
+    /// List integrations connected to the organization
+    List,
+    /// Open the RawTree UI to connect an integration (requires an organization admin)
+    Add {
+        #[arg(value_enum)]
+        kind: IntegrationKind,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum IntegrationKind {
+    Slack,
 }
 
 #[derive(Clone, ValueEnum)]
