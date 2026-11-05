@@ -216,6 +216,38 @@ fn approval_is_reported_before_polling_completes_and_only_once() {
 }
 
 #[test]
+fn rate_limited_polling_waits_for_retry_after_and_keeps_polling() {
+    let mut responses = approved_login();
+    responses.insert(
+        1,
+        (
+            "POST /v1/auth/cli/device/token".into(),
+            // The fixture server writes the status line verbatim, so this smuggles in the header.
+            "429 Too Many Requests\r\nRetry-After: 2",
+            json!({"error": "Too Many Requests! Wait for 2s"}),
+        ),
+    );
+    responses.extend([
+        organizations(&["team"]),
+        organizations(&["team"]),
+        regions(),
+        clusters(&["production"]),
+        databases(&["analytics"]),
+    ]);
+    let started = std::time::Instant::now();
+    let (output, saved, _) = common::run_cli(&responses, &["login"], &original_config());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The device interval is 1s, so a 2s+ wait proves Retry-After was honoured.
+    assert!(started.elapsed() >= std::time::Duration::from_secs(2));
+    assert_eq!(stderr_records(&output), vec![approval_event(600)]);
+    assert_eq!(saved["token"], "new-session-fixture");
+}
+
+#[test]
 fn explicit_json_and_selectors_complete_login_with_no_browser() {
     let mut responses = approved_login();
     responses.extend([
