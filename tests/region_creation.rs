@@ -9,9 +9,9 @@ fn discovery() -> Vec<(String, &'static str, Value)> {
             json!({"organizations":[{"organization_id":"org-id","name":"acme"}]}),
         ),
         (
-            "GET /v1/organizations/org-id/regions".into(),
+            "GET /v1/regions?organization_id=org-id".into(),
             "200 OK",
-            json!({"regions":[{"id":"region-id","name":"Europe","cloud_region":"eu-central-1","deployment_id":"abcd1234","organization_id":null,"enabled":true}]}),
+            json!({"regions":[{"id":"region-id","name":"Europe","cloud_region":"eu-central-1","deployment_id":"abcd1234","organization_id":null,"enabled":true},{"id":"byoc-id","name":"Private Europe","cloud_region":"eu-central-1","deployment_id":"feed1234","organization_id":"org-id","enabled":true}]}),
         ),
     ]
 }
@@ -73,12 +73,16 @@ fn region_discovery_and_region_size_commands_are_available() {
             String::from_utf8_lossy(&output.stderr)
         );
         let body: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(body
-            .get(if action == "regions" {
-                "regions"
-            } else {
-                "sizes"
-            })
-            .is_some());
+        if action == "regions" {
+            let ids: Vec<_> = body["regions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(ids, ["region-id", "byoc-id"]);
+        } else {
+            assert_eq!(body["sizes"], json!([]));
+        }
     }
 }

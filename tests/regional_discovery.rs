@@ -58,7 +58,7 @@ fn run(args: &[&str], failure: Failure, all_fail: bool) -> (Output, Vec<String>,
                 requests.lock().unwrap().push(first.clone());
                 if first.starts_with("GET /v1/organizations ") {
                     reply(&mut socket, 200, json!({"organizations":[{"organization_id":"org-id","name":"acme"}]}));
-                } else if first.starts_with("GET /v1/organizations/org-id/regions ") {
+                } else if first.starts_with("GET /v1/regions?organization_id=org-id ") {
                     reply(&mut socket, 200, json!({"regions":[
                         {"id":"healthy","name":"Virginia","cloud_region":"us-east-1","deployment_id":"11111111","enabled":true},
                         {"id":"failed","name":"Oregon","cloud_region":"us-west-2","deployment_id":"22222222","enabled":true},

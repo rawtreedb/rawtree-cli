@@ -362,7 +362,7 @@ fn creation_and_sizes_use_selected_region_without_mutating_default_client() {
     let requests = server.join().unwrap();
     assert_eq!(
         requests[1].path,
-        format!("GET /v1/organizations/{ORG}/regions HTTP/1.1")
+        format!("GET /v1/regions?organization_id={ORG} HTTP/1.1")
     );
     for request in &requests[2..4] {
         assert_eq!(request.headers["x-rawtree-deployment-id"], "abcd1234");
@@ -704,7 +704,7 @@ fn all_organization_discovery_is_concurrent_and_retains_healthy_catalogs() {
             reply(&mut socket, 200, json!({"organizations":organizations}));
             for _ in 0..2 {
                 let (mut socket, first) = read();
-                assert!(first.contains("/regions "));
+                assert!(first.starts_with("GET /v1/regions?organization_id="));
                 reply(
                     &mut socket,
                     200,

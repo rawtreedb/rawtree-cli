@@ -51,7 +51,7 @@ fn organizations(names: &[&str]) -> Response {
 
 fn regions() -> Response {
     (
-        "GET /v1/organizations/team-id/regions".into(),
+        "GET /v1/regions?organization_id=team-id".into(),
         "200 OK",
         json!({"regions":[{"id":"legacy", "name":"Virginia", "cloud_region":"us-east-1", "deployment_id":null, "organization_id":null, "enabled":true}]}),
     )

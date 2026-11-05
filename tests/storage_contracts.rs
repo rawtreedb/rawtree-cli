@@ -67,7 +67,7 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
                     json!({"organizations":[{"organization_id":"team-id","name":"team alpha"}]}),
                 ),
                 (
-                    "GET /v1/organizations/team-id/regions".into(),
+                    "GET /v1/regions?organization_id=team-id".into(),
                     "200 OK",
                     json!({"regions":[{"id":"legacy","name":"Virginia","cloud_region":"us-east-1","deployment_id":null,"organization_id":null,"enabled":true}]}),
                 ),
