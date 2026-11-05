@@ -1,8 +1,10 @@
-use super::{routing, ApiClient};
+use super::{handle_response, routing, ApiClient};
 use anyhow::{Context, Result};
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Region {
     pub id: String,
     pub name: String,
@@ -20,10 +22,35 @@ pub struct Regions {
 impl ApiClient {
     pub fn list_regions(&self, organization: &str) -> Result<Regions> {
         let id = self.organization_id(organization)?;
-        self.get(&format!(
-            "/v1/organizations/{}/regions",
-            urlencoding::encode(&id)
-        ))
+        let public = self.read_region_catalog("/v1/regions", None)?;
+        self.regions_for_organization(&id, &public, None)
+    }
+
+    pub(super) fn read_region_catalog(
+        &self,
+        path: &str,
+        deadline: Option<Instant>,
+    ) -> Result<Regions> {
+        let request = routing::before_deadline(self.unrouted_request(Method::GET, path), deadline)?;
+        handle_response(request.send()?)
+    }
+
+    pub(super) fn regions_for_organization(
+        &self,
+        id: &str,
+        public: &Regions,
+        deadline: Option<Instant>,
+    ) -> Result<Regions> {
+        let path = format!("/v1/organizations/{}/regions", urlencoding::encode(id));
+        let byoc = self.read_region_catalog(&path, deadline)?;
+        let mut regions = public.regions.clone();
+        // During rollout the organization endpoint can still include public regions.
+        regions.extend(
+            byoc.regions
+                .into_iter()
+                .filter(|region| region.organization_id.as_deref() == Some(id)),
+        );
+        Ok(Regions { regions })
     }
 
     /// Scope creation and size discovery to the same validated region, without mutating this client.

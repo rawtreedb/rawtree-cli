@@ -1,6 +1,6 @@
 use super::{
     handle_response,
-    regions::{Region, Regions},
+    regions::Region,
     routing::{before_deadline, valid_routing},
     ApiClient,
 };
@@ -143,21 +143,14 @@ impl ApiClient {
             organization.is_none() || !selected.is_empty(),
             "Organization not found."
         );
+        if selected.is_empty() {
+            return Ok(json!({"clusters": []}));
+        }
+        let public = self.read_region_catalog("/v1/regions", deadline)?;
         let mut catalogs = Vec::new();
         for owner in selected {
-            let regions: Regions = handle_response(
-                before_deadline(
-                    self.unrouted_request(
-                        Method::GET,
-                        &format!(
-                            "/v1/organizations/{}/regions",
-                            urlencoding::encode(&owner.organization_id)
-                        ),
-                    ),
-                    deadline,
-                )?
-                .send()?,
-            )?;
+            let regions =
+                self.regions_for_organization(&owner.organization_id, &public, deadline)?;
             let mut deployments: Vec<DeploymentTarget> = Vec::new();
             for region in regions.regions.iter().filter(|region| region.enabled) {
                 let pair = region

@@ -19,7 +19,22 @@ fn server(responses: Vec<(&'static str, Value)>) -> (String, thread::JoinHandle<
     let base = format!("http://{}", listener.local_addr().unwrap());
     let handle = thread::spawn(move || {
         let mut requests = Vec::new();
-        let mut responses: Vec<_> = responses.into_iter().enumerate().collect();
+        // Model a rolling upgrade: the shared catalog is separate, while an older
+        // organization endpoint can still include the same shared rows.
+        let mut responses: Vec<_> = responses
+            .into_iter()
+            .flat_map(|(status, payload)| {
+                let public = payload["regions"].as_array().map(|regions| {
+                    let shared: Vec<_> = regions
+                        .iter()
+                        .filter(|row| row["organization_id"].is_null())
+                        .collect();
+                    (status, json!({"regions":shared}))
+                });
+                public.into_iter().chain(std::iter::once((status, payload)))
+            })
+            .enumerate()
+            .collect();
         let mut regional_targets = Vec::new();
         while !responses.is_empty() {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -144,19 +159,19 @@ fn session_requests_resolve_scope_and_reuse_metadata_for_queries_and_gzip() {
         .unwrap();
     let requests = server.join().unwrap();
     assert_eq!(
-        requests[2].path,
+        requests[3].path,
         "GET /v1/clusters?organization=acme HTTP/1.1"
     );
-    assert!(!requests[2].headers.contains_key("x-rawtree-region"));
-    for request in &requests[3..] {
+    assert!(!requests[3].headers.contains_key("x-rawtree-region"));
+    for request in &requests[4..] {
         assert_eq!(request.headers["x-rawtree-deployment-id"], "12abcdef");
         assert_eq!(request.headers["x-rawtree-region"], "eu-west-1");
         assert_eq!(request.headers["authorization"], "Bearer session.fixture");
         assert_eq!(request.headers["x-rawtree-client"], "cli");
     }
-    assert_eq!(requests[4].headers["content-encoding"], "gzip");
+    assert_eq!(requests[5].headers["content-encoding"], "gzip");
     let mut decoded = String::new();
-    flate2::read::GzDecoder::new(requests[4].body.as_slice())
+    flate2::read::GzDecoder::new(requests[5].body.as_slice())
         .read_to_string(&mut decoded)
         .unwrap();
     assert_eq!(decoded, "{\"value\":1}");
@@ -178,8 +193,8 @@ fn absent_partial_and_invalid_metadata_keep_default_routing() {
             .get("/v1/databases?organization=acme&cluster=production")
             .unwrap();
         let requests = server.join().unwrap();
-        assert!(!requests[3].headers.contains_key("x-rawtree-region"));
-        assert!(!requests[3].headers.contains_key("x-rawtree-deployment-id"));
+        assert!(!requests[4].headers.contains_key("x-rawtree-region"));
+        assert!(!requests[4].headers.contains_key("x-rawtree-deployment-id"));
     }
 }
 
@@ -210,10 +225,10 @@ fn cluster_id_actions_preserve_organization_query_and_serving_headers() {
         .unwrap();
     let requests = server.join().unwrap();
     assert_eq!(
-        requests[3].path,
+        requests[4].path,
         "POST /v1/clusters/cluster-id/stop?organization=acme HTTP/1.1"
     );
-    assert_eq!(requests[3].headers["x-rawtree-deployment-id"], "12abcdef");
+    assert_eq!(requests[4].headers["x-rawtree-deployment-id"], "12abcdef");
 }
 
 #[test]
@@ -254,8 +269,8 @@ fn cluster_creation_invalidates_previously_discovered_empty_collection() {
         .get("/v1/databases?organization=acme&cluster_id=new-id")
         .unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests[6].path, format!("GET {collection} HTTP/1.1"));
-    assert_eq!(requests[7].headers["x-rawtree-region"], "eu-west-1");
+    assert_eq!(requests[8].path, format!("GET {collection} HTTP/1.1"));
+    assert_eq!(requests[9].headers["x-rawtree-region"], "eu-west-1");
 }
 
 #[test]
@@ -320,9 +335,9 @@ fn explicit_id_and_name_selectors_cannot_collide() {
         ))
         .unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests[3].headers["x-rawtree-region"], "eu-west-1");
-    assert_eq!(requests[5].headers["x-rawtree-region"], "eu-west-1");
-    assert_eq!(requests[6].headers["x-rawtree-region"], "ap-south-1");
+    assert_eq!(requests[4].headers["x-rawtree-region"], "eu-west-1");
+    assert_eq!(requests[6].headers["x-rawtree-region"], "eu-west-1");
+    assert_eq!(requests[7].headers["x-rawtree-region"], "ap-south-1");
 }
 
 fn region_catalog(overrides: Value) -> Vec<(&'static str, Value)> {
@@ -361,15 +376,15 @@ fn creation_and_sizes_use_selected_region_without_mutating_default_client() {
     let _: Value = client.get("/v1/clusters/sizes").unwrap();
     let requests = server.join().unwrap();
     assert_eq!(
-        requests[1].path,
+        requests[2].path,
         format!("GET /v1/organizations/{ORG}/regions HTTP/1.1")
     );
-    for request in &requests[2..4] {
+    for request in &requests[3..5] {
         assert_eq!(request.headers["x-rawtree-deployment-id"], "abcd1234");
         assert_eq!(request.headers["x-rawtree-region"], "eu-central-1");
         assert_eq!(request.headers["authorization"], "Bearer session.fixture");
     }
-    for index in [0, 1, 4] {
+    for index in [0, 1, 2, 5] {
         assert!(!requests[index].headers.contains_key("x-rawtree-region"));
     }
 }
@@ -386,7 +401,7 @@ fn explicit_unusable_regions_never_reach_creation() {
         let (base, server) = server(region_catalog(overrides));
         let client = ApiClient::new(base, Some("session.fixture".into()));
         assert!(client.for_region(Some("acme"), Some("region-id")).is_err());
-        assert_eq!(server.join().unwrap().len(), 2);
+        assert_eq!(server.join().unwrap().len(), 3);
     }
 }
 
@@ -468,9 +483,9 @@ fn discovery_merges_regions_and_uses_authoritative_metadata_for_queries() {
             .get("/v1/databases?organization=acme&cluster=europe")
             .unwrap();
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 5);
-        assert!(!requests[2].headers.contains_key("x-rawtree-region"));
-        for index in [3, 4] {
+        assert_eq!(requests.len(), 6);
+        assert!(!requests[3].headers.contains_key("x-rawtree-region"));
+        for index in [4, 5] {
             assert_eq!(
                 requests[index].headers["x-rawtree-deployment-id"],
                 deployment
@@ -511,8 +526,11 @@ fn discovery_runs_before_a_direct_cluster_request_and_retries_after_regional_fai
         .get("/v1/databases?organization=acme&cluster=europe")
         .unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 10);
-    assert_eq!(requests[9].headers["x-rawtree-region"], "eu-west-1");
+    assert_eq!(requests.len(), 12);
+    assert_eq!(
+        requests.last().unwrap().headers["x-rawtree-region"],
+        "eu-west-1"
+    );
 }
 
 #[test]
@@ -526,7 +544,7 @@ fn discovery_rejects_unknown_region_references() {
         .unwrap_err()
         .to_string()
         .contains("Region 'missing'"));
-    assert_eq!(server.join().unwrap().len(), 4);
+    assert_eq!(server.join().unwrap().len(), 5);
 }
 
 #[test]
@@ -646,8 +664,8 @@ fn empty_partial_catalog_is_marked_and_explicit_refresh_replaces_it() {
         .get("/v1/tables?organization=acme&cluster=europe")
         .unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 9);
-    assert_eq!(requests[8].headers["x-rawtree-deployment-id"], "1234abcd");
+    assert_eq!(requests.len(), 11);
+    assert_eq!(requests[10].headers["x-rawtree-deployment-id"], "1234abcd");
 }
 
 #[test]
@@ -702,14 +720,17 @@ fn all_organization_discovery_is_concurrent_and_retains_healthy_catalogs() {
                 organizations.reverse();
             }
             reply(&mut socket, 200, json!({"organizations":organizations}));
+            let (mut socket, first) = read();
+            assert!(first.starts_with("GET /v1/regions "));
+            reply(
+                &mut socket,
+                200,
+                json!({"regions":[{"id":"legacy", "name":"Virginia", "cloud_region":"us-east-1", "deployment_id":null, "enabled":true}]}),
+            );
             for _ in 0..2 {
                 let (mut socket, first) = read();
-                assert!(first.contains("/regions "));
-                reply(
-                    &mut socket,
-                    200,
-                    json!({"regions":[{"id":"legacy", "name":"Virginia", "cloud_region":"us-east-1", "deployment_id":null, "enabled":true}]}),
-                );
+                assert!(first.starts_with("GET /v1/organizations/") && first.contains("/regions "));
+                reply(&mut socket, 200, json!({"regions":[]}));
             }
             // Accept both catalog requests before replying to either. A serial
             // implementation cannot satisfy this barrier, even with a short timeout.
