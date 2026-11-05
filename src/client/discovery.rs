@@ -143,14 +143,9 @@ impl ApiClient {
             organization.is_none() || !selected.is_empty(),
             "Organization not found."
         );
-        if selected.is_empty() {
-            return Ok(json!({"clusters": []}));
-        }
-        let public = self.read_region_catalog("/v1/regions", deadline)?;
         let mut catalogs = Vec::new();
         for owner in selected {
-            let regions =
-                self.regions_for_organization(&owner.organization_id, &public, deadline)?;
+            let regions = self.regions_for_organization(&owner.organization_id, deadline)?;
             let mut deployments: Vec<DeploymentTarget> = Vec::new();
             for region in regions.regions.iter().filter(|region| region.enabled) {
                 let pair = region

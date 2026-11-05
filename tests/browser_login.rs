@@ -49,19 +49,11 @@ fn organizations(names: &[&str]) -> Response {
     )
 }
 
-fn public_regions() -> Response {
+fn regions() -> Response {
     (
-        "GET /v1/regions".into(),
+        "GET /v1/regions?organization_id=team-id".into(),
         "200 OK",
         json!({"regions":[{"id":"legacy", "name":"Virginia", "cloud_region":"us-east-1", "deployment_id":null, "organization_id":null, "enabled":true}]}),
-    )
-}
-
-fn organization_regions() -> Response {
-    (
-        "GET /v1/organizations/team-id/regions".into(),
-        "200 OK",
-        json!({"regions":[]}),
     )
 }
 
@@ -141,8 +133,7 @@ fn missing_cluster_returns_choices_in_the_selected_organization() {
         responses.extend([
             organizations(&["team", "other"]),
             organizations(&["team"]),
-            public_regions(),
-            organization_regions(),
+            regions(),
             clusters(&names),
         ]);
         assert_selection(
@@ -160,8 +151,7 @@ fn missing_database_returns_choices_in_the_selected_cluster() {
         responses.extend([
             organizations(&["team"]),
             organizations(&["team"]),
-            public_regions(),
-            organization_regions(),
+            regions(),
             clusters(&["staging", "production"]),
             databases(&names),
         ]);
@@ -187,8 +177,7 @@ fn approval_is_reported_before_polling_completes_and_only_once() {
     responses.extend([
         organizations(&["team"]),
         organizations(&["team"]),
-        public_regions(),
-        organization_regions(),
+        regions(),
         clusters(&["production"]),
         databases(&["analytics"]),
     ]);
@@ -232,8 +221,7 @@ fn explicit_json_and_selectors_complete_login_with_no_browser() {
     responses.extend([
         organizations(&["other", "team"]),
         organizations(&["team"]),
-        public_regions(),
-        organization_regions(),
+        regions(),
         clusters(&["staging", "production"]),
         databases(&["billing", "analytics"]),
     ]);
@@ -272,8 +260,7 @@ fn invalid_selectors_return_json_errors_and_preserve_config() {
         if flag != "--org" {
             responses.extend([
                 organizations(&["team"]),
-                public_regions(),
-                organization_regions(),
+                regions(),
                 clusters(&["production"]),
             ]);
         }
@@ -300,8 +287,7 @@ fn discovery_errors_are_not_treated_as_empty_choices_or_success() {
         let discovery = [
             organizations(&["team"]),
             organizations(&["team"]),
-            public_regions(),
-            organization_regions(),
+            regions(),
             clusters(&["production"]),
             databases(&["analytics"]),
         ];

@@ -58,9 +58,7 @@ fn run(args: &[&str], failure: Failure, all_fail: bool) -> (Output, Vec<String>,
                 requests.lock().unwrap().push(first.clone());
                 if first.starts_with("GET /v1/organizations ") {
                     reply(&mut socket, 200, json!({"organizations":[{"organization_id":"org-id","name":"acme"}]}));
-                } else if first.starts_with("GET /v1/organizations/org-id/regions ") {
-                    reply(&mut socket, 200, json!({"regions":[]}));
-                } else if first.starts_with("GET /v1/regions ") {
+                } else if first.starts_with("GET /v1/regions?organization_id=org-id ") {
                     reply(&mut socket, 200, json!({"regions":[
                         {"id":"healthy","name":"Virginia","cloud_region":"us-east-1","deployment_id":"11111111","enabled":true},
                         {"id":"failed","name":"Oregon","cloud_region":"us-west-2","deployment_id":"22222222","enabled":true},
@@ -141,7 +139,7 @@ fn table_list_survives_http_and_connection_failures_in_other_regions() {
                 .count(),
             3
         );
-        assert_eq!(requests.len(), 7);
+        assert_eq!(requests.len(), 6);
     }
 }
 
@@ -159,7 +157,7 @@ fn stalled_regions_and_bodies_share_one_five_second_discovery_window() {
             elapsed < Duration::from_secs(7),
             "regional waits must overlap: {elapsed:?}"
         );
-        assert_eq!(requests.len(), 7);
+        assert_eq!(requests.len(), 6);
     }
 }
 
@@ -248,7 +246,7 @@ fn management_commands_report_outages_for_missing_targets_in_partial_catalogs() 
                 "{command} {target}: {error}"
             );
             assert_ne!(error["error"]["code"], "cluster_not_found");
-            assert_eq!(requests.len(), 6, "only discovery should run: {requests:?}");
+            assert_eq!(requests.len(), 5, "only discovery should run: {requests:?}");
             assert!(requests.iter().all(|request| request.starts_with("GET ")));
         }
     }

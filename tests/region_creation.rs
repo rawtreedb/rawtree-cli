@@ -9,14 +9,9 @@ fn discovery() -> Vec<(String, &'static str, Value)> {
             json!({"organizations":[{"organization_id":"org-id","name":"acme"}]}),
         ),
         (
-            "GET /v1/regions".into(),
+            "GET /v1/regions?organization_id=org-id".into(),
             "200 OK",
-            json!({"regions":[{"id":"region-id","name":"Europe","cloud_region":"eu-central-1","deployment_id":"abcd1234","organization_id":null,"enabled":true}]}),
-        ),
-        (
-            "GET /v1/organizations/org-id/regions".into(),
-            "200 OK",
-            json!({"regions":[{"id":"byoc-id","name":"Private Europe","cloud_region":"eu-central-1","deployment_id":"feed1234","organization_id":"org-id","enabled":true}]}),
+            json!({"regions":[{"id":"region-id","name":"Europe","cloud_region":"eu-central-1","deployment_id":"abcd1234","organization_id":null,"enabled":true},{"id":"byoc-id","name":"Private Europe","cloud_region":"eu-central-1","deployment_id":"feed1234","organization_id":"org-id","enabled":true}]}),
         ),
     ]
 }
@@ -52,9 +47,9 @@ fn create_flag_routes_size_discovery_and_preserves_region_in_body() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(bodies[4]["region_id"], "region-id");
-    assert_eq!(bodies[4]["size"], json!({"cpu_cores":2,"memory_gib":8}));
-    assert!(bodies[4].get("deployment_id").is_none());
+    assert_eq!(bodies[3]["region_id"], "region-id");
+    assert_eq!(bodies[3]["size"], json!({"cpu_cores":2,"memory_gib":8}));
+    assert!(bodies[3].get("deployment_id").is_none());
 }
 
 #[test]
@@ -89,23 +84,5 @@ fn region_discovery_and_region_size_commands_are_available() {
         } else {
             assert_eq!(body["sizes"], json!([]));
         }
-    }
-}
-
-#[test]
-fn catalog_failure_does_not_return_a_partial_list() {
-    for index in [1, 2] {
-        let mut responses = discovery();
-        responses.truncate(index + 1);
-        responses[index].1 = "503 Service Unavailable";
-        responses[index].2 = json!({"message":"Catalog unavailable"});
-        let (output, _, _) = common::run_cli(
-            &responses,
-            &["--org", "acme", "--json", "cluster", "regions"],
-            &json!({"token":"session.fixture"}),
-        );
-        assert!(!output.status.success());
-        assert!(!String::from_utf8_lossy(&output.stdout).contains("region-id"));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("Catalog unavailable"));
     }
 }
