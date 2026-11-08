@@ -112,6 +112,8 @@ pub enum Command {
         #[arg(long)]
         database: Option<String>,
     },
+    /// Send feedback from humans or agents about RawTree bugs, confusion, or improvements
+    Feedback(crate::commands::feedback::FeedbackArgs),
     /// Log out and remove saved local credentials
     Logout,
     /// Manage databases

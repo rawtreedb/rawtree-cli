@@ -4,6 +4,7 @@ pub mod database;
 pub mod docs;
 pub mod federation_issuer;
 pub mod federation_rule;
+pub mod feedback;
 pub mod format;
 pub mod insert;
 pub mod integration;

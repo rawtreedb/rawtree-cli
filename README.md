@@ -271,6 +271,49 @@ rules use `/v1/federation-rules` with organization and cluster query parameters.
 Rule scope must be selected through flags, environment variables, or saved CLI
 configuration. An unknown organization never falls back to another one.
 
+### Feedback from humans and agents
+
+Use `rtree feedback` to report bugs, inconsistent results, confusing errors,
+unclear behavior, missing documentation, or questions encountered while working
+with RawTree through the CLI. Agents can report their own observations during a
+task; this command is also available for feedback requested by a user.
+
+Set `--actor-type agent` for observations originating from the agent. If a user
+asks the agent to send their feedback, set `--actor-type human`. Authorship is
+required and is independent of the credential or who executes the command.
+
+```sh
+rtree feedback --category bug --actor-type agent \
+  --message 'The error does not identify which table name is missing.' \
+  --extra '{"command":"table create","error_code":"bad_request","attempts":1}' \
+  --json
+
+rtree feedback --category feature_request --actor-type human \
+  --message 'Please show an onboarding example before organization creation.'
+```
+
+`--category` accepts `bug`, `feature_request`, `question`, or `other`.
+`--extra` takes an inline JSON object; nested arrays, objects, numbers, booleans,
+and null values are preserved. Describe what you tried, what happened, and what
+you expected. Include relevant command names, error codes, or reproduction
+steps, without credentials or private data.
+
+The selected API URL and credentials are used; client/version headers identify
+the CLI automatically. Feedback works before creating an organization. API keys
+and workload tokens supply their bound organization and cluster. With user
+credentials, `--organization-id` and `--cluster-id` optionally provide scope
+UUIDs; a cluster determines its organization. Saved database and `--org`/`--cluster`
+name selections do not populate these UUID fields. Supply both UUIDs when routing
+to a specific deployment with user credentials.
+
+`--json` returns the API receipt `{ "id": "...", "created_at": "..." }` after
+successful storage. Submission does not resolve the issue or guarantee a reply.
+Avoid duplicate reports during a task and do not automatically retry an uncertain
+result: feedback submissions are not deduplicated. The API limits messages to
+16 KiB UTF-8 and the complete JSON body to 32 KiB.
+
+Requires the feedback API from [Platform PR #1939](https://github.com/rawtreedb/rawtree-platform/pull/1939).
+
 ### Formatting SQL
 
 ```sh
