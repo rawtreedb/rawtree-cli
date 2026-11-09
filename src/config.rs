@@ -68,11 +68,9 @@ pub fn lock() -> Result<fs::File> {
 
 pub fn save(cfg: &Config) -> Result<()> {
     let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).context("failed to create config directory")?;
-    }
-    use std::io::Write;
     let parent = path.parent().context("config path has no parent")?;
+    fs::create_dir_all(parent).context("failed to create config directory")?;
+    use std::io::Write;
     // Tempfiles start private and rename atomically, including during refresh rotation.
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(serde_json::to_string_pretty(cfg)?.as_bytes())?;
