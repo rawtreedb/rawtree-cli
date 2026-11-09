@@ -133,7 +133,7 @@ fn run_login(
 fn default_login_uses_oauth_pkce_and_persists_refresh_credentials() {
     let (output, saved, bodies) = run_login(
         &login_responses(),
-        &["login", "--no-browser"],
+        &["login", "--no-browser", "--timeout-seconds", "5"],
         &json!({"token":"previous-credential","url":"https://old.example"}),
     );
     assert!(

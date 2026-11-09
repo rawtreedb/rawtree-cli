@@ -95,12 +95,13 @@ struct OrganizationContextRef {
 fn apply_auth_config(
     cfg: &mut config::Config,
     base_url: &str,
-    resp: &AuthResponse,
+    token: &str,
+    email: Option<&str>,
     selection: &AuthSelection,
 ) {
     cfg.oauth = None;
-    cfg.token = Some(resp.token.clone());
-    cfg.email = Some(resp.email.clone());
+    cfg.token = Some(token.to_string());
+    cfg.email = email.map(str::to_string);
     cfg.default_organization = selection.organization.clone();
     cfg.default_cluster = selection.cluster.clone();
     cfg.default_database = selection.database.clone();
@@ -229,7 +230,13 @@ fn update_and_save_browser_config(
     )?;
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
-    apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
+    apply_auth_config(
+        &mut cfg,
+        &client.base_url,
+        &resp.token,
+        Some(&resp.email),
+        &selection,
+    );
     cfg.oauth = oauth;
     config::save(&cfg)?;
     Ok(selection)
@@ -302,13 +309,7 @@ pub fn login_with_api_key(
 
     let _config_lock = config::lock()?;
     let mut cfg = config::load().map_err(map_config_read_error)?;
-    cfg.oauth = None;
-    cfg.token = Some(api_key.to_string());
-    cfg.email = None;
-    cfg.default_organization = selection.organization.clone();
-    cfg.default_cluster = selection.cluster.clone();
-    cfg.default_database = selection.database.clone();
-    cfg.url = (client.base_url != DEFAULT_API_URL).then(|| client.base_url.clone());
+    apply_auth_config(&mut cfg, &client.base_url, api_key, None, &selection);
 
     config::save(&cfg).map_err(map_write_error)?;
     let config_path = config::path().map_err(map_write_error)?;
@@ -586,7 +587,13 @@ mod tests {
             cluster: Some("production".to_string()),
             database: Some("analytics".to_string()),
         };
-        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
+        apply_auth_config(
+            &mut cfg,
+            "https://api.rawtree.com",
+            &resp.token,
+            Some(&resp.email),
+            &selection,
+        );
 
         assert_eq!(cfg.token.as_deref(), Some("jwt"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
@@ -601,9 +608,42 @@ mod tests {
         let mut cfg = Config::default();
         let resp = sample_auth_response();
         let selection = AuthSelection::default();
-        apply_auth_config(&mut cfg, "https://staging.rawtree.dev", &resp, &selection);
+        apply_auth_config(
+            &mut cfg,
+            "https://staging.rawtree.dev",
+            &resp.token,
+            Some(&resp.email),
+            &selection,
+        );
 
         assert_eq!(cfg.url.as_deref(), Some("https://staging.rawtree.dev"));
+    }
+
+    #[test]
+    fn api_key_config_clears_email_and_resets_a_stale_api_url() {
+        for (base_url, expected_url) in [
+            (crate::constants::DEFAULT_API_URL, None),
+            (
+                "https://custom.example.test",
+                Some("https://custom.example.test"),
+            ),
+        ] {
+            let mut cfg = Config {
+                email: Some("previous@example.test".into()),
+                url: Some("https://previous.example.test".into()),
+                ..Config::default()
+            };
+            apply_auth_config(
+                &mut cfg,
+                base_url,
+                "rt_key",
+                None,
+                &AuthSelection::default(),
+            );
+            assert_eq!(cfg.token.as_deref(), Some("rt_key"));
+            assert_eq!(cfg.email, None);
+            assert_eq!(cfg.url.as_deref(), expected_url);
+        }
     }
 
     #[test]
@@ -616,7 +656,13 @@ mod tests {
         };
         let resp = sample_auth_response();
         let selection = AuthSelection::default();
-        apply_auth_config(&mut cfg, "https://api.rawtree.com", &resp, &selection);
+        apply_auth_config(
+            &mut cfg,
+            "https://api.rawtree.com",
+            &resp.token,
+            Some(&resp.email),
+            &selection,
+        );
 
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_cluster, None);
