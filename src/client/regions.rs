@@ -36,36 +36,32 @@ impl ApiClient {
         handle_response(routing::before_deadline(request, deadline)?.send()?)
     }
 
-    /// Scope creation and size discovery to the same validated region, without mutating this client.
-    pub fn for_region(&self, organization: Option<&str>, region_id: Option<&str>) -> Result<Self> {
-        let deployment = match region_id {
-            None => None,
-            Some(id) => {
-                anyhow::ensure!(
-                    !self
-                        .token()?
-                        .as_deref()
-                        .is_some_and(|token| token.starts_with("rt_")),
-                    "Region selection requires a user credential. Run `rtree login`."
-                );
-                let organization = organization
-                    .context("Choose an organization with --org when selecting a region.")?;
-                let region = self
-                    .list_regions(organization)?
-                    .regions
-                    .into_iter()
-                    .find(|region| region.id == id)
-                    .context("Region not found in this organization.")?;
-                anyhow::ensure!(region.enabled, "The selected region is disabled.");
-                match region.deployment_id {
-                    Some(deployment) if routing::valid_routing(&deployment, &region.cloud_region) => Some((deployment, region.cloud_region)),
-                    None if region.id == "0c0f0a56-7f03-4d39-8e5d-000000000001" && region.organization_id.is_none() && region.cloud_region == "us-east-1" => None,
-                    _ => anyhow::bail!("The selected region is not ready for cluster creation. Choose another region."),
-                }
-            }
-        };
+    /// Scope pre-creation size discovery to the selected region without mutating this client.
+    pub fn for_region(&self, organization: Option<&str>, region_id: &str) -> Result<Self> {
+        anyhow::ensure!(
+            !self
+                .token()?
+                .as_deref()
+                .is_some_and(|token| token.starts_with("rt_")),
+            "Region selection requires a user credential. Run `rtree login`."
+        );
+        let organization =
+            organization.context("Choose an organization with --org when selecting a region.")?;
+        let region = self
+            .list_regions(organization)?
+            .regions
+            .into_iter()
+            .find(|region| region.id == region_id)
+            .context("Region not found in this organization.")?;
+        anyhow::ensure!(region.enabled, "The selected region is disabled.");
+        let deployment = region
+            .deployment_id
+            .filter(|id| routing::valid_routing(id, &region.cloud_region))
+            .context(
+                "The selected region is not ready for cluster creation. Choose another region.",
+            )?;
         let mut client = self.fork()?;
-        client.deployment = deployment;
+        client.deployment = Some((deployment, region.cloud_region));
         Ok(client)
     }
 }

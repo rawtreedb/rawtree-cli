@@ -131,8 +131,8 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let s3_storage = options.s3_storage.to_json()?;
-    let client = client.for_region(options.organization, options.region_id)?;
-    let (_, sizes) = load_cluster_sizes(&client)?;
+    let placement_client = client.for_region(options.organization, options.region_id)?;
+    let (_, sizes) = load_cluster_sizes(&placement_client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
         .max_size
@@ -153,9 +153,7 @@ pub fn create(
         options.identity,
     );
 
-    if let Some(region_id) = options.region_id {
-        body["region_id"] = json!(region_id);
-    }
+    body["region_id"] = json!(options.region_id);
     let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
     let created: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
@@ -191,7 +189,7 @@ pub fn create(
 }
 
 pub struct ClusterCreateOptions<'a> {
-    pub region_id: Option<&'a str>,
+    pub region_id: &'a str,
     pub organization: Option<&'a str>,
     pub name: &'a str,
     pub replicas: u32,

@@ -55,10 +55,13 @@ fn create_flag_routes_size_discovery_and_preserves_region_in_body() {
 #[test]
 fn region_discovery_and_region_size_commands_are_available() {
     for action in ["regions", "sizes"] {
-        let mut responses = discovery();
-        let mut args = vec!["--org", "acme", "--json", "cluster", action];
+        let mut responses = if action == "regions" {
+            discovery()
+        } else {
+            vec![]
+        };
+        let args = vec!["--org", "acme", "--json", "cluster", action];
         if action == "sizes" {
-            args.extend(["--region-id", "region-id"]);
             responses.push((
                 "GET /v1/clusters/sizes".into(),
                 "200 OK",
