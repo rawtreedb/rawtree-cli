@@ -15,7 +15,10 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
-rpassword = "7"
+base64 = "0.22"
+getrandom = "0.2"
+sha2 = "0.10"
+tempfile = "3"
 indicatif = "0.18.4"
 urlencoding = "2"
 flate2 = "1"
@@ -27,7 +30,6 @@ axoupdater = { version = "0.10.2", default-features = false, features = ["blocki
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }
-tempfile = "3"
 
 [profile.release]
 lto = true

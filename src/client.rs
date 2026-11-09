@@ -24,6 +24,7 @@ const RAWTREE_USER_AGENT: &str = concat!("rawtree-cli/", env!("CARGO_PKG_VERSION
 pub struct ApiClient {
     pub base_url: String,
     pub token: Option<String>,
+    saved_oauth_client_id: Option<String>,
     client: Client,
     routing: routing::RoutingCache,
     deployment: Option<(String, String)>,
@@ -34,13 +35,32 @@ impl ApiClient {
         Self {
             base_url,
             token,
+            saved_oauth_client_id: None,
             client: Client::new(),
             routing: routing::RoutingCache::default(),
             deployment: None,
         }
     }
 
-    fn unrouted_request(&self, method: reqwest::Method, path: &str) -> RequestBuilder {
+    pub fn from_saved_config(base_url: String) -> Result<Self> {
+        let cfg = crate::config::load()?;
+        let mut client = Self::new(base_url, cfg.token);
+        client.saved_oauth_client_id = cfg.oauth.map(|credentials| credentials.client_id);
+        Ok(client)
+    }
+
+    pub fn fork(&self) -> Self {
+        Self {
+            base_url: self.base_url.clone(),
+            token: self.token.clone(),
+            saved_oauth_client_id: self.saved_oauth_client_id.clone(),
+            client: self.client.clone(),
+            routing: routing::RoutingCache::default(),
+            deployment: self.deployment.clone(),
+        }
+    }
+
+    fn unrouted_request(&self, method: reqwest::Method, path: &str) -> Result<RequestBuilder> {
         self.deployment_request(method, path, self.deployment.as_ref())
     }
 
@@ -49,7 +69,7 @@ impl ApiClient {
         method: reqwest::Method,
         path: &str,
         deployment: Option<&(String, String)>,
-    ) -> RequestBuilder {
+    ) -> Result<RequestBuilder> {
         let url = routing::deployment_url(&format!("{}{}", self.base_url, path), deployment);
         let request = with_client_header(self.client.request(method, url));
         let request = match deployment {
@@ -58,10 +78,14 @@ impl ApiClient {
                 .header("X-RawTree-Region", region),
             None => request,
         };
-        match &self.token {
+        let token = match &self.saved_oauth_client_id {
+            Some(client_id) => crate::oauth::saved_token(&self.base_url, client_id)?,
+            None => self.token.clone(),
+        };
+        Ok(match token {
             Some(token) => request.bearer_auth(token),
             None => request,
-        }
+        })
     }
 
     pub fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {

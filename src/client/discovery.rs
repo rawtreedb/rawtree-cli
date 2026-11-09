@@ -129,7 +129,7 @@ impl ApiClient {
     ) -> Result<Value> {
         let organizations: Organizations = handle_response(
             before_deadline(
-                self.unrouted_request(Method::GET, "/v1/organizations"),
+                self.unrouted_request(Method::GET, "/v1/organizations")?,
                 deadline,
             )?
             .send()?,
@@ -205,7 +205,7 @@ impl ApiClient {
                     target.routing.as_ref(),
                 )
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         let responses = load_catalogs(requests, lookup_deadline)?;
         if !responses.is_empty() && responses.iter().all(Result::is_err) {
             return Err(responses

@@ -120,7 +120,7 @@ fn missing_organization_returns_available_choices_without_saving_authentication(
         responses.push(organizations(&names));
         assert_selection(
             &responses,
-            &["login"],
+            &["login", "--device-auth"],
             json!({"needs": "org", "orgs": names}),
         );
     }
@@ -138,7 +138,7 @@ fn missing_cluster_returns_choices_in_the_selected_organization() {
         ]);
         assert_selection(
             &responses,
-            &["login", "--org", "team"],
+            &["login", "--device-auth", "--org", "team"],
             json!({"needs": "cluster", "organization": "team", "clusters": names}),
         );
     }
@@ -157,7 +157,14 @@ fn missing_database_returns_choices_in_the_selected_cluster() {
         ]);
         assert_selection(
             &responses,
-            &["login", "--org", "team", "--cluster", "production"],
+            &[
+                "login",
+                "--device-auth",
+                "--org",
+                "team",
+                "--cluster",
+                "production",
+            ],
             json!({"needs": "database", "organization": "team", "cluster": "production", "databases": names}),
         );
     }
@@ -183,7 +190,7 @@ fn approval_is_reported_before_polling_completes_and_only_once() {
     ]);
     let (output, saved, bodies) = common::run_cli_with_progress(
         &responses,
-        &["login"],
+        &["login", "--device-auth"],
         &original_config(),
         Some(common::ProgressExpectation {
             before_response: "POST /v1/auth/cli/device/token",
@@ -204,7 +211,7 @@ fn approval_is_reported_before_polling_completes_and_only_once() {
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
         json!({
-            "email": "user@example.test", "status": "logged_in", "method": "browser",
+            "email": "user@example.test", "status": "logged_in", "method": "device",
             "selected_organization": "team", "selected_cluster": "production", "selected_database": "analytics"
         })
     );
@@ -229,6 +236,7 @@ fn explicit_json_and_selectors_complete_login_with_no_browser() {
         &responses,
         &[
             "login",
+            "--device-auth",
             "--json",
             "--no-browser",
             "--org",
@@ -268,8 +276,11 @@ fn invalid_selectors_return_json_errors_and_preserve_config() {
             responses.push(databases(&["analytics"]));
         }
         let original = original_config();
-        let (output, saved, _) =
-            common::run_cli(&responses, &["login", flag, "missing"], &original);
+        let (output, saved, _) = common::run_cli(
+            &responses,
+            &["login", "--device-auth", flag, "missing"],
+            &original,
+        );
         assert_eq!(output.status.code(), Some(4));
         assert!(output.stdout.is_empty());
         let records = stderr_records(&output);
@@ -298,7 +309,8 @@ fn discovery_errors_are_not_treated_as_empty_choices_or_success() {
             json!({"message": "Unavailable"}),
         ));
         let original = original_config();
-        let (output, saved, _) = common::run_cli(&responses, &["login"], &original);
+        let (output, saved, _) =
+            common::run_cli(&responses, &["login", "--device-auth"], &original);
         assert_eq!(output.status.code(), Some(3));
         assert!(output.stdout.is_empty());
         let records = stderr_records(&output);
@@ -319,7 +331,7 @@ fn approval_timeout_returns_json_without_saving_authentication() {
         ),
     ];
     let original = original_config();
-    let (output, saved, _) = common::run_cli(&responses, &["login"], &original);
+    let (output, saved, _) = common::run_cli(&responses, &["login", "--device-auth"], &original);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let records = stderr_records(&output);
@@ -350,7 +362,8 @@ fn device_authentication_errors_preserve_config() {
             json!({"error": "access_denied", "message": "Approval denied"}),
         ));
         let original = original_config();
-        let (output, saved, _) = common::run_cli(&responses, &["login"], &original);
+        let (output, saved, _) =
+            common::run_cli(&responses, &["login", "--device-auth"], &original);
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
         let records = stderr_records(&output);

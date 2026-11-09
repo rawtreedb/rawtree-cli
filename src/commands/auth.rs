@@ -18,48 +18,6 @@ use crate::constants::DEFAULT_API_URL;
 use crate::org;
 use crate::output;
 
-const LOGIN_METHOD_LABELS: [&str; 2] = ["Log in with Rawtree", "Enter API key"];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LoginMethod {
-    Rawtree,
-    ManualApiKey,
-}
-
-fn parse_login_method(input: &str) -> Option<LoginMethod> {
-    match input.trim() {
-        "1" => Some(LoginMethod::Rawtree),
-        "2" => Some(LoginMethod::ManualApiKey),
-        input if input.eq_ignore_ascii_case(LOGIN_METHOD_LABELS[0]) => Some(LoginMethod::Rawtree),
-        input if input.eq_ignore_ascii_case(LOGIN_METHOD_LABELS[1]) => {
-            Some(LoginMethod::ManualApiKey)
-        }
-        _ => None,
-    }
-}
-
-pub fn prompt_for_login_method() -> Result<LoginMethod> {
-    println!("Choose how to log in:");
-    for (index, label) in LOGIN_METHOD_LABELS.iter().enumerate() {
-        println!("  {}. {}", index + 1, label);
-    }
-
-    loop {
-        print!("Login method: ");
-        io::stdout().flush()?;
-
-        let input = read_selection_input("login method")?;
-        if let Some(method) = parse_login_method(&input) {
-            return Ok(method);
-        }
-        eprintln!("Enter 1 or 2.");
-    }
-}
-
-pub fn prompt_for_api_key() -> Result<String> {
-    rpassword::prompt_password("API key: ").context("failed to read API key")
-}
-
 #[derive(Deserialize)]
 struct AuthResponse {
     token: String,
@@ -140,20 +98,18 @@ fn apply_auth_config(
     resp: &AuthResponse,
     selection: &AuthSelection,
 ) {
+    cfg.oauth = None;
     cfg.token = Some(resp.token.clone());
     cfg.email = Some(resp.email.clone());
     cfg.default_organization = selection.organization.clone();
     cfg.default_cluster = selection.cluster.clone();
     cfg.default_database = selection.database.clone();
-    if cfg.url.is_none() && base_url != DEFAULT_API_URL {
-        cfg.url = Some(base_url.to_string());
-    }
+    cfg.url = (base_url != DEFAULT_API_URL).then(|| base_url.to_string());
 }
 
 fn read_selection_input(label: &str) -> Result<String> {
     let mut input = String::new();
-    let bytes_read = io::stdin().read_line(&mut input)?;
-    if bytes_read == 0 {
+    if io::stdin().read_line(&mut input)? == 0 {
         anyhow::bail!("No {} selected: input closed.", label);
     }
     Ok(input.trim().to_string())
@@ -256,12 +212,12 @@ fn map_config_read_error(err: anyhow::Error) -> anyhow::Error {
 fn update_and_save_browser_config(
     client: &ApiClient,
     resp: &AuthResponse,
+    oauth: Option<crate::oauth::Credentials>,
     cli_org: Option<&str>,
     cli_cluster: Option<&str>,
     cli_database: Option<&str>,
     json_mode: bool,
 ) -> Result<AuthSelection, SelectionError> {
-    let mut cfg = config::load()?;
     let selection = resolve_browser_auth_selection(
         &client.base_url,
         &resp.token,
@@ -270,7 +226,10 @@ fn update_and_save_browser_config(
         cli_database,
         json_mode,
     )?;
+    let _config_lock = config::lock()?;
+    let mut cfg = config::load()?;
     apply_auth_config(&mut cfg, &client.base_url, resp, &selection);
+    cfg.oauth = oauth;
     config::save(&cfg)?;
     Ok(selection)
 }
@@ -331,6 +290,7 @@ pub fn login_with_api_key(
         ));
     }
 
+    let _config_lock = config::lock()?;
     let mut cfg = config::load().map_err(map_config_read_error)?;
     let selection = resolve_api_key_auth_selection(
         &client.base_url,
@@ -341,14 +301,13 @@ pub fn login_with_api_key(
     )
     .map_err(map_validation_error)?;
 
+    cfg.oauth = None;
     cfg.token = Some(api_key.to_string());
     cfg.email = None;
     cfg.default_organization = selection.organization.clone();
     cfg.default_cluster = selection.cluster.clone();
     cfg.default_database = selection.database.clone();
-    if cfg.url.is_none() && client.base_url != DEFAULT_API_URL {
-        cfg.url = Some(client.base_url.clone());
-    }
+    cfg.url = (client.base_url != DEFAULT_API_URL).then(|| client.base_url.clone());
 
     config::save(&cfg).map_err(map_write_error)?;
     let config_path = config::path().map_err(map_write_error)?;
@@ -429,15 +388,42 @@ fn poll_cli_device_token(base_url: &str, device_code: &str) -> Result<CliDeviceT
     Err(format_api_error(status_code, &body))
 }
 
+pub struct BrowserLoginOptions {
+    pub device_auth: bool,
+    pub no_browser: bool,
+    pub timeout_seconds: u64,
+}
+
 pub fn login_with_browser(
     client: &ApiClient,
-    no_browser: bool,
-    timeout_seconds: u64,
+    options: BrowserLoginOptions,
     organization: Option<String>,
     cluster: Option<String>,
     database: Option<String>,
     json_mode: bool,
 ) -> Result<ExitCode> {
+    let BrowserLoginOptions {
+        device_auth,
+        no_browser,
+        timeout_seconds,
+    } = options;
+    if !device_auth {
+        let login =
+            crate::oauth::authorize(&client.base_url, no_browser, timeout_seconds, json_mode)?;
+        let auth = AuthResponse {
+            token: login.access_token,
+            email: login.email,
+        };
+        return finish_browser_login(
+            client,
+            &auth,
+            Some(login.credentials),
+            organization.as_deref(),
+            cluster.as_deref(),
+            database.as_deref(),
+            json_mode,
+        );
+    }
     let start: CliDeviceStartResponse = client.post("/v1/auth/cli/device/start", &json!({}))?;
     let total_timeout_seconds = effective_timeout_seconds(timeout_seconds, start.expires_in);
     let poll_interval_seconds = start.interval.max(1);
@@ -489,40 +475,15 @@ pub fn login_with_browser(
                     email,
                 } = resp;
                 let auth = AuthResponse { token, email };
-                let selection = match update_and_save_browser_config(
+                return finish_browser_login(
                     client,
                     &auth,
+                    None,
                     organization.as_deref(),
                     cluster.as_deref(),
                     database.as_deref(),
                     json_mode,
-                ) {
-                    Ok(selection) => selection,
-                    Err(SelectionError::Required(choices)) => {
-                        output::print_result(&choices, true, |_| {});
-                        return Ok(ExitCode::from(2));
-                    }
-                    Err(SelectionError::Failed(error)) => return Err(error),
-                };
-                let selected_organization = selection.organization.clone();
-                let selected_cluster = selection.cluster.clone();
-                let selected_database = selection.database.clone();
-                output::print_result(
-                    &json!({
-                        "email": auth.email,
-                        "status": "logged_in",
-                        "method": "browser",
-                        "selected_organization": selected_organization,
-                        "selected_cluster": selected_cluster,
-                        "selected_database": selected_database,
-                    }),
-                    json_mode,
-                    |_| {
-                        println!("Logged in as {}.", auth.email);
-                        print_selected_context(&selection);
-                    },
                 );
-                return Ok(ExitCode::SUCCESS);
             }
             CliDeviceTokenPoll::Pending => {
                 if Instant::now() >= deadline {
@@ -537,8 +498,59 @@ pub fn login_with_browser(
     }
 }
 
+fn finish_browser_login(
+    client: &ApiClient,
+    auth: &AuthResponse,
+    oauth: Option<crate::oauth::Credentials>,
+    organization: Option<&str>,
+    cluster: Option<&str>,
+    database: Option<&str>,
+    json_mode: bool,
+) -> Result<ExitCode> {
+    let method = if oauth.is_some() { "oauth" } else { "device" };
+    let selection = match update_and_save_browser_config(
+        client,
+        auth,
+        oauth,
+        organization,
+        cluster,
+        database,
+        json_mode,
+    ) {
+        Ok(selection) => selection,
+        Err(SelectionError::Required(choices)) => {
+            output::print_result(&choices, true, |_| {});
+            return Ok(ExitCode::from(2));
+        }
+        Err(SelectionError::Failed(error)) => return Err(error),
+    };
+    let selected_organization = selection.organization.clone();
+    let selected_cluster = selection.cluster.clone();
+    let selected_database = selection.database.clone();
+    output::print_result(
+        &json!({
+            "email": auth.email,
+            "status": "logged_in",
+            "method": method,
+            "selected_organization": selected_organization,
+            "selected_cluster": selected_cluster,
+            "selected_database": selected_database,
+        }),
+        json_mode,
+        |_| {
+            println!("Logged in as {}.", auth.email);
+            print_selected_context(&selection);
+        },
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
 pub fn logout(json_mode: bool) -> Result<()> {
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
+    if let Some(credentials) = &cfg.oauth {
+        crate::oauth::revoke(credentials)?;
+    }
     clear_auth_config(&mut cfg);
     config::save(&cfg)?;
 
@@ -552,8 +564,8 @@ pub fn logout(json_mode: bool) -> Result<()> {
 mod tests {
     use super::{
         api_key_context_paths, apply_auth_config, auth_selection_from_database_context,
-        clear_auth_config, effective_timeout_seconds, parse_login_method, AuthResponse,
-        AuthSelection, DatabaseContextResponse, LoginMethod, LOGIN_METHOD_LABELS,
+        clear_auth_config, effective_timeout_seconds, AuthResponse, AuthSelection,
+        DatabaseContextResponse,
     };
     use crate::config::Config;
 
@@ -608,25 +620,6 @@ mod tests {
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_cluster, None);
         assert_eq!(cfg.default_database, None);
-    }
-
-    #[test]
-    fn login_method_uses_expected_labels_and_accepts_numbers_or_labels() {
-        let expected = [
-            ("Log in with Rawtree", LoginMethod::Rawtree),
-            ("Enter API key", LoginMethod::ManualApiKey),
-        ];
-
-        assert_eq!(LOGIN_METHOD_LABELS, expected.map(|(label, _method)| label));
-        for (index, (label, method)) in expected.iter().enumerate() {
-            assert_eq!(parse_login_method(&(index + 1).to_string()), Some(*method));
-            assert_eq!(parse_login_method(label), Some(*method));
-        }
-        assert_eq!(
-            parse_login_method("enter api key"),
-            Some(LoginMethod::ManualApiKey)
-        );
-        assert_eq!(parse_login_method("3"), None);
     }
 
     #[test]
@@ -696,6 +689,7 @@ mod tests {
     #[test]
     fn clear_auth_config_resets_auth_state_and_saved_url() {
         let mut cfg = Config {
+            oauth: None,
             token: Some("rt_test".to_string()),
             email: Some("user@example.com".to_string()),
             url: Some("https://api.rawtree.com".to_string()),

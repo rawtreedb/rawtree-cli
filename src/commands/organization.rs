@@ -84,6 +84,7 @@ pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
 }
 
 pub fn use_organization(name: &str, json_mode: bool) -> Result<()> {
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     cfg.default_organization = Some(name.to_string());
     config::save(&cfg)?;
@@ -99,6 +100,7 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
         &format!("/v1/organizations/{old}"),
         &json!({"organization_name": new_name}),
     )?;
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     cfg.default_organization =
         renamed_default_org(cfg.default_organization.as_deref(), old, &resp.name);
@@ -116,13 +118,14 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
 
 pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
     let resp: DeleteOrganizationResponse = client.delete(&format!("/v1/organizations/{name}"))?;
-    if resp.deleted {
+    if resp.deleted && config::load()?.default_organization.as_deref() == Some(name) {
+        let next = org::list_organizations(client)?
+            .into_iter()
+            .next()
+            .map(|item| item.name);
+        let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
         if cfg.default_organization.as_deref() == Some(name) {
-            let next = org::list_organizations(client)?
-                .into_iter()
-                .next()
-                .map(|item| item.name);
             cfg.default_organization =
                 default_org_after_delete(cfg.default_organization.as_deref(), name, next);
             config::save(&cfg)?;
