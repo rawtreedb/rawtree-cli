@@ -47,9 +47,21 @@ fn run_cli_with_input(
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
+    let original = original
+        .to_string()
+        .replace("__API_URL__", &url)
+        .replace("__ISSUER_URL__", &url.replace("127.0.0.1", "localhost"));
     let responses = responses
         .iter()
-        .map(|(path, status, body)| (path.to_string(), status.to_string(), body.to_string()))
+        .map(|(path, status, body)| {
+            (
+                path.to_string(),
+                status.to_string(),
+                body.to_string()
+                    .replace("__API_URL__", &url)
+                    .replace("__ISSUER_URL__", &url.replace("127.0.0.1", "localhost")),
+            )
+        })
         .collect::<Vec<_>>();
     if let Some(progress) = on_progress {
         assert!(
@@ -105,7 +117,16 @@ fn run_cli_with_input(
             bodies.push(if body_bytes.is_empty() {
                 Value::Null
             } else {
-                serde_json::from_slice(&body_bytes).unwrap()
+                serde_json::from_slice(&body_bytes).unwrap_or_else(|_| {
+                    reqwest::Url::parse(&format!(
+                        "http://localhost/?{}",
+                        String::from_utf8_lossy(&body_bytes)
+                    ))
+                    .unwrap()
+                    .query_pairs()
+                    .map(|(key, value)| (key.into_owned(), Value::String(value.into_owned())))
+                    .collect()
+                })
             });
             if progress_barrier == Some(path.as_str()) {
                 progress_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -119,15 +140,15 @@ fn run_cli_with_input(
     let home = tempfile::tempdir().unwrap();
     let config_path = home.path().join(".config/rtree/config.json");
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    std::fs::write(&config_path, original.to_string()).unwrap();
+    std::fs::write(&config_path, &original).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_rtree"));
     for (name, _) in std::env::vars().filter(|(name, _)| name.starts_with("RAWTREE_")) {
         command.env_remove(name);
     }
     let mut child = command
         .env("HOME", home.path())
-        .args(["--api-url", &url])
-        .args(args)
+        .env("RAWTREE_API_URL", &url)
+        .args(args.iter().map(|arg| arg.replace("__API_URL__", &url)))
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {

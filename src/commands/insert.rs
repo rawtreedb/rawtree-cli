@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -223,7 +222,7 @@ fn insert_jsonl_streaming(
         let inserted = Arc::clone(&inserted);
         let failed = Arc::clone(&failed);
         let first_error = Arc::clone(&first_error);
-        let client = ApiClient::new(client.base_url.clone(), client.token.clone());
+        let client = client.fork()?;
         let url = url.clone();
 
         handles.push(thread::spawn(move || {

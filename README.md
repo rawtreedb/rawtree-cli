@@ -80,19 +80,34 @@ rtree open
 
 ### Login modes
 
-- Interactive login selection: `rtree login`
+- Browser OAuth: `rtree login`
+- Device code (remote terminals): `rtree login --device-auth`
 - Direct API key save: `rtree login --api-key rt_123`
-- Select a database during auth in a specific cluster: `rtree login --org team-alpha --cluster production --database analytics`
+- Select defaults: `rtree login --org team-alpha --cluster production --database analytics`
 
-Interactive login offers browser-based Rawtree authentication or securely prompts
-for an existing API key. Non-interactive and `--json` login continue to use
-browser-based authentication unless `--api-key` is provided.
+Default login opens RawTree's OAuth consent flow using Authorization Code with
+PKCE. Approve **RawTree CLI** in a browser on the same machine; the browser
+returns to a temporary localhost callback. The CLI saves an API access token
+and rotating refresh token, and refreshes the access token before it expires.
+OAuth uses the same authorization server as hosted MCP, with the RawTree API as
+its resource. OAuth's `full_access` scope excludes billing, identity/session,
+and staff operations.
 
-When stdin is not a terminal, `login` uses JSON automatically. Browser login
-prints a `device_approval_required` JSON event to stderr before waiting for
-approval. Open its `verification_uri_complete` link in a browser on any device.
-JSON mode does not open a browser automatically; interactive terminals can use
-`--no-browser` to print the link without opening it.
+Use `--device-auth` when the browser runs on another machine, such as over SSH.
+This preserves the existing device-code flow and its first-party session token.
+Existing saved sessions and API keys continue working. `--device-auth` cannot
+be combined with `--api-key`. An explicit device login ignores `RAWTREE_API_KEY`;
+otherwise that environment variable also selects API-key login.
+
+When stdin is not a terminal, `login` uses JSON automatically. JSON mode does not
+open a browser. Interactive terminals can use `--no-browser` to print the URL.
+Default OAuth login emits this JSON event on stderr:
+
+```json
+{"event":"oauth_authorization_required","authorization_url":"<authorization URL>","expires_in":300}
+```
+
+With `--device-auth`, open `verification_uri_complete` on any device:
 
 ```json
 {"event":"device_approval_required","verification_uri":"<approval page>","verification_uri_complete":"<approval link>","user_code":"ABCD-EFGH","expires_in":600}
@@ -139,11 +154,19 @@ With `--json`, API key login returns (unset selections are `null`):
 2. `RAWTREE_API_KEY` environment variable
 3. Local config file
 
+Saved OAuth credentials are bound to their API URL. To switch environments, run
+`rtree login --api-url <url>` or supply an API key for that environment.
+
 ### Logout
 
 ```sh
 rtree logout
 ```
+
+OAuth logout revokes the saved grant before clearing the local config. If
+revocation fails, credentials are retained so you can retry. Device sessions and
+API keys are removed locally, as before. You can also revoke OAuth grants in
+RawTree under Profile > OAuth apps.
 
 Logout clears the local config, including any saved API URL, so the next run uses
 the default `https://api.rawtree.com` endpoint unless an override is provided.

@@ -31,7 +31,7 @@ impl ApiClient {
         deadline: Option<Instant>,
     ) -> Result<Regions> {
         let request = self
-            .unrouted_request(Method::GET, "/v1/regions")
+            .unrouted_request(Method::GET, "/v1/regions")?
             .query(&[("organization_id", organization_id)]);
         handle_response(routing::before_deadline(request, deadline)?.send()?)
     }
@@ -43,7 +43,7 @@ impl ApiClient {
             Some(id) => {
                 anyhow::ensure!(
                     !self
-                        .token
+                        .token()?
                         .as_deref()
                         .is_some_and(|token| token.starts_with("rt_")),
                     "Region selection requires a user credential. Run `rtree login`."
@@ -64,12 +64,8 @@ impl ApiClient {
                 }
             }
         };
-        Ok(Self {
-            base_url: self.base_url.clone(),
-            token: self.token.clone(),
-            client: self.client.clone(),
-            routing: routing::RoutingCache::default(),
-            deployment,
-        })
+        let mut client = self.fork()?;
+        client.deployment = deployment;
+        Ok(client)
     }
 }

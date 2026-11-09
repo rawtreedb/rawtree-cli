@@ -85,7 +85,7 @@ impl ApiClient {
         }
         let response: Organizations = handle_response(
             before_deadline(
-                self.unrouted_request(Method::GET, "/v1/organizations"),
+                self.unrouted_request(Method::GET, "/v1/organizations")?,
                 deadline,
             )?
             .send()?,
@@ -129,7 +129,7 @@ impl ApiClient {
             *self.routing.organizations.borrow_mut() = None;
         }
         let request =
-            self.deployment_request(method, path, pair.as_ref().or(self.deployment.as_ref()));
+            self.deployment_request(method, path, pair.as_ref().or(self.deployment.as_ref()))?;
         before_deadline(request, deadline)
     }
 
@@ -139,7 +139,7 @@ impl ApiClient {
         deadline: Option<Instant>,
     ) -> Result<Option<(String, String)>> {
         if self
-            .token
+            .token()?
             .as_deref()
             .is_none_or(|token| token.starts_with("rt_"))
         {

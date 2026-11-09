@@ -86,6 +86,7 @@ pub fn create(
     }
     let path = database_create_collection_path(organization, cluster);
     let resp: CreateDatabaseResponse = client.post(&path, &body)?;
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     apply_database_create_config(&mut cfg, &resp, organization, cluster);
     config::save(&cfg)?;
@@ -99,6 +100,7 @@ pub fn create(
 }
 
 pub fn use_database(name: &str, json_mode: bool) -> Result<()> {
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     cfg.default_database = Some(name.to_string());
     config::save(&cfg)?;

@@ -236,6 +236,7 @@ pub fn update(
     let updated: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
     if name.is_some() {
+        let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
         cfg.default_cluster = renamed_default_cluster(
             cfg.default_cluster.as_deref(),
@@ -372,6 +373,7 @@ pub fn sizes(client: &ApiClient, json_mode: bool) -> Result<()> {
 }
 
 pub fn use_cluster(name: &str, json_mode: bool) -> Result<()> {
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     cfg.default_cluster = Some(name.to_string());
     config::save(&cfg)?;
@@ -469,6 +471,7 @@ pub fn delete(
     let result: DeleteClusterResponse = client.delete(&path)?;
     let value = delete_output(&cluster, result.deleted);
     if result.deleted {
+        let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
         cfg.default_cluster = default_cluster_after_delete(
             cfg.default_cluster.as_deref(),
