@@ -82,14 +82,16 @@ impl ApiClient {
         }
     }
 
-    pub fn fork(&self) -> Self {
-        Self {
+    pub fn fork(&self) -> Result<Self> {
+        // Every sender must retain the same identity, even before its first request.
+        self.token()?;
+        Ok(Self {
             base_url: self.base_url.clone(),
             credentials: self.credentials.clone(),
             client: self.client.clone(),
             routing: routing::RoutingCache::default(),
             deployment: self.deployment.clone(),
-        }
+        })
     }
 
     fn unrouted_request(&self, method: reqwest::Method, path: &str) -> Result<RequestBuilder> {
@@ -299,6 +301,57 @@ fn format_server_error(body: &str, status: u16) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forks_capture_one_identity_before_their_first_requests() {
+        // Isolate HOME in a subprocess so parallel unit tests cannot read this config.
+        if std::env::var_os("RAWTREE_FORK_IDENTITY_TEST").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "client::tests::forks_capture_one_identity_before_their_first_requests",
+                    "--nocapture",
+                ])
+                .env("HOME", home.path())
+                .env("RAWTREE_FORK_IDENTITY_TEST", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let base_url = "https://api.example.test";
+        let mut cfg: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "token":"original-access", "oauth": {
+                "api_url":base_url, "resource":base_url, "client_id":"original-client",
+                "refresh_token":"original-refresh", "token_endpoint":format!("{base_url}/oauth/token"),
+                "revocation_endpoint":format!("{base_url}/oauth/revoke"), "expires_at":i64::MAX
+            }
+        })).unwrap();
+        crate::config::save(&cfg).unwrap();
+        let client = ApiClient::from_saved_config(base_url.into());
+        let first = client.fork().unwrap();
+        let second = client.fork().unwrap();
+        assert_eq!(first.token().unwrap().as_deref(), Some("original-access"));
+        cfg.oauth.as_mut().unwrap().client_id = "replacement-client".into();
+        cfg.token = Some("replacement-access".into());
+        crate::config::save(&cfg).unwrap();
+        assert!(second
+            .token()
+            .unwrap_err()
+            .to_string()
+            .contains("login changed"));
+        assert!(client
+            .token()
+            .unwrap_err()
+            .to_string()
+            .contains("login changed"));
+    }
 
     #[test]
     fn empty_post_reads_completion_json_and_query_id_or_http_error() {

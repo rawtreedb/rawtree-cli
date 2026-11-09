@@ -222,7 +222,7 @@ fn insert_jsonl_streaming(
         let inserted = Arc::clone(&inserted);
         let failed = Arc::clone(&failed);
         let first_error = Arc::clone(&first_error);
-        let client = client.fork();
+        let client = client.fork()?;
         let url = url.clone();
 
         handles.push(thread::spawn(move || {

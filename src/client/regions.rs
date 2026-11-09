@@ -64,7 +64,7 @@ impl ApiClient {
                 }
             }
         };
-        let mut client = self.fork();
+        let mut client = self.fork()?;
         client.deployment = deployment;
         Ok(client)
     }
