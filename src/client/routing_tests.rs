@@ -350,7 +350,7 @@ fn creation_and_sizes_use_selected_region_without_mutating_default_client() {
     ]);
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".into()));
-    let regional = client.for_region(Some("acme"), Some("region-id")).unwrap();
+    let regional = client.for_region(Some("acme"), "region-id").unwrap();
     let _: Value = regional.get("/v1/clusters/sizes").unwrap();
     let _: Value = regional
         .post(
@@ -385,23 +385,21 @@ fn explicit_unusable_regions_never_reach_creation() {
     ] {
         let (base, server) = server(region_catalog(overrides));
         let client = ApiClient::new(base, Some("session.fixture".into()));
-        assert!(client.for_region(Some("acme"), Some("region-id")).is_err());
+        assert!(client.for_region(Some("acme"), "region-id").is_err());
         assert_eq!(server.join().unwrap().len(), 2);
     }
 }
 
 #[test]
-fn legacy_region_and_omitted_selection_preserve_default_routing() {
+fn legacy_region_is_rejected_and_unscoped_size_discovery_keeps_default_routing() {
     let id = "0c0f0a56-7f03-4d39-8e5d-000000000001";
     let mut responses =
         region_catalog(json!({"id":id,"deployment_id":null,"cloud_region":"us-east-1"}));
-    responses.extend([("200 OK", json!({})), ("200 OK", json!({}))]);
+    responses.push(("200 OK", json!({})));
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".into()));
-    for selected in [Some(id), None] {
-        let regional = client.for_region(Some("acme"), selected).unwrap();
-        let _: Value = regional.get("/v1/clusters/sizes").unwrap();
-    }
+    assert!(client.for_region(Some("acme"), id).is_err());
+    let _: Value = client.get("/v1/clusters/sizes").unwrap();
     for request in server.join().unwrap() {
         assert!(!request.headers.contains_key("x-rawtree-region"));
     }
@@ -411,7 +409,7 @@ fn legacy_region_and_omitted_selection_preserve_default_routing() {
 fn api_keys_cannot_override_their_embedded_deployment() {
     let client = ApiClient::new("http://127.0.0.1:1".into(), Some("rt_fixture".into()));
     assert!(client
-        .for_region(Some("acme"), Some("region-id"))
+        .for_region(Some("acme"), "region-id")
         .err()
         .unwrap()
         .to_string()

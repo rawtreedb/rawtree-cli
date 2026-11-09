@@ -5,6 +5,14 @@ use serde_json::Value;
 #[ignore = "requires a bootstrapped Platform stack with the new cluster identity API"]
 fn cluster_identity_is_generated_persisted_and_read_back() {
     let cli = LiveCli::from_environment();
+    let regions = cli.json(&["cluster", "regions"]);
+    let region = regions["regions"]
+        .as_array()
+        .expect("region catalog")
+        .iter()
+        .find(|region| region["enabled"] == true && region["deployment_id"].is_string())
+        .expect("enabled deployment-backed test region");
+    let region_id = region["id"].as_str().expect("region ID");
     let catalog = cli.json(&["cluster", "sizes"]);
     let size = &catalog["sizes"][0];
     let size = format!("{}:{}", size["cpu_cores"], size["memory_gib"]);
@@ -16,6 +24,8 @@ fn cluster_identity_is_generated_persisted_and_read_back() {
     let created = cli.json(&[
         "cluster",
         "create",
+        "--region-id",
+        region_id,
         "--name",
         &name,
         "--replicas",

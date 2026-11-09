@@ -38,11 +38,10 @@ Use a user login and select a region from the organization's catalog:
 
 ```sh
 rtree --org acme cluster regions
-rtree --org acme cluster sizes --region-id <REGION_ID>
 rtree --org acme cluster create --region-id <REGION_ID> --name production --replicas 2 --min-size 2:8
 ```
 
-Size discovery and creation use the selected region's deployment. Omitting `--region-id` preserves the default backend. A selected region without a valid deployment is rejected, except for the legacy public US East region. API keys keep their embedded routing and cannot override it with `--region-id`.
+`cluster create` requires `--region-id`. It checks sizes in that region and sends the region ID to the API, which resolves the deployment internally. No deployment ID is needed. Missing, disabled, and unavailable placements fail without falling back to another region. Cluster creation requires a user login; API keys remain bound to existing clusters.
 
 ## Update
 
@@ -548,6 +547,7 @@ rtree cluster list
 rtree cluster list --json
 rtree cluster sizes
 rtree cluster create \
+  --region-id <REGION_ID> \
   --name production \
   --replicas 2 \
   --min-size 2:8 \
@@ -555,6 +555,7 @@ rtree cluster create \
   --idle-timeout-minutes 30
 # Or create a cluster with customer-owned S3 storage
 rtree cluster create \
+  --region-id <REGION_ID> \
   --name customer-data \
   --replicas 1 \
   --min-size 2:8 \
@@ -566,6 +567,7 @@ rtree cluster create \
   --s3-storage-access-external-id rawtree-example
 # Or choose explicit cluster identity with RawTree-managed default storage
 rtree cluster create \
+  --region-id <REGION_ID> \
   --name database-storage \
   --replicas 1 \
   --min-size 2:8 \
