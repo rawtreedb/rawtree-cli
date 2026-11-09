@@ -109,7 +109,8 @@ fn apply_auth_config(
 
 fn read_selection_input(label: &str) -> Result<String> {
     let mut input = String::new();
-    if io::stdin().read_line(&mut input)? == 0 {
+    let bytes_read = io::stdin().read_line(&mut input)?;
+    if bytes_read == 0 {
         anyhow::bail!("No {} selected: input closed.", label);
     }
     Ok(input.trim().to_string())

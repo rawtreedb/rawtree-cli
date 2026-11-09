@@ -93,6 +93,23 @@ fn callback(line: &str) {
     let response = http.get(callback).send().unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        response.headers()["content-security-policy"],
+        "default-src 'none'"
+    );
+    assert_eq!(response.headers()["connection"], "close");
+    assert!(
+        response.headers()["content-length"]
+            .to_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap()
+            > 0
+    );
     assert!(!response.text().unwrap().contains("authorization-secret"));
 }
 
@@ -132,10 +149,20 @@ fn default_login_uses_oauth_pkce_and_persists_refresh_credentials() {
     assert_eq!(saved["oauth"]["client_id"], "cli-installation");
     assert_eq!(saved["url"], saved["oauth"]["api_url"]);
     assert_eq!(saved["database"], "analytics");
+    assert_eq!(
+        bodies[1],
+        json!({
+            "client_name":"RawTree CLI", "application_type":"native",
+            "redirect_uris":[bodies[2]["redirect_uri"]], "grant_types":["authorization_code","refresh_token"],
+            "response_types":["code"], "token_endpoint_auth_method":"none", "scope":"full_access"
+        })
+    );
     assert_eq!(bodies[1]["application_type"], "native");
     assert_eq!(bodies[1]["token_endpoint_auth_method"], "none");
     assert_eq!(bodies[2]["grant_type"], "authorization_code");
     assert_eq!(bodies[2]["code"], "authorization-secret");
+    assert_eq!(bodies[2]["client_id"], "cli-installation");
+    assert_eq!(bodies[2]["resource"], saved["oauth"]["resource"]);
     assert_eq!(bodies[2]["redirect_uri"], bodies[1]["redirect_uris"][0]);
     let event: Value = serde_json::from_str(
         String::from_utf8_lossy(&output.stderr)
@@ -206,6 +233,8 @@ fn expired_access_refreshes_and_persists_rotation_before_the_command() {
     );
     assert_eq!(bodies[0]["grant_type"], "refresh_token");
     assert_eq!(bodies[0]["refresh_token"], "old-refresh");
+    assert_eq!(bodies[0]["client_id"], "cli-installation");
+    assert_eq!(bodies[0]["resource"], saved["oauth"]["resource"]);
     assert_eq!(saved["token"], "new-access");
     assert_eq!(saved["oauth"]["refresh_token"], "new-refresh");
 }
@@ -255,6 +284,7 @@ fn logout_revokes_without_refresh_and_retains_credentials_on_failure() {
         let (output, saved, bodies) =
             common::run_cli(&responses, &["logout", "--json"], &saved_oauth(0));
         assert_eq!(bodies[0]["token"], "old-refresh");
+        assert_eq!(bodies[0]["token_type_hint"], "refresh_token");
         assert_eq!(bodies[0]["client_id"], "cli-installation");
         if status == "200 OK" {
             assert!(output.status.success());
@@ -399,5 +429,187 @@ fn token_exchange_failure_and_incomplete_selection_preserve_config() {
         if incomplete_selection {
             assert_eq!(output.status.code(), Some(2));
         }
+    }
+}
+
+#[test]
+fn malformed_successful_tokens_never_expose_response_values() {
+    for field in ["access_token", "refresh_token", "token_type", "expires_in"] {
+        let mut body = json!({"access_token":"new-access", "refresh_token":"new-refresh", "expires_in":900, "token_type":"Bearer"});
+        body[field] = if field == "expires_in" {
+            json!("private-token-marker")
+        } else {
+            json!({"private-token-marker":true})
+        };
+        let responses = [("POST /oauth/token".into(), "200 OK", body)];
+        let (output, _, _) = common::run_cli(
+            &responses,
+            &["organization", "list", "--json"],
+            &saved_oauth(0),
+        );
+        assert!(!output.status.success());
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("private-token-marker"),
+            "token response data leaked"
+        );
+    }
+}
+
+#[test]
+fn token_responses_require_each_field_and_accept_case_insensitive_bearer() {
+    for exchange in [false, true] {
+        for (field, value) in [
+            ("token_type", json!("Basic")),
+            ("access_token", json!("")),
+            ("refresh_token", json!("")),
+            ("expires_in", json!(0)),
+        ] {
+            let mut responses = login_responses();
+            responses.truncate(3);
+            responses[2].2[field] = value;
+            let (output, saved, _) = if exchange {
+                run_login(
+                    &responses,
+                    &["login", "--no-browser"],
+                    &json!({"token":"old-access"}),
+                )
+            } else {
+                common::run_cli(
+                    &responses[2..],
+                    &["organization", "list", "--json"],
+                    &saved_oauth(0),
+                )
+            };
+            assert!(!output.status.success(), "invalid {field} accepted");
+            assert_eq!(saved["token"], "old-access");
+        }
+    }
+    let mut responses = login_responses();
+    responses[2].2["token_type"] = json!("bEaReR");
+    let (output, _, _) = run_login(&responses, &["login", "--no-browser"], &json!({}));
+    assert!(output.status.success());
+}
+
+#[test]
+fn empty_registration_client_id_is_rejected_before_authorization() {
+    let mut responses = login_responses();
+    responses.truncate(2);
+    responses[1].2["client_id"] = json!("");
+    let (output, saved, _) = common::run_cli(
+        &responses,
+        &["login", "--no-browser"],
+        &json!({"token":"old"}),
+    );
+    assert!(!output.status.success());
+    assert_eq!(saved["token"], "old");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("oauth_authorization_required"));
+}
+
+#[test]
+fn every_discovered_endpoint_is_bound_to_the_issuer() {
+    for field in [
+        "authorization_endpoint",
+        "registration_endpoint",
+        "token_endpoint",
+        "revocation_endpoint",
+    ] {
+        let mut responses = login_responses();
+        responses.truncate(1);
+        responses[0].2[field] = json!("https://different.example/oauth");
+        let (output, _, _) = common::run_cli(&responses, &["login"], &json!({}));
+        assert!(!output.status.success(), "{field}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("origin"));
+    }
+}
+
+#[test]
+fn discovery_registration_and_exchange_do_not_follow_redirects_or_echo_errors() {
+    for stage in 0..3 {
+        for status in ["302 Found", "500 Internal Server Error"] {
+            let mut responses = login_responses();
+            responses.truncate(stage + 1);
+            responses[stage].1 = status;
+            responses[stage].2 = json!({"secret":"private-marker"});
+            let (output, _, _) = if stage == 2 {
+                run_login(&responses, &["login"], &json!({}))
+            } else {
+                common::run_cli(&responses, &["login"], &json!({}))
+            };
+            assert!(!output.status.success());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("private-marker"));
+        }
+    }
+}
+
+#[test]
+fn oauth_timeout_zero_and_large_values_are_capped_at_ten_minutes() {
+    for (value, expected) in [("0", 600), ("1", 1), ("600", 600), ("900", 600)] {
+        let (output, _, _) = run_login(
+            &login_responses(),
+            &["login", "--timeout-seconds", value],
+            &json!({}),
+        );
+        assert!(output.status.success());
+        let event: Value = serde_json::from_str(
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event["expires_in"], expected);
+    }
+}
+
+#[test]
+fn deleting_other_or_absent_organizations_preserves_defaults() {
+    for (deleted, selected) in [(false, "old"), (false, "other"), (true, "other")] {
+        let responses = [(
+            "DELETE /v1/organizations/old".into(),
+            "200 OK",
+            json!({"deleted":deleted}),
+        )];
+        let (output, saved, _) = common::run_cli(
+            &responses,
+            &["organization", "delete", "old", "--json"],
+            &json!({"token":"rt_saved","default_organization":selected}),
+        );
+        assert!(output.status.success());
+        assert_eq!(saved["default_organization"], selected);
+    }
+}
+
+#[test]
+fn saved_oauth_accepts_a_trailing_slash_and_refreshes_within_the_safety_window() {
+    for remaining in [30, 60, 120] {
+        let mut responses = vec![];
+        if remaining <= 60 {
+            responses.push(("POST /oauth/token".into(), "200 OK", json!({"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":900})));
+        }
+        responses.push((
+            "GET /v1/organizations".into(),
+            "200 OK",
+            json!({"organizations":[]}),
+        ));
+        let (output, saved, _) = common::run_cli(
+            &responses,
+            &[
+                "--api-url",
+                "__API_URL__/",
+                "organization",
+                "list",
+                "--json",
+            ],
+            &saved_oauth(chrono::Utc::now().timestamp() + remaining),
+        );
+        assert!(output.status.success());
+        assert_eq!(
+            saved["token"],
+            if remaining <= 60 {
+                "new-access"
+            } else {
+                "old-access"
+            }
+        );
     }
 }

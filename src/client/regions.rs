@@ -43,7 +43,7 @@ impl ApiClient {
             Some(id) => {
                 anyhow::ensure!(
                     !self
-                        .token
+                        .token()?
                         .as_deref()
                         .is_some_and(|token| token.starts_with("rt_")),
                     "Region selection requires a user credential. Run `rtree login`."

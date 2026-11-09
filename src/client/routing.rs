@@ -139,7 +139,7 @@ impl ApiClient {
         deadline: Option<Instant>,
     ) -> Result<Option<(String, String)>> {
         if self
-            .token
+            .token()?
             .as_deref()
             .is_none_or(|token| token.starts_with("rt_"))
         {

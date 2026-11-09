@@ -166,3 +166,156 @@ fn concurrent_processes_rotate_once_and_streaming_senders_refresh_later_batches(
         }
     }
 }
+
+#[test]
+fn key_precedence_and_device_override_apply_to_real_requests() {
+    for (args, environment, expected, device) in [
+        (
+            vec!["organization", "list"],
+            Some("rt_env"),
+            Some("rt_env"),
+            false,
+        ),
+        (
+            vec!["organization", "list", "--api-key", "rt_cli"],
+            Some("rt_env"),
+            Some("rt_cli"),
+            false,
+        ),
+        (vec!["organization", "list"], None, Some("rt_saved"), false),
+        (vec!["login"], Some("rt_env"), Some("rt_env"), false),
+        (
+            vec!["login", "--api-key", "rt_cli"],
+            Some("rt_env"),
+            Some("rt_cli"),
+            false,
+        ),
+        (vec!["login", "--device-auth"], Some("rt_env"), None, true),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".config/rtree/config.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, json!({"token":"rt_saved"}).to_string()).unwrap();
+        let login = args[0] == "login";
+        let server = std::thread::spawn(move || {
+            let (socket, first, headers) = request(&listener);
+            match expected {
+                Some(token) => assert!(headers.contains(&format!("Bearer {token}"))),
+                None => assert!(!headers.to_ascii_lowercase().contains("authorization:")),
+            }
+            if device {
+                assert!(first.starts_with("POST /v1/auth/cli/device/start "));
+                reply(socket, json!({})); // Stop at malformed response; no browser or poll.
+            } else if login {
+                assert!(first.starts_with("GET /v1/keys "));
+                reply(socket, json!({"keys":[]}));
+            } else {
+                reply(socket, json!({"organizations":[]}));
+            }
+        });
+        let mut cli = command(home.path(), &url, &args);
+        if let Some(value) = environment {
+            cli.env("RAWTREE_API_KEY", value);
+        }
+        let output = cli.output().unwrap();
+        assert_eq!(output.status.success(), !device);
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn running_command_refuses_a_changed_or_removed_oauth_identity() {
+    for removed in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".config/rtree/config.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = json!({"token":"old-access", "url":url, "oauth":{
+            "api_url":url, "resource":url, "client_id":"installation", "refresh_token":"old-refresh",
+            "token_endpoint":format!("{url}/oauth/token"), "revocation_endpoint":format!("{url}/oauth/revoke"),
+            "expires_at":i64::MAX
+        }});
+        std::fs::write(&path, original.to_string()).unwrap();
+        let server = std::thread::spawn(move || {
+            let (socket, first, _) = request(&listener);
+            assert!(first.starts_with("GET /v1/organizations "));
+            let mut cfg = original;
+            if removed {
+                cfg["oauth"] = Value::Null;
+            } else {
+                cfg["oauth"]["client_id"] = json!("replacement");
+            }
+            std::fs::write(&path, cfg.to_string()).unwrap();
+            reply(socket, json!({"organizations":[]}));
+        });
+        let output = command(
+            home.path(),
+            &url,
+            &["query", "--database", "analytics", "SELECT 1"],
+        )
+        .output()
+        .unwrap();
+        server.join().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("login changed"));
+    }
+}
+
+#[test]
+fn deleting_an_organization_does_not_overwrite_concurrently_selected_defaults() {
+    for changed in [false, true] {
+        for next in [None, Some("next")] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let home = tempfile::tempdir().unwrap();
+            let path = home.path().join(".config/rtree/config.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                json!({"token":"rt_saved", "default_organization":"old"}).to_string(),
+            )
+            .unwrap();
+            let server_path = path.clone();
+            let server = std::thread::spawn(move || {
+                let (socket, first, _) = request(&listener);
+                assert!(first.starts_with("DELETE /v1/organizations/old "));
+                reply(socket, json!({"deleted":true}));
+                let (socket, first, _) = request(&listener);
+                assert!(first.starts_with("GET /v1/organizations "));
+                if changed {
+                    std::fs::write(
+                        server_path,
+                        json!({"token":"rt_saved", "default_organization":"concurrent"})
+                            .to_string(),
+                    )
+                    .unwrap();
+                }
+                let organizations: Vec<_> = next
+                    .into_iter()
+                    .map(|name| json!({"name":name,"role":"owner"}))
+                    .collect();
+                reply(socket, json!({"organizations":organizations}));
+            });
+            let output = command(home.path(), &url, &["organization", "delete", "old"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            server.join().unwrap();
+            let saved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(
+                saved["default_organization"],
+                json!(if changed { Some("concurrent") } else { next })
+            );
+        }
+    }
+}

@@ -12,6 +12,7 @@ use reqwest::blocking::RequestBuilder;
 use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::cell::RefCell;
 use std::io::Write;
 use std::time::Duration;
 
@@ -21,10 +22,21 @@ const RAWTREE_CLIENT_VERSION_HEADER: &str = "x-rawtree-client-version";
 const RAWTREE_CLIENT_VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
 const RAWTREE_USER_AGENT: &str = concat!("rawtree-cli/", env!("CARGO_PKG_VERSION"));
 
+#[derive(Clone)]
+enum CredentialSource {
+    Explicit(Option<String>),
+    Saved(RefCell<Option<SavedCredential>>),
+}
+
+#[derive(Clone)]
+struct SavedCredential {
+    token: Option<String>,
+    oauth_client_id: Option<String>,
+}
+
 pub struct ApiClient {
     pub base_url: String,
-    pub token: Option<String>,
-    saved_oauth_client_id: Option<String>,
+    credentials: CredentialSource,
     client: Client,
     routing: routing::RoutingCache,
     deployment: Option<(String, String)>,
@@ -33,27 +45,47 @@ pub struct ApiClient {
 impl ApiClient {
     pub fn new(base_url: String, token: Option<String>) -> Self {
         Self {
-            base_url,
-            token,
-            saved_oauth_client_id: None,
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            credentials: CredentialSource::Explicit(token),
             client: Client::new(),
             routing: routing::RoutingCache::default(),
             deployment: None,
         }
     }
 
-    pub fn from_saved_config(base_url: String) -> Result<Self> {
-        let cfg = crate::config::load()?;
-        let mut client = Self::new(base_url, cfg.token);
-        client.saved_oauth_client_id = cfg.oauth.map(|credentials| credentials.client_id);
-        Ok(client)
+    pub fn from_saved_config(base_url: String) -> Self {
+        let mut client = Self::new(base_url, None);
+        client.credentials = CredentialSource::Saved(RefCell::new(None));
+        client
+    }
+
+    fn token(&self) -> Result<Option<String>> {
+        match &self.credentials {
+            CredentialSource::Explicit(token) => Ok(token.clone()),
+            CredentialSource::Saved(saved) => {
+                // Capture the identity on first use. Local-only commands need no
+                // credentials; later requests must not silently switch accounts.
+                let mut saved = saved.borrow_mut();
+                if saved.is_none() {
+                    let cfg = crate::config::load()?;
+                    *saved = Some(SavedCredential {
+                        token: cfg.token,
+                        oauth_client_id: cfg.oauth.map(|credentials| credentials.client_id),
+                    });
+                }
+                let saved = saved.as_ref().context("Missing saved credential")?;
+                match &saved.oauth_client_id {
+                    Some(client_id) => crate::oauth::saved_token(&self.base_url, client_id),
+                    None => Ok(saved.token.clone()),
+                }
+            }
+        }
     }
 
     pub fn fork(&self) -> Self {
         Self {
             base_url: self.base_url.clone(),
-            token: self.token.clone(),
-            saved_oauth_client_id: self.saved_oauth_client_id.clone(),
+            credentials: self.credentials.clone(),
             client: self.client.clone(),
             routing: routing::RoutingCache::default(),
             deployment: self.deployment.clone(),
@@ -78,11 +110,7 @@ impl ApiClient {
                 .header("X-RawTree-Region", region),
             None => request,
         };
-        let token = match &self.saved_oauth_client_id {
-            Some(client_id) => crate::oauth::saved_token(&self.base_url, client_id)?,
-            None => self.token.clone(),
-        };
-        Ok(match token {
+        Ok(match self.token()? {
             Some(token) => request.bearer_auth(token),
             None => request,
         })
@@ -177,7 +205,7 @@ impl ApiClient {
         let url = reqwest::Url::parse(&format!("{}{}", self.base_url, path))?;
         let organization = url.query_pairs().find(|(key, _)| key == "organization");
         let value: Value = if url.path() == "/v1/clusters"
-            && self.has_user_credential()
+            && self.has_user_credential()?
             && self.deployment.is_none()
         {
             self.discover_clusters(organization.as_ref().map(|(_, name)| name.as_ref()), None)?

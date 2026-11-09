@@ -115,10 +115,11 @@ struct Organizations {
 }
 
 impl ApiClient {
-    pub(super) fn has_user_credential(&self) -> bool {
-        self.token
+    pub(super) fn has_user_credential(&self) -> Result<bool> {
+        Ok(self
+            .token()?
             .as_deref()
-            .is_some_and(|token| !token.starts_with("rt_"))
+            .is_some_and(|token| !token.starts_with("rt_")))
     }
 
     /// Discover enabled deployments concurrently, retaining explicit partial-catalog metadata.

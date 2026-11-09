@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -64,6 +64,7 @@ fn secure_url(value: &str) -> Result<Url> {
     let loopback = url.host_str().is_some_and(|host| {
         host == "localhost"
             || host
+                .trim_matches(['[', ']'])
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|ip| ip.is_loopback())
     });
@@ -102,7 +103,7 @@ fn check_response(response: Response) -> Result<Response> {
 fn read_tokens(response: Response) -> Result<Tokens> {
     let tokens: Tokens = check_response(response)?
         .json()
-        .context("Invalid OAuth token response")?;
+        .map_err(|_| anyhow::anyhow!("Invalid OAuth token response"))?;
     if !tokens.token_type.eq_ignore_ascii_case("Bearer")
         || tokens.access_token.is_empty()
         || tokens.refresh_token.is_empty()
@@ -175,23 +176,17 @@ pub fn authorize(base_url: &str, no_browser: bool, timeout: u64, json_mode: bool
         ("resource", metadata.issuer.as_str()),
     ]);
     let timeout = if timeout == 0 { 600 } else { timeout.min(600) };
-    if json_mode {
-        let mut stderr = std::io::stderr().lock();
-        writeln!(
-            stderr,
-            "{}",
-            json!({"event": "oauth_authorization_required", "authorization_url": authorization.as_str(), "expires_in": timeout})
-        )?;
-        stderr.flush()?;
-    } else {
-        println!("Open this URL in a browser on this machine to log in:\n{authorization}");
-        if !no_browser && webbrowser::open(authorization.as_str()).is_err() {
-            eprintln!("Could not open your browser. Open the URL above, or use `rtree login --device-auth` from a remote terminal.");
-        }
-        println!("Waiting for authorization...");
-    }
+    announce_authorization(
+        &authorization,
+        no_browser,
+        timeout,
+        json_mode,
+        || webbrowser::open(authorization.as_str()).is_ok(),
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+    )?;
     let code = wait_for_code(
-        &listener,
+        || listener.accept().map(|(stream, _)| stream),
         &redirect_uri,
         &state,
         Duration::from_secs(timeout),
@@ -240,6 +235,35 @@ pub fn authorize(base_url: &str, no_browser: bool, timeout: u64, json_mode: bool
     })
 }
 
+fn announce_authorization(
+    authorization: &Url,
+    no_browser: bool,
+    timeout: u64,
+    json_mode: bool,
+    open: impl FnOnce() -> bool,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<()> {
+    if json_mode {
+        writeln!(
+            stderr,
+            "{}",
+            json!({"event": "oauth_authorization_required", "authorization_url": authorization.as_str(), "expires_in": timeout})
+        )?;
+        stderr.flush()?;
+    } else {
+        writeln!(
+            stdout,
+            "Open this URL in a browser on this machine to log in:\n{authorization}"
+        )?;
+        if !no_browser && !open() {
+            writeln!(stderr, "Could not open your browser. Open the URL above, or use `rtree login --device-auth` from a remote terminal.")?;
+        }
+        writeln!(stdout, "Waiting for authorization...")?;
+    }
+    Ok(())
+}
+
 fn callback_result(target: &str, redirect_uri: &str, state: &str) -> Result<Option<String>> {
     // Accept only an origin-form request for our exact callback path.
     if !target.starts_with("/oauth/callback?") {
@@ -269,9 +293,34 @@ fn callback_result(target: &str, redirect_uri: &str, state: &str) -> Result<Opti
     }
 }
 
-fn read_callback(stream: &mut TcpStream) -> Result<String> {
-    let mut line = String::new();
-    BufReader::new(stream.take(8192)).read_line(&mut line)?;
+fn read_callback(stream: &mut TcpStream, deadline: Instant) -> Result<String> {
+    let mut bytes = Vec::new();
+    // Bound the complete HTTP header read, not just each socket read. A client
+    // trickling bytes must not extend the authorization deadline.
+    while bytes.len() < 8192 {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .context("Callback request timed out")?;
+        stream.set_read_timeout(Some(remaining))?;
+        let mut chunk = [0; 1024];
+        let capacity = chunk.len().min(8192 - bytes.len());
+        let count = stream.read(&mut chunk[..capacity])?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        if bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let request = std::str::from_utf8(&bytes).context("Invalid callback request")?;
+    if !request.contains("\r\n\r\n") {
+        bail!("Incomplete callback request");
+    }
+    let line = request
+        .split_inclusive('\n')
+        .next()
+        .context("Invalid callback request")?;
     let parts: Vec<_> = line.split_whitespace().collect();
     match parts.as_slice() {
         ["GET", target, "HTTP/1.1" | "HTTP/1.0"] if line.ends_with("\r\n") => {
@@ -282,24 +331,26 @@ fn read_callback(stream: &mut TcpStream) -> Result<String> {
 }
 
 fn wait_for_code(
-    listener: &TcpListener,
+    mut accept: impl FnMut() -> std::io::Result<TcpStream>,
     redirect_uri: &str,
     state: &str,
     timeout: Duration,
 ) -> Result<String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
+        match accept() {
+            Ok(mut stream) => {
                 stream.set_nonblocking(false)?;
                 let remaining = deadline
                     .saturating_duration_since(Instant::now())
                     .max(Duration::from_millis(1));
-                stream.set_read_timeout(Some(remaining.min(Duration::from_secs(2))))?;
                 stream.set_write_timeout(Some(Duration::from_secs(1)))?;
-                let result = read_callback(&mut stream)
-                    .ok()
-                    .map(|target| callback_result(&target, redirect_uri, state));
+                let result = read_callback(
+                    &mut stream,
+                    Instant::now() + remaining.min(Duration::from_secs(2)),
+                )
+                .ok()
+                .map(|target| callback_result(&target, redirect_uri, state));
                 let accepted = matches!(&result, Some(Ok(Some(_))));
                 let (status, text) = if accepted {
                     (
@@ -379,66 +430,4 @@ pub fn revoke(credentials: &Credentials) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn callback_requires_exact_state_and_unambiguous_code() {
-        let redirect = "http://127.0.0.1:3456/oauth/callback";
-        assert_eq!(
-            callback_result("/oauth/callback?code=abc&state=secret", redirect, "secret").unwrap(),
-            Some("abc".into())
-        );
-        for target in [
-            "/other?code=abc&state=secret",
-            "/oauth/callback?code=abc",
-            "/oauth/callback?code=abc&state=wrong",
-            "/oauth/callback?code=abc&state=secret&state=wrong",
-            "/oauth/callback?code=abc&code=def&state=secret",
-            "/oauth/callback?code=abc&error=access_denied&state=secret",
-            "/oauth/callback?code=&state=secret",
-            "/oauth/callback?error=access_denied&state=wrong",
-        ] {
-            assert!(
-                callback_result(target, redirect, "secret")
-                    .unwrap()
-                    .is_none(),
-                "{target}"
-            );
-        }
-        assert!(callback_result(
-            "/oauth/callback?error=access_denied&state=secret",
-            redirect,
-            "secret"
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn oauth_urls_require_secure_transport_and_same_origin() {
-        let issuer = secure_url("https://api.rawtree.com").unwrap();
-        assert!(endpoint("https://api.rawtree.com/oauth/token", &issuer).is_ok());
-        assert!(endpoint("https://attacker.test/oauth/token", &issuer).is_err());
-        for value in [
-            "http://api.rawtree.com",
-            "https://user:secret@api.rawtree.com",
-            "https://api.rawtree.com/#fragment",
-            "https://api.rawtree.com/?token=secret",
-        ] {
-            assert!(secure_url(value).is_err());
-        }
-        assert!(secure_url("http://127.0.0.1:1234").is_ok());
-    }
-
-    #[test]
-    fn pkce_matches_rfc7636_vector() {
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        assert_eq!(
-            URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        );
-        let secret = random_secret().unwrap();
-        assert_eq!(secret.len(), 43);
-        assert_ne!(secret, random_secret().unwrap());
-    }
-}
+mod tests;

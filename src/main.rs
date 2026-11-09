@@ -213,18 +213,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
     } = cli;
 
     let url = resolve_url(cli_url.as_deref());
-    let client = if matches!(
-        command,
-        Command::Login { .. } | Command::Logout | Command::Completions { .. } | Command::Update
-    ) {
-        ApiClient::new(url.clone(), None)
-    } else if let Some(key) = cli_api_key
+    let client = if let Some(key) = cli_api_key
         .clone()
         .or_else(|| std::env::var("RAWTREE_API_KEY").ok())
     {
         ApiClient::new(url.clone(), Some(key))
     } else {
-        ApiClient::from_saved_config(url.clone())?
+        ApiClient::from_saved_config(url.clone())
     };
     let effective_cluster = resolve_cluster(cli_cluster.clone());
     let login_cluster = resolve_login_cluster(cli_cluster);
@@ -236,6 +231,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             timeout_seconds,
             database,
         } => {
+            let client = ApiClient::new(url.clone(), None);
             if let Some(api_key) = cli_api_key.or_else(|| {
                 std::env::var("RAWTREE_API_KEY")
                     .ok()

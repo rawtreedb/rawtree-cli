@@ -147,8 +147,8 @@ fn run_cli_with_input(
     }
     let mut child = command
         .env("HOME", home.path())
-        .args(["--api-url", &url])
-        .args(args)
+        .env("RAWTREE_API_URL", &url)
+        .args(args.iter().map(|arg| arg.replace("__API_URL__", &url)))
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
