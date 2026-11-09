@@ -319,3 +319,38 @@ fn deleting_an_organization_does_not_overwrite_concurrently_selected_defaults() 
         }
     }
 }
+
+#[test]
+fn api_key_validation_does_not_hold_the_config_lock() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let home = tempfile::tempdir().unwrap();
+    let login = command(home.path(), &url, &["login", "--api-key", "rt_key"])
+        .spawn()
+        .unwrap();
+    let (socket, first, _) = request(&listener);
+    assert!(first.starts_with("GET /v1/keys "));
+    let mut selection = command(home.path(), &url, &["organization", "use", "other"])
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let completed_before_validation = loop {
+        if let Some(status) = selection.try_wait().unwrap() {
+            assert!(status.success());
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // Release validation even on failure, so neither child is left behind.
+    reply(socket, json!({"keys":[]}));
+    assert!(login.wait_with_output().unwrap().status.success());
+    assert!(selection.wait_with_output().unwrap().status.success());
+    assert!(
+        completed_before_validation,
+        "API-key validation blocked an independent config update"
+    );
+}

@@ -308,17 +308,22 @@ fn api_key_login_clears_old_oauth_state() {
     assert!(output.status.success());
     assert_eq!(saved["token"], "rt_explicit");
     assert_eq!(saved["oauth"], Value::Null);
+    assert!(saved["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("http://127.0.0.1:"));
 }
 
 #[test]
 fn incompatible_device_and_api_key_flags_fail_without_network() {
-    let (output, _, _) = common::run_cli(
-        &[],
-        &["login", "--device-auth", "--api-key", "rt_key"],
-        &json!({}),
-    );
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used"));
+    for args in [
+        ["login", "--device-auth", "--api-key", "rt_key"],
+        ["--api-key", "rt_key", "login", "--device-auth"],
+    ] {
+        let (output, _, _) = common::run_cli(&[], &args, &json!({}));
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used"));
+    }
 }
 
 #[test]

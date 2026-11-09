@@ -103,7 +103,7 @@ pub enum Command {
     )]
     Login {
         /// Use a device code instead of a local OAuth callback (for remote terminals)
-        #[arg(long, conflicts_with = "api_key")]
+        #[arg(long)]
         device_auth: bool,
         /// Do not try to open the browser automatically
         #[arg(long, default_value_t = false)]

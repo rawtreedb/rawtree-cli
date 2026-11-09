@@ -231,6 +231,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             timeout_seconds,
             database,
         } => {
+            if device_auth && cli_api_key.is_some() {
+                anyhow::bail!("--device-auth cannot be used with --api-key");
+            }
             let client = ApiClient::new(url.clone(), None);
             if let Some(api_key) = cli_api_key.or_else(|| {
                 std::env::var("RAWTREE_API_KEY")

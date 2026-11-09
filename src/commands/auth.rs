@@ -291,8 +291,6 @@ pub fn login_with_api_key(
         ));
     }
 
-    let _config_lock = config::lock()?;
-    let mut cfg = config::load().map_err(map_config_read_error)?;
     let selection = resolve_api_key_auth_selection(
         &client.base_url,
         api_key,
@@ -302,6 +300,8 @@ pub fn login_with_api_key(
     )
     .map_err(map_validation_error)?;
 
+    let _config_lock = config::lock()?;
+    let mut cfg = config::load().map_err(map_config_read_error)?;
     cfg.oauth = None;
     cfg.token = Some(api_key.to_string());
     cfg.email = None;
