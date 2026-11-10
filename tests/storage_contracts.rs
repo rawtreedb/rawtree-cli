@@ -129,6 +129,8 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
             "--json",
             "cluster",
             "create",
+            "--region-id",
+            "region-id",
             "--name",
             "production",
             "--replicas",
@@ -157,6 +159,16 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
         let (output, _, bodies) = common::run_cli(
             &[
                 (
+                    "GET /v1/organizations".into(),
+                    "200 OK",
+                    json!({"organizations":[{"organization_id":"org-id","name":"team"}]}),
+                ),
+                (
+                    "GET /v1/regions?organization_id=org-id".into(),
+                    "200 OK",
+                    json!({"regions":[{"id":"region-id","name":"Local","cloud_region":"us-east-1","deployment_id":"10ca1000","organization_id":null,"enabled":true}]}),
+                ),
+                (
                     "GET /v1/clusters/sizes".into(),
                     "200 OK",
                     json!({"sizes": [{"cpu_cores": 2, "memory_gib": 8}]}),
@@ -168,7 +180,7 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
                 ),
             ],
             &args,
-            &json!({}),
+            &json!({"token":"session.fixture"}),
         );
         assert!(
             output.status.success(),
@@ -179,7 +191,7 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
             serde_json::from_slice::<Value>(&output.stdout).unwrap(),
             response
         );
-        let mut expected = json!({"name": "production", "replicas": 1, "size": {"cpu_cores": 2, "memory_gib": 8}, "autoscaling": {"min_size": {"cpu_cores": 2, "memory_gib": 8}, "max_size": {"cpu_cores": 2, "memory_gib": 8}}});
+        let mut expected = json!({"region_id":"region-id", "name": "production", "replicas": 1, "size": {"cpu_cores": 2, "memory_gib": 8}, "autoscaling": {"min_size": {"cpu_cores": 2, "memory_gib": 8}, "max_size": {"cpu_cores": 2, "memory_gib": 8}}});
         if with_storage {
             expected["s3_storage"] = storage();
         }
@@ -189,7 +201,7 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
         if with_identity {
             expected["s3_storage_access"]["resource_tag"] = json!("customer-buckets");
         }
-        assert_eq!(bodies[1], expected);
+        assert_eq!(bodies[3], expected);
     }
 }
 
@@ -372,6 +384,16 @@ fn cluster_identity_validation_errors_come_from_the_api() {
     let (output, _, bodies) = common::run_cli(
         &[
             (
+                "GET /v1/organizations".into(),
+                "200 OK",
+                json!({"organizations":[{"organization_id":"org-id","name":"team"}]}),
+            ),
+            (
+                "GET /v1/regions?organization_id=org-id".into(),
+                "200 OK",
+                json!({"regions":[{"id":"region-id","name":"Local","cloud_region":"us-east-1","deployment_id":"10ca1000","organization_id":null,"enabled":true}]}),
+            ),
+            (
                 "GET /v1/clusters/sizes".into(),
                 "200 OK",
                 json!({"sizes": [{"cpu_cores": 2, "memory_gib": 8}]}),
@@ -388,6 +410,8 @@ fn cluster_identity_validation_errors_come_from_the_api() {
                 "team",
                 "cluster",
                 "create",
+                "--region-id",
+                "region-id",
                 "--name",
                 "production",
                 "--replicas",
@@ -398,12 +422,12 @@ fn cluster_identity_validation_errors_come_from_the_api() {
             S3_ARGS,
         ]
         .concat(),
-        &json!({}),
+        &json!({"token":"session.fixture"}),
     );
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("requires s3_storage_access.external_id")
     );
-    assert!(bodies[1].get("external_id").is_none());
-    assert!(bodies[1].get("resource_tag").is_none());
+    assert!(bodies[3].get("external_id").is_none());
+    assert!(bodies[3].get("resource_tag").is_none());
 }

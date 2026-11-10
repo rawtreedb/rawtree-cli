@@ -1,5 +1,7 @@
 #[path = "live_platform/federation.rs"]
 mod federation;
+#[path = "live_platform/oauth.rs"]
+mod oauth;
 #[path = "live_platform/service_accounts.rs"]
 mod service_accounts;
 #[path = "live_platform/storage.rs"]
@@ -87,6 +89,7 @@ fn logout_removes_saved_authentication_against_real_platform() {
                 "--cluster",
                 &cli.cluster,
                 "login",
+                "--device-auth",
                 "--no-browser",
                 "--database",
                 "default",

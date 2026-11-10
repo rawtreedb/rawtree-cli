@@ -99,9 +99,12 @@ pub struct Cli {
 pub enum Command {
     /// Log in and save credentials
     #[command(
-        after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\",\"cluster\":\"<name>\"}\n\nNon-interactive login:\n  JSON is automatic when stdin is not a terminal. Read the device approval link\n  from a JSON event on stderr while login is running. Missing selections return\n  JSON choices on stdout and exit code 2. Rerun with --org, --cluster, or\n  --database; each retry requires approval again."
+        after_help = "API key mode:\n  --api-key saves an API key directly without browser authentication.\n\nAPI key output (--json):\n  {\"success\":true,\"config_path\":\"<path>\",\"database\":\"<name>\",\"organization\":\"<name>\",\"cluster\":\"<name>\"}\n\nNon-interactive login:\n  JSON is automatic when stdin is not a terminal. Read the authorization link\n  from a JSON event on stderr while login is running. Use --device-auth for\n  approval from another machine. Missing selections return\n  JSON choices on stdout and exit code 2. Rerun with --org, --cluster, or\n  --database; each retry requires approval again."
     )]
     Login {
+        /// Use a device code instead of a local OAuth callback (for remote terminals)
+        #[arg(long)]
+        device_auth: bool,
         /// Do not try to open the browser automatically
         #[arg(long, default_value_t = false)]
         no_browser: bool,
@@ -371,11 +374,7 @@ pub enum ClusterCommand {
     /// List dedicated clusters
     List,
     /// List the CPU and memory pairs available for dedicated clusters
-    Sizes {
-        /// Region ID from `rtree cluster regions`; omit for the default backend
-        #[arg(long)]
-        region_id: Option<String>,
-    },
+    Sizes,
     /// List regions available to the selected organization
     Regions,
     /// Create a dedicated cluster
@@ -383,9 +382,9 @@ pub enum ClusterCommand {
         after_help = "Sizes use CPU_CORES:MEMORY_GIB (for example, 2:8). Run `rtree cluster sizes` to list the available sizes."
     )]
     Create {
-        /// Region ID from `rtree cluster regions`; omit for the default backend
+        /// Required region ID from `rtree cluster regions`
         #[arg(long)]
-        region_id: Option<String>,
+        region_id: String,
         /// Cluster name
         #[arg(long)]
         name: String,

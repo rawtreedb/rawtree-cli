@@ -4,6 +4,7 @@ mod cluster_identity;
 mod commands;
 mod config;
 mod constants;
+mod oauth;
 mod org;
 mod output;
 mod s3_storage;
@@ -39,20 +40,6 @@ fn resolve_url(cli_url: Option<&str>) -> String {
     let env_api_url = std::env::var("RAWTREE_API_URL").ok();
     let cfg_url = config::load().ok().and_then(|c| c.url);
     resolve_url_from_sources(cli_url, env_api_url, cfg_url)
-}
-
-fn resolve_token_from_sources(
-    cli_api_key: Option<String>,
-    env_api_key: Option<String>,
-    cfg_token: Option<String>,
-) -> Option<String> {
-    cli_api_key.or(env_api_key).or(cfg_token)
-}
-
-fn resolve_token(cli_api_key: Option<String>) -> Option<String> {
-    let env_api_key = std::env::var("RAWTREE_API_KEY").ok();
-    let cfg_token = config::load().ok().and_then(|c| c.token);
-    resolve_token_from_sources(cli_api_key, env_api_key, cfg_token)
 }
 
 fn resolve_database_from_sources(
@@ -215,14 +202,6 @@ fn effective_json_mode(cli: &Cli, stdin_is_terminal: bool) -> bool {
     cli.json || (matches!(cli.command, Command::Login { .. }) && !stdin_is_terminal)
 }
 
-fn should_prompt_for_login_method(
-    json_mode: bool,
-    stdin_is_terminal: bool,
-    stdout_is_terminal: bool,
-) -> bool {
-    !json_mode && stdin_is_terminal && stdout_is_terminal
-}
-
 fn run(cli: Cli) -> Result<ExitCode> {
     let Cli {
         api_key: cli_api_key,
@@ -234,18 +213,33 @@ fn run(cli: Cli) -> Result<ExitCode> {
     } = cli;
 
     let url = resolve_url(cli_url.as_deref());
-    let token = resolve_token(cli_api_key.clone());
-    let client = ApiClient::new(url.clone(), token);
+    let client = if let Some(key) = cli_api_key
+        .clone()
+        .or_else(|| std::env::var("RAWTREE_API_KEY").ok())
+    {
+        ApiClient::new(url.clone(), Some(key))
+    } else {
+        ApiClient::from_saved_config(url.clone())
+    };
     let effective_cluster = resolve_cluster(cli_cluster.clone());
     let login_cluster = resolve_login_cluster(cli_cluster);
 
     match command {
         Command::Login {
+            device_auth,
             no_browser,
             timeout_seconds,
             database,
         } => {
-            if let Some(api_key) = cli_api_key {
+            if device_auth && cli_api_key.is_some() {
+                anyhow::bail!("--device-auth cannot be used with --api-key");
+            }
+            let client = ApiClient::new(url.clone(), None);
+            if let Some(api_key) = cli_api_key.or_else(|| {
+                std::env::var("RAWTREE_API_KEY")
+                    .ok()
+                    .filter(|_| !device_auth)
+            }) {
                 commands::auth::login_with_api_key(
                     &client,
                     &api_key,
@@ -254,40 +248,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     database,
                     json,
                 )
-            } else if should_prompt_for_login_method(
-                json,
-                io::stdin().is_terminal(),
-                io::stdout().is_terminal(),
-            ) {
-                match commands::auth::prompt_for_login_method()? {
-                    commands::auth::LoginMethod::Rawtree => {
-                        return commands::auth::login_with_browser(
-                            &client,
-                            no_browser,
-                            timeout_seconds,
-                            cli_org.clone(),
-                            login_cluster.clone(),
-                            database,
-                            json,
-                        )
-                    }
-                    commands::auth::LoginMethod::ManualApiKey => {
-                        let api_key = commands::auth::prompt_for_api_key()?;
-                        commands::auth::login_with_api_key(
-                            &client,
-                            &api_key,
-                            cli_org.clone(),
-                            login_cluster.clone(),
-                            database,
-                            json,
-                        )
-                    }
-                }
             } else {
                 return commands::auth::login_with_browser(
                     &client,
-                    no_browser,
-                    timeout_seconds,
+                    commands::auth::BrowserLoginOptions {
+                        device_auth,
+                        no_browser,
+                        timeout_seconds,
+                    },
                     cli_org.clone(),
                     login_cluster.clone(),
                     database,
@@ -382,7 +350,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         },
         Command::Cluster { action } => {
             let effective_org = match &action {
-                ClusterCommand::Use { .. } | ClusterCommand::Sizes { region_id: None } => None,
+                ClusterCommand::Use { .. } | ClusterCommand::Sizes => None,
                 _ => resolve_effective_org(&client, cli_org.clone()),
             };
             match action {
@@ -393,11 +361,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 ClusterCommand::Regions => {
                     commands::cluster::regions(&client, effective_org.as_deref(), json)
                 }
-                ClusterCommand::Sizes { region_id } => {
-                    let client =
-                        client.for_region(effective_org.as_deref(), region_id.as_deref())?;
-                    commands::cluster::sizes(&client, json)
-                }
+                ClusterCommand::Sizes => commands::cluster::sizes(&client, json),
                 ClusterCommand::Create {
                     region_id,
                     name,
@@ -410,7 +374,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 } => commands::cluster::create(
                     &client,
                     commands::cluster::ClusterCreateOptions {
-                        region_id: region_id.as_deref(),
+                        region_id: &region_id,
                         organization: effective_org.as_deref(),
                         name: &name,
                         replicas,
@@ -811,7 +775,7 @@ mod tests {
     use super::{
         effective_json_mode, resolve_cluster_from_sources, resolve_database_from_sources,
         resolve_effective_org_with, resolve_login_cluster_from_sources, resolve_org_from_sources,
-        resolve_token_from_sources, resolve_url_from_sources, should_prompt_for_login_method, Cli,
+        resolve_url_from_sources, Cli,
     };
 
     #[test]
@@ -951,48 +915,6 @@ mod tests {
     fn resolve_url_defaults_when_no_sources() {
         let resolved = resolve_url_from_sources(None, None, None);
         assert_eq!(resolved, DEFAULT_API_URL);
-    }
-
-    #[test]
-    fn resolve_token_uses_cli_first() {
-        let resolved = resolve_token_from_sources(
-            Some("cli-key".to_string()),
-            Some("env-key".to_string()),
-            Some("cfg-token".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("cli-key"));
-    }
-
-    #[test]
-    fn resolve_token_uses_env_when_cli_missing() {
-        let resolved = resolve_token_from_sources(
-            None,
-            Some("env-key".to_string()),
-            Some("cfg-token".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("env-key"));
-    }
-
-    #[test]
-    fn resolve_token_uses_config_when_cli_and_env_missing() {
-        let resolved = resolve_token_from_sources(None, None, Some("cfg-token".to_string()));
-        assert_eq!(resolved.as_deref(), Some("cfg-token"));
-    }
-
-    #[test]
-    fn plain_terminal_login_prompts_for_login_method() {
-        assert!(should_prompt_for_login_method(false, true, true));
-    }
-
-    #[test]
-    fn explicit_or_non_interactive_login_skips_login_method_prompt() {
-        assert!(!should_prompt_for_login_method(true, true, true));
-        assert!(!should_prompt_for_login_method(false, false, true));
-    }
-
-    #[test]
-    fn redirected_stdout_skips_login_method_prompt() {
-        assert!(!should_prompt_for_login_method(false, true, false));
     }
 
     #[test]

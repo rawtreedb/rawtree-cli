@@ -131,8 +131,8 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let s3_storage = options.s3_storage.to_json()?;
-    let client = client.for_region(options.organization, options.region_id)?;
-    let (_, sizes) = load_cluster_sizes(&client)?;
+    let placement_client = client.for_region(options.organization, options.region_id)?;
+    let (_, sizes) = load_cluster_sizes(&placement_client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
         .max_size
@@ -153,9 +153,7 @@ pub fn create(
         options.identity,
     );
 
-    if let Some(region_id) = options.region_id {
-        body["region_id"] = json!(region_id);
-    }
+    body["region_id"] = json!(options.region_id);
     let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
     let created: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
@@ -191,7 +189,7 @@ pub fn create(
 }
 
 pub struct ClusterCreateOptions<'a> {
-    pub region_id: Option<&'a str>,
+    pub region_id: &'a str,
     pub organization: Option<&'a str>,
     pub name: &'a str,
     pub replicas: u32,
@@ -236,6 +234,7 @@ pub fn update(
     let updated: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
     if name.is_some() {
+        let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
         cfg.default_cluster = renamed_default_cluster(
             cfg.default_cluster.as_deref(),
@@ -372,6 +371,7 @@ pub fn sizes(client: &ApiClient, json_mode: bool) -> Result<()> {
 }
 
 pub fn use_cluster(name: &str, json_mode: bool) -> Result<()> {
+    let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     cfg.default_cluster = Some(name.to_string());
     config::save(&cfg)?;
@@ -469,6 +469,7 @@ pub fn delete(
     let result: DeleteClusterResponse = client.delete(&path)?;
     let value = delete_output(&cluster, result.deleted);
     if result.deleted {
+        let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
         cfg.default_cluster = default_cluster_after_delete(
             cfg.default_cluster.as_deref(),

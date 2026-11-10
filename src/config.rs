@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<crate::oauth::Credentials>,
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
@@ -48,20 +50,33 @@ pub fn load() -> Result<Config> {
     Ok(cfg)
 }
 
+/// The stable sidecar lock survives atomic replacement of config.json.
+/// Hold it across every read-modify-write, especially refresh-token rotation.
+pub fn lock() -> Result<fs::File> {
+    let path = config_path()?.with_extension("lock");
+    fs::create_dir_all(path.parent().context("config path has no parent")?)
+        .context("failed to create config directory")?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    file.lock().context("failed to lock CLI config")?;
+    Ok(file)
+}
+
 pub fn save(cfg: &Config) -> Result<()> {
     let path = config_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).context("failed to create config directory")?;
-    }
-    let data = serde_json::to_string_pretty(cfg)?;
-    fs::write(&path, &data).context("failed to write config file")?;
-
-    // Set file permissions to 0600 on Unix (contains JWT token)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-    }
+    let parent = path.parent().context("config path has no parent")?;
+    fs::create_dir_all(parent).context("failed to create config directory")?;
+    use std::io::Write;
+    // Tempfiles start private and rename atomically, including during refresh rotation.
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(serde_json::to_string_pretty(cfg)?.as_bytes())?;
+    file.as_file().sync_all()?;
+    file.persist(&path)
+        .context("failed to replace config file")?;
 
     Ok(())
 }

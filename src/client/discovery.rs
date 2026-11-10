@@ -115,10 +115,11 @@ struct Organizations {
 }
 
 impl ApiClient {
-    pub(super) fn has_user_credential(&self) -> bool {
-        self.token
+    pub(super) fn has_user_credential(&self) -> Result<bool> {
+        Ok(self
+            .token()?
             .as_deref()
-            .is_some_and(|token| !token.starts_with("rt_"))
+            .is_some_and(|token| !token.starts_with("rt_")))
     }
 
     /// Discover enabled deployments concurrently, retaining explicit partial-catalog metadata.
@@ -129,7 +130,7 @@ impl ApiClient {
     ) -> Result<Value> {
         let organizations: Organizations = handle_response(
             before_deadline(
-                self.unrouted_request(Method::GET, "/v1/organizations"),
+                self.unrouted_request(Method::GET, "/v1/organizations")?,
                 deadline,
             )?
             .send()?,
@@ -205,7 +206,7 @@ impl ApiClient {
                     target.routing.as_ref(),
                 )
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         let responses = load_catalogs(requests, lookup_deadline)?;
         if !responses.is_empty() && responses.iter().all(Result::is_err) {
             return Err(responses

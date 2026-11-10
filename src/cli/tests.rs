@@ -113,7 +113,7 @@ fn cluster_sizes_parses() {
     assert!(matches!(
         cli.command,
         Command::Cluster {
-            action: ClusterCommand::Sizes { region_id: None }
+            action: ClusterCommand::Sizes
         }
     ));
 }
@@ -124,6 +124,8 @@ fn cluster_create_parses_explicit_name_and_idle_timeout() {
         "rtree",
         "cluster",
         "create",
+        "--region-id",
+        "selected-region",
         "--name",
         "production",
         "--replicas",
@@ -143,7 +145,7 @@ fn cluster_create_parses_explicit_name_and_idle_timeout() {
                 name,
                 replicas,
                 idle_timeout_minutes: Some(30),
-                region_id: None,
+                region_id: _,
                 min_size,
                 max_size: Some(max_size),
                     ..
@@ -161,6 +163,8 @@ fn cluster_create_rejects_invalid_size_format() {
         "rtree",
         "cluster",
         "create",
+        "--region-id",
+        "selected-region",
         "--name",
         "production",
         "--replicas",
@@ -715,4 +719,23 @@ fn workflow_metrics_command_is_removed() {
 fn integration_add_accepts_only_known_kinds() {
     assert!(Cli::try_parse_from(["rtree", "integration", "add", "slack"]).is_ok());
     assert!(Cli::try_parse_from(["rtree", "integration", "add", "teams"]).is_err());
+}
+
+#[test]
+fn cluster_create_requires_region_and_sizes_does_not_select_one() {
+    let error = Cli::try_parse_from([
+        "rtree",
+        "cluster",
+        "create",
+        "--name",
+        "new",
+        "--replicas",
+        "1",
+        "--min-size",
+        "2:8",
+    ])
+    .err()
+    .expect("region must be required");
+    assert!(error.to_string().contains("--region-id"));
+    assert!(Cli::try_parse_from(["rtree", "cluster", "sizes", "--region-id", "region"]).is_err());
 }

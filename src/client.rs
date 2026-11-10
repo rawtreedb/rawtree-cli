@@ -12,6 +12,7 @@ use reqwest::blocking::RequestBuilder;
 use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::cell::RefCell;
 use std::io::Write;
 use std::time::Duration;
 
@@ -21,9 +22,21 @@ const RAWTREE_CLIENT_VERSION_HEADER: &str = "x-rawtree-client-version";
 const RAWTREE_CLIENT_VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
 const RAWTREE_USER_AGENT: &str = concat!("rawtree-cli/", env!("CARGO_PKG_VERSION"));
 
+#[derive(Clone)]
+enum CredentialSource {
+    Explicit(Option<String>),
+    Saved(RefCell<Option<SavedCredential>>),
+}
+
+#[derive(Clone)]
+struct SavedCredential {
+    token: Option<String>,
+    oauth_client_id: Option<String>,
+}
+
 pub struct ApiClient {
     pub base_url: String,
-    pub token: Option<String>,
+    credentials: CredentialSource,
     client: Client,
     routing: routing::RoutingCache,
     deployment: Option<(String, String)>,
@@ -32,15 +45,56 @@ pub struct ApiClient {
 impl ApiClient {
     pub fn new(base_url: String, token: Option<String>) -> Self {
         Self {
-            base_url,
-            token,
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            credentials: CredentialSource::Explicit(token),
             client: Client::new(),
             routing: routing::RoutingCache::default(),
             deployment: None,
         }
     }
 
-    fn unrouted_request(&self, method: reqwest::Method, path: &str) -> RequestBuilder {
+    pub fn from_saved_config(base_url: String) -> Self {
+        let mut client = Self::new(base_url, None);
+        client.credentials = CredentialSource::Saved(RefCell::new(None));
+        client
+    }
+
+    fn token(&self) -> Result<Option<String>> {
+        match &self.credentials {
+            CredentialSource::Explicit(token) => Ok(token.clone()),
+            CredentialSource::Saved(saved) => {
+                // Capture the identity on first use. Local-only commands need no
+                // credentials; later requests must not silently switch accounts.
+                let mut saved = saved.borrow_mut();
+                if saved.is_none() {
+                    let cfg = crate::config::load()?;
+                    *saved = Some(SavedCredential {
+                        token: cfg.token,
+                        oauth_client_id: cfg.oauth.map(|credentials| credentials.client_id),
+                    });
+                }
+                let saved = saved.as_ref().context("Missing saved credential")?;
+                match &saved.oauth_client_id {
+                    Some(client_id) => crate::oauth::saved_token(&self.base_url, client_id),
+                    None => Ok(saved.token.clone()),
+                }
+            }
+        }
+    }
+
+    pub fn fork(&self) -> Result<Self> {
+        // Every sender must retain the same identity, even before its first request.
+        self.token()?;
+        Ok(Self {
+            base_url: self.base_url.clone(),
+            credentials: self.credentials.clone(),
+            client: self.client.clone(),
+            routing: routing::RoutingCache::default(),
+            deployment: self.deployment.clone(),
+        })
+    }
+
+    fn unrouted_request(&self, method: reqwest::Method, path: &str) -> Result<RequestBuilder> {
         self.deployment_request(method, path, self.deployment.as_ref())
     }
 
@@ -49,7 +103,7 @@ impl ApiClient {
         method: reqwest::Method,
         path: &str,
         deployment: Option<&(String, String)>,
-    ) -> RequestBuilder {
+    ) -> Result<RequestBuilder> {
         let url = routing::deployment_url(&format!("{}{}", self.base_url, path), deployment);
         let request = with_client_header(self.client.request(method, url));
         let request = match deployment {
@@ -58,10 +112,10 @@ impl ApiClient {
                 .header("X-RawTree-Region", region),
             None => request,
         };
-        match &self.token {
+        Ok(match self.token()? {
             Some(token) => request.bearer_auth(token),
             None => request,
-        }
+        })
     }
 
     pub fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
@@ -153,7 +207,7 @@ impl ApiClient {
         let url = reqwest::Url::parse(&format!("{}{}", self.base_url, path))?;
         let organization = url.query_pairs().find(|(key, _)| key == "organization");
         let value: Value = if url.path() == "/v1/clusters"
-            && self.has_user_credential()
+            && self.has_user_credential()?
             && self.deployment.is_none()
         {
             self.discover_clusters(organization.as_ref().map(|(_, name)| name.as_ref()), None)?
@@ -247,6 +301,57 @@ fn format_server_error(body: &str, status: u16) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forks_capture_one_identity_before_their_first_requests() {
+        // Isolate HOME in a subprocess so parallel unit tests cannot read this config.
+        if std::env::var_os("RAWTREE_FORK_IDENTITY_TEST").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "client::tests::forks_capture_one_identity_before_their_first_requests",
+                    "--nocapture",
+                ])
+                .env("HOME", home.path())
+                .env("RAWTREE_FORK_IDENTITY_TEST", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let base_url = "https://api.example.test";
+        let mut cfg: crate::config::Config = serde_json::from_value(serde_json::json!({
+            "token":"original-access", "oauth": {
+                "api_url":base_url, "resource":base_url, "client_id":"original-client",
+                "refresh_token":"original-refresh", "token_endpoint":format!("{base_url}/oauth/token"),
+                "revocation_endpoint":format!("{base_url}/oauth/revoke"), "expires_at":i64::MAX
+            }
+        })).unwrap();
+        crate::config::save(&cfg).unwrap();
+        let client = ApiClient::from_saved_config(base_url.into());
+        let first = client.fork().unwrap();
+        let second = client.fork().unwrap();
+        assert_eq!(first.token().unwrap().as_deref(), Some("original-access"));
+        cfg.oauth.as_mut().unwrap().client_id = "replacement-client".into();
+        cfg.token = Some("replacement-access".into());
+        crate::config::save(&cfg).unwrap();
+        assert!(second
+            .token()
+            .unwrap_err()
+            .to_string()
+            .contains("login changed"));
+        assert!(client
+            .token()
+            .unwrap_err()
+            .to_string()
+            .contains("login changed"));
+    }
 
     #[test]
     fn empty_post_reads_completion_json_and_query_id_or_http_error() {
