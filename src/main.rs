@@ -737,6 +737,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 json,
             )
         }
+        Command::Feedback(args) => commands::feedback::submit(&client, args, json),
         Command::Ping => commands::ping::ping(&client, json),
         Command::Docs => commands::docs::docs(&client),
         Command::Status => commands::status::status(&url, json),
