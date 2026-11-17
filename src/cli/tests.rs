@@ -1,5 +1,5 @@
 use super::{
-    Cli, ClusterCommand, ClusterSizeArg, Command, KeyCommand, TableCommand, WorkflowCommand,
+    ApiKeyCommand, Cli, ClusterCommand, ClusterSizeArg, Command, TableCommand, WorkflowCommand,
 };
 use clap::{error::ErrorKind, CommandFactory, Parser};
 
@@ -414,12 +414,12 @@ fn query_format_flag_is_rejected() {
 }
 
 #[test]
-fn key_command_is_singular() {
-    let cli = Cli::try_parse_from(["rtree", "key", "list"]).unwrap();
+fn api_key_command_is_singular() {
+    let cli = Cli::try_parse_from(["rtree", "api-key", "list"]).unwrap();
     assert!(matches!(
         cli.command,
-        Command::Key {
-            action: KeyCommand::List
+        Command::ApiKey {
+            action: ApiKeyCommand::List
         }
     ));
 }
@@ -427,12 +427,12 @@ fn key_command_is_singular() {
 #[test]
 fn cluster_scoped_commands_reject_obsolete_database_flags() {
     for args in [
-        vec!["rtree", "key", "list", "--database", "analytics"],
+        vec!["rtree", "api-key", "list", "--database", "analytics"],
         vec![
             "rtree",
-            "key",
+            "api-key",
             "delete",
-            "key-id",
+            "11111111-1111-4111-8111-111111111111",
             "--database",
             "analytics",
         ],
@@ -450,16 +450,23 @@ fn cluster_scoped_commands_reject_obsolete_database_flags() {
 }
 
 #[test]
-fn keys_command_is_rejected() {
-    let result = Cli::try_parse_from(["rtree", "keys", "list", "--database", "analytics"]);
-    assert!(result.is_err(), "keys should not be accepted as a command");
+fn obsolete_key_commands_are_rejected() {
+    for name in ["key", "keys", "api-keys"] {
+        assert_eq!(
+            Cli::try_parse_from(["rtree", name, "list"])
+                .err()
+                .expect("obsolete command must fail")
+                .kind(),
+            ErrorKind::InvalidSubcommand,
+        );
+    }
 }
 
 #[test]
 fn key_create_uses_name_flag() {
     let cli = Cli::try_parse_from([
         "rtree",
-        "key",
+        "api-key",
         "create",
         "--database",
         "analytics",
@@ -468,16 +475,16 @@ fn key_create_uses_name_flag() {
         "--permission",
         "read_write",
     ])
-    .expect("key create with --name should parse");
+    .expect("api-key create with --name should parse");
 
     match cli.command {
-        Command::Key { action } => match action {
-            KeyCommand::Create { name, .. } => {
+        Command::ApiKey { action } => match action {
+            ApiKeyCommand::Create { name, .. } => {
                 assert_eq!(name, "ci");
             }
-            _ => panic!("expected key create command"),
+            _ => panic!("expected api-key create command"),
         },
-        _ => panic!("expected key command"),
+        _ => panic!("expected api-key command"),
     }
 }
 
@@ -485,7 +492,7 @@ fn key_create_uses_name_flag() {
 fn key_create_label_flag_is_rejected() {
     let result = Cli::try_parse_from([
         "rtree",
-        "key",
+        "api-key",
         "create",
         "--database",
         "analytics",
@@ -494,7 +501,10 @@ fn key_create_label_flag_is_rejected() {
         "--permission",
         "read_write",
     ]);
-    assert!(result.is_err(), "key create should use --name, not --label");
+    assert!(
+        result.is_err(),
+        "api-key create should use --name, not --label"
+    );
 }
 
 #[test]

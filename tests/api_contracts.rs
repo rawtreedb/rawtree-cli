@@ -102,21 +102,24 @@ fn key_list_and_delete_are_cluster_scoped_even_with_a_saved_database() {
     ]});
     for config in [json!({}), config] {
         let (result, _, _) = run(
-            &["key", "list"],
+            &["api-key", "list"],
             "GET",
-            "/v1/keys?organization=team%20alpha&cluster=prod%2Feu",
+            "/v1/api-keys?organization=team%20alpha&cluster=prod%2Feu",
             response.clone(),
             config.clone(),
         );
         assert_eq!(result, response);
         let (result, _, _) = run(
-            &["key", "delete", "key-1"],
+            &["api-key", "delete", "11111111-1111-4111-8111-111111111111"],
             "DELETE",
-            "/v1/keys/key-1?organization=team%20alpha&cluster=prod%2Feu",
+            "/v1/api-keys/11111111-1111-4111-8111-111111111111?organization=team%20alpha&cluster=prod%2Feu",
             json!({"deleted": true}),
             config,
         );
-        assert_eq!(result["deleted"], true);
+        assert_eq!(
+            result,
+            json!({"deleted": true, "id": "11111111-1111-4111-8111-111111111111"})
+        );
     }
 }
 
@@ -144,7 +147,7 @@ fn key_create_uses_server_default_or_an_explicit_or_saved_database() {
     ] {
         let response = json!({"id": "key-1", "token": "rt_fixture", "name": "ci", "permission": "read_write", "expires_at": null, "database": {"name": database}});
         let mut args = vec![
-            "key",
+            "api-key",
             "create",
             "--name",
             "ci",
@@ -155,7 +158,7 @@ fn key_create_uses_server_default_or_an_explicit_or_saved_database() {
         let (result, _, body) = run(
             &args,
             "POST",
-            &format!("/v1/keys?{query}"),
+            &format!("/v1/api-keys?{query}"),
             response.clone(),
             config,
         );

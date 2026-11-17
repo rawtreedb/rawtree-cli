@@ -27,7 +27,7 @@ fn api_key_login_accepts_current_responses_and_replaces_stale_defaults() {
             } else {
                 ""
             };
-            let keys = format!("/v1/keys{query}");
+            let keys = format!("/v1/api-keys{query}");
             let tables = format!("/v1/tables{query}");
             let responses = if fallback {
                 vec![
@@ -92,7 +92,7 @@ fn api_key_login_failures_preserve_saved_credentials() {
     ] {
         let (output, saved, original) = login(
             &[
-                ("/v1/keys?cluster=other", status, body.clone()),
+                ("/v1/api-keys?cluster=other", status, body.clone()),
                 ("/v1/tables?cluster=other", status, body),
             ],
             &["--cluster", "other"],
@@ -107,7 +107,7 @@ fn api_key_login_failures_preserve_saved_credentials() {
 fn api_key_login_preserves_legacy_response_metadata() {
     let (output, saved, _) = login(
         &[(
-            "/v1/keys",
+            "/v1/api-keys",
             "200 OK",
             json!({
                 "keys": [], "organization": {"name": "team"}, "database": {"name": "analytics"}

@@ -191,7 +191,7 @@ API keys remain restricted to their bound cluster regardless of which selector s
 Top-level commands:
 
 - `login`, `logout`
-- `database`, `organization`, `integration`, `service-account`, `federation-issuer`, `federation-rule`, `cluster`, `key`, `table`, `workflow`
+- `database`, `organization`, `integration`, `service-account`, `federation-issuer`, `federation-rule`, `cluster`, `api-key`, `table`, `workflow`
 - `query`, `insert`
 - `ping`, `docs`, `status`, `open`, `completions`
 
@@ -411,10 +411,10 @@ With `--json`, the result is
 ### Keys and tables
 
 ```sh
-rtree key list
-rtree key create --name ci --permission read_write
-rtree key create --name temporary-ci --permission read_only --expires-at 2027-01-01T00:00:00Z
-rtree key create --database analytics --name analytics-ci --permission read_write
+rtree api-key list
+rtree api-key create --name ci --permission read_write
+rtree api-key create --name temporary-ci --permission read_only --expires-at 2027-01-01T00:00:00Z
+rtree api-key create --database analytics --name analytics-ci --permission read_write
 
 rtree table list --database analytics
 rtree table describe --database analytics events
@@ -424,16 +424,19 @@ rtree table update --database analytics events --sorting-key 'region, toStartOfH
 
 Omit `--sorting-key` when creating a table to choose a key automatically per part. `table describe` shows the current sorting key as a string. Updating the key affects new parts and later merges; existing parts may keep their previous key until they are merged. A custom sorting key cannot be reset to automatic.
 
-API keys belong to a cluster. `key list` and `key delete` do not accept `--database`;
-listing includes each key's default database. `key create --database` selects the
+Use `rtree api-key delete <ID>` to revoke a key by its UUID from `api-key list`.
+Deletion requires the UUID; full API key tokens are not accepted.
+
+API keys belong to a cluster. `api-key list` and `api-key delete` do not accept `--database`;
+listing includes each key's default database. `api-key create --database` selects the
 new key's default database, using `RAWTREE_DATABASE` or the saved selection when
 omitted. If none is selected, the server uses `default`.
 
-`key create --expires-at` accepts a future RFC 3339 timestamp with a timezone.
+`api-key create --expires-at` accepts a future RFC 3339 timestamp with a timezone.
 The server validates and normalizes it to UTC. Omit the flag for a key that never
 expires. Create/list output includes expiration (`never` in text, `null` in JSON);
 older servers that omit the field are also supported. Expiration is fixed at
-creation; create a replacement key to change it. There is no `key update` command.
+creation; create a replacement key to change it. There is no `api-key update` command.
 
 ### Workflows
 
