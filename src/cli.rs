@@ -125,10 +125,9 @@ pub enum Command {
         action: DatabaseCommand,
     },
     /// Manage API keys
-    #[command(name = "key")]
-    Key {
+    ApiKey {
         #[command(subcommand)]
-        action: KeyCommand,
+        action: ApiKeyCommand,
     },
     /// Manage organizations
     Organization {
@@ -444,7 +443,7 @@ pub enum ClusterCommand {
 }
 
 #[derive(Subcommand)]
-pub enum KeyCommand {
+pub enum ApiKeyCommand {
     /// List API keys for a cluster
     List,
     /// Create a new API key
@@ -464,8 +463,8 @@ pub enum KeyCommand {
     },
     /// Delete an API key
     Delete {
-        /// Key ID or full API key token to delete
-        id_or_token: String,
+        /// API key UUID to delete
+        id: uuid::Uuid,
     },
 }
 

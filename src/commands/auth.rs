@@ -191,8 +191,8 @@ fn api_key_context_paths(
     cli_database: Option<&str>,
 ) -> (String, String) {
     let keys_path = cli_database
-        .map(|database| org::database_scoped_path(database, "/keys", cli_org, cli_cluster))
-        .unwrap_or_else(|| org::scoped_path("/v1/keys", cli_org, cli_cluster));
+        .map(|database| org::database_scoped_path(database, "/api-keys", cli_org, cli_cluster))
+        .unwrap_or_else(|| org::scoped_path("/v1/api-keys", cli_org, cli_cluster));
     let tables_path = cli_database
         .map(|database| org::database_scoped_path(database, "/tables", cli_org, cli_cluster))
         .unwrap_or_else(|| org::scoped_path("/v1/tables", cli_org, cli_cluster));
@@ -714,7 +714,7 @@ mod tests {
     fn api_key_context_paths_do_not_invent_organization() {
         let (keys_path, tables_path) = api_key_context_paths(None, None, Some("analytics"));
 
-        assert_eq!(keys_path, "/v1/keys?database=analytics");
+        assert_eq!(keys_path, "/v1/api-keys?database=analytics");
         assert_eq!(tables_path, "/v1/tables?database=analytics");
     }
 
@@ -725,7 +725,7 @@ mod tests {
 
         assert_eq!(
             keys_path,
-            "/v1/keys?database=analytics&organization=team%20alpha&cluster=prod%2Feu"
+            "/v1/api-keys?database=analytics&organization=team%20alpha&cluster=prod%2Feu"
         );
         assert_eq!(
             tables_path,

@@ -65,7 +65,7 @@ pub fn list(
     cluster: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = org::scoped_path("/v1/keys", organization, cluster);
+    let path = org::scoped_path("/v1/api-keys", organization, cluster);
     let resp: ListApiKeysResponse = client.get(&path)?;
     output::print_result(&resp, json_mode, |_| {
         if resp.keys.is_empty() {
@@ -105,8 +105,8 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let path = match database {
-        Some(database) => org::database_scoped_path(database, "/keys", organization, cluster),
-        None => org::scoped_path("/v1/keys", organization, cluster),
+        Some(database) => org::database_scoped_path(database, "/api-keys", organization, cluster),
+        None => org::scoped_path("/v1/api-keys", organization, cluster),
     };
     let resp: CreateApiKeyResponse = client.post(&path, &serde_json::to_value(request)?)?;
     output::print_result(&resp, json_mode, |_| {
@@ -127,18 +127,17 @@ pub fn delete(
     client: &ApiClient,
     organization: Option<&str>,
     cluster: Option<&str>,
-    id_or_token: &str,
+    id: uuid::Uuid,
     json_mode: bool,
 ) -> Result<()> {
-    let encoded_key = urlencoding::encode(id_or_token);
-    let path = org::scoped_path(&format!("/v1/keys/{encoded_key}"), organization, cluster);
+    let path = org::scoped_path(&format!("/v1/api-keys/{id}"), organization, cluster);
     let resp: DeleteApiKeyResponse = client.delete(&path)?;
     output::print_result(
-        &json!({"deleted": resp.deleted, "id_or_token": id_or_token}),
+        &json!({"deleted": resp.deleted, "id": id.to_string()}),
         json_mode,
         |_| {
             if resp.deleted {
-                println!("API key '{}' deleted.", id_or_token);
+                println!("API key '{}' deleted.", id);
             }
         },
     );

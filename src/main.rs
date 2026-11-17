@@ -17,9 +17,9 @@ use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
 use cli::{
-    Cli, ClusterCommand, Command, DatabaseCommand, IntegrationCommand, IntegrationKind, KeyCommand,
-    OrganizationCommand, ServiceAccountCommand, ShellType, TableCommand, WorkflowCommand,
-    WorkflowSinkCommand,
+    ApiKeyCommand, Cli, ClusterCommand, Command, DatabaseCommand, IntegrationCommand,
+    IntegrationKind, OrganizationCommand, ServiceAccountCommand, ShellType, TableCommand,
+    WorkflowCommand, WorkflowSinkCommand,
 };
 use client::ApiClient;
 use constants::DEFAULT_API_URL;
@@ -412,16 +412,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         }
-        Command::Key { action } => {
+        Command::ApiKey { action } => {
             let effective_org = resolve_effective_org(&client, cli_org.clone());
             match action {
-                KeyCommand::List => commands::keys::list(
+                ApiKeyCommand::List => commands::keys::list(
                     &client,
                     effective_org.as_deref(),
                     effective_cluster.as_deref(),
                     json,
                 ),
-                KeyCommand::Create {
+                ApiKeyCommand::Create {
                     database,
                     name,
                     permission,
@@ -441,11 +441,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         json,
                     )
                 }
-                KeyCommand::Delete { id_or_token } => commands::keys::delete(
+                ApiKeyCommand::Delete { id } => commands::keys::delete(
                     &client,
                     effective_org.as_deref(),
                     effective_cluster.as_deref(),
-                    &id_or_token,
+                    id,
                     json,
                 ),
             }

@@ -16,13 +16,13 @@ fn create_sends_expiration_and_preserves_normalized_response() {
     let expected = key(Some(json!("2027-01-01T00:00:00Z")));
     let (output, _, bodies) = common::run_cli(
         &[(
-            "POST /v1/keys?organization=team&cluster=prod".into(),
+            "POST /v1/api-keys?organization=team&cluster=prod".into(),
             "200 OK",
             expected.clone(),
         )],
         &[
             "--json",
-            "key",
+            "api-key",
             "create",
             "--name",
             "ci",
@@ -58,13 +58,20 @@ fn create_and_list_display_expiration_or_never_in_text_and_json() {
                     response_key["created_at"] = json!("2026-10-01T00:00:00Z");
                     (
                         "GET",
-                        vec!["key", "list"],
+                        vec!["api-key", "list"],
                         json!({"keys": [response_key.clone()]}),
                     )
                 } else {
                     (
                         "POST",
-                        vec!["key", "create", "--name", "ci", "--permission", "read_only"],
+                        vec![
+                            "api-key",
+                            "create",
+                            "--name",
+                            "ci",
+                            "--permission",
+                            "read_only",
+                        ],
                         response_key.clone(),
                     )
                 };
@@ -73,7 +80,7 @@ fn create_and_list_display_expiration_or_never_in_text_and_json() {
                 }
                 let (output, _, bodies) = common::run_cli(
                     &[(
-                        format!("{method} /v1/keys?organization=team&cluster=prod"),
+                        format!("{method} /v1/api-keys?organization=team&cluster=prod"),
                         "200 OK",
                         response,
                     )],
@@ -118,12 +125,12 @@ fn create_and_list_display_expiration_or_never_in_text_and_json() {
 fn create_surfaces_backend_expiration_validation_errors() {
     let (output, _, bodies) = common::run_cli(
         &[(
-            "POST /v1/keys?organization=team&cluster=prod".into(),
+            "POST /v1/api-keys?organization=team&cluster=prod".into(),
             "400 Bad Request",
             json!({"error":"bad_request", "message":"Invalid expiration date.", "hint":"expires_at must be in the future."}),
         )],
         &[
-            "key",
+            "api-key",
             "create",
             "--name",
             "ci",
@@ -146,10 +153,10 @@ fn list_preserves_database_role_keys_and_expiration() {
         "database_roles": ["reader", "writer"], "database": {"name": "default"},
         "created_at": "2026-10-01T00:00:00Z", "expires_at": "2027-01-01T00:00:00Z"
     }]});
-    for args in [vec!["--json", "key", "list"], vec!["key", "list"]] {
+    for args in [vec!["--json", "api-key", "list"], vec!["api-key", "list"]] {
         let (output, _, _) = common::run_cli(
             &[(
-                "GET /v1/keys?organization=team&cluster=prod".into(),
+                "GET /v1/api-keys?organization=team&cluster=prod".into(),
                 "200 OK",
                 response.clone(),
             )],

@@ -230,7 +230,7 @@ fn cli_data_and_api_key_flow_through_real_platform() {
     );
 
     let key = cli.json(&[
-        "key",
+        "api-key",
         "create",
         "--database",
         &database,
@@ -256,6 +256,9 @@ fn cli_data_and_api_key_flow_through_real_platform() {
     ]);
     assert_eq!(login["success"], true);
     assert_eq!(login["database"], database);
+    let rejected = cli.execute(&["api-key", "delete", key_token], Some(&cli.token));
+    assert_eq!(rejected.status.code(), Some(2));
+    // Rejected token deletion leaves the key usable through its saved login.
     // With no token in the environment, the CLI must use the key saved by login.
     let key_query = cli.json_with_token(
         &[
@@ -267,7 +270,7 @@ fn cli_data_and_api_key_flow_through_real_platform() {
         None,
     );
     assert_eq!(key_query["data"], queried["data"]);
-    assert_eq!(cli.json(&["key", "delete", key_id])["deleted"], true);
+    assert_eq!(cli.json(&["api-key", "delete", key_id])["deleted"], true);
 
     let deleted = cli.json(&["database", "delete", &database]);
     assert_eq!(deleted, json!({"deleted": true, "name": database}));

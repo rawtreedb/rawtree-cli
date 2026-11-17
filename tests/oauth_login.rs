@@ -299,7 +299,7 @@ fn logout_revokes_without_refresh_and_retains_credentials_on_failure() {
 
 #[test]
 fn api_key_login_clears_old_oauth_state() {
-    let responses = [("GET /v1/keys".into(), "200 OK", json!({"keys":[]}))];
+    let responses = [("GET /v1/api-keys".into(), "200 OK", json!({"keys":[]}))];
     let (output, saved, _) = common::run_cli(
         &responses,
         &["login", "--api-key", "rt_explicit"],

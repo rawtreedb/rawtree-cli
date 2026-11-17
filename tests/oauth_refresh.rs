@@ -210,7 +210,7 @@ fn key_precedence_and_device_override_apply_to_real_requests() {
                 assert!(first.starts_with("POST /v1/auth/cli/device/start "));
                 reply(socket, json!({})); // Stop at malformed response; no browser or poll.
             } else if login {
-                assert!(first.starts_with("GET /v1/keys "));
+                assert!(first.starts_with("GET /v1/api-keys "));
                 reply(socket, json!({"keys":[]}));
             } else {
                 reply(socket, json!({"organizations":[]}));
@@ -330,7 +330,7 @@ fn api_key_validation_does_not_hold_the_config_lock() {
         .spawn()
         .unwrap();
     let (socket, first, _) = request(&listener);
-    assert!(first.starts_with("GET /v1/keys "));
+    assert!(first.starts_with("GET /v1/api-keys "));
     let mut selection = command(home.path(), &url, &["organization", "use", "other"])
         .spawn()
         .unwrap();
