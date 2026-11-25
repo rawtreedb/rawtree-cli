@@ -135,9 +135,12 @@ fn saved_ids_from_sources(
         organization: (cli_org.is_none() && env_org.is_none())
             .then(|| pair(&cfg.default_organization, &cfg.default_organization_id))
             .flatten(),
-        cluster: (cli_cluster.is_none() && env_cluster.is_none())
-            .then(|| pair(&cfg.default_cluster, &cfg.default_cluster_id))
-            .flatten(),
+        cluster: (cli_org.is_none()
+            && env_org.is_none()
+            && cli_cluster.is_none()
+            && env_cluster.is_none())
+        .then(|| pair(&cfg.default_cluster, &cfg.default_cluster_id))
+        .flatten(),
     }
 }
 

@@ -983,10 +983,11 @@ fn saved_ids_need_no_lookup_requests() {
 }
 
 #[test]
-fn an_org_flag_ignores_the_saved_id_and_resolves_by_name() {
+fn an_org_flag_ignores_both_saved_ids_and_resolves_by_name() {
     let (output, _, _) = common::run_cli(
         &[
             common::key_organization("other"),
+            common::bound_cluster("prod"),
             (
                 "GET /v1/databases".to_string(),
                 "200 OK",
