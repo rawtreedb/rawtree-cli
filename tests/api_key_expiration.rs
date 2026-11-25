@@ -15,11 +15,7 @@ fn create_sends_expiration_and_preserves_normalized_response() {
     let input = "2027-01-01T02:00:00+02:00";
     let expected = key(Some(json!("2027-01-01T00:00:00Z")));
     let (output, _, bodies) = common::run_cli(
-        &[(
-            "POST /v1/api-keys?organization=team&cluster=prod".into(),
-            "200 OK",
-            expected.clone(),
-        )],
+        &[("POST /v1/api-keys".into(), "200 OK", expected.clone())],
         &[
             "--json",
             "api-key",
@@ -79,11 +75,7 @@ fn create_and_list_display_expiration_or_never_in_text_and_json() {
                     args.insert(0, "--json");
                 }
                 let (output, _, bodies) = common::run_cli(
-                    &[(
-                        format!("{method} /v1/api-keys?organization=team&cluster=prod"),
-                        "200 OK",
-                        response,
-                    )],
+                    &[(format!("{method} /v1/api-keys"), "200 OK", response)],
                     &args,
                     &json!({"default_organization": "team", "cluster": "prod"}),
                 );
@@ -125,7 +117,7 @@ fn create_and_list_display_expiration_or_never_in_text_and_json() {
 fn create_surfaces_backend_expiration_validation_errors() {
     let (output, _, bodies) = common::run_cli(
         &[(
-            "POST /v1/api-keys?organization=team&cluster=prod".into(),
+            "POST /v1/api-keys".into(),
             "400 Bad Request",
             json!({"error":"bad_request", "message":"Invalid expiration date.", "hint":"expires_at must be in the future."}),
         )],
@@ -155,11 +147,7 @@ fn list_preserves_database_role_keys_and_expiration() {
     }]});
     for args in [vec!["--json", "api-key", "list"], vec!["api-key", "list"]] {
         let (output, _, _) = common::run_cli(
-            &[(
-                "GET /v1/api-keys?organization=team&cluster=prod".into(),
-                "200 OK",
-                response.clone(),
-            )],
+            &[("GET /v1/api-keys".into(), "200 OK", response.clone())],
             &args,
             &json!({"default_organization": "team", "cluster": "prod"}),
         );

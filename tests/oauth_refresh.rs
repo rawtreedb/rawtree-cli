@@ -284,7 +284,13 @@ fn deleting_an_organization_does_not_overwrite_concurrently_selected_defaults() 
             let server_path = path.clone();
             let server = std::thread::spawn(move || {
                 let (socket, first, _) = request(&listener);
-                assert!(first.starts_with("DELETE /v1/organizations/old "));
+                assert!(first.starts_with("GET /v1/organizations "));
+                reply(
+                    socket,
+                    json!({"organizations":[{"name":"old","organization_id":"old-id","role":"owner"}]}),
+                );
+                let (socket, first, _) = request(&listener);
+                assert!(first.starts_with("DELETE /v1/organizations/old-id "));
                 reply(socket, json!({"deleted":true}));
                 let (socket, first, _) = request(&listener);
                 assert!(first.starts_with("GET /v1/organizations "));
@@ -298,7 +304,7 @@ fn deleting_an_organization_does_not_overwrite_concurrently_selected_defaults() 
                 }
                 let organizations: Vec<_> = next
                     .into_iter()
-                    .map(|name| json!({"name":name,"role":"owner"}))
+                    .map(|name| json!({"name":name,"organization_id":format!("{name}-id"),"role":"owner"}))
                     .collect();
                 reply(socket, json!({"organizations":organizations}));
             });
@@ -331,7 +337,7 @@ fn api_key_validation_does_not_hold_the_config_lock() {
         .unwrap();
     let (socket, first, _) = request(&listener);
     assert!(first.starts_with("GET /v1/api-keys "));
-    let mut selection = command(home.path(), &url, &["organization", "use", "other"])
+    let mut selection = command(home.path(), &url, &["database", "use", "other"])
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);

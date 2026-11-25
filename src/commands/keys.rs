@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::client::ApiClient;
+use crate::client::{ApiClient, Scope};
 use crate::org;
 use crate::output;
 
@@ -65,8 +65,8 @@ pub fn list(
     cluster: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = org::scoped_path("/v1/api-keys", organization, cluster);
-    let resp: ListApiKeysResponse = client.get(&path)?;
+    let client = client.with_scope(Scope::new(organization, cluster));
+    let resp: ListApiKeysResponse = client.get("/v1/api-keys")?;
     output::print_result(&resp, json_mode, |_| {
         if resp.keys.is_empty() {
             println!("No API keys.");
@@ -104,9 +104,10 @@ pub fn create(
     request: CreateApiKeyRequest<'_>,
     json_mode: bool,
 ) -> Result<()> {
+    let client = client.with_scope(Scope::new(organization, cluster));
     let path = match database {
-        Some(database) => org::database_scoped_path(database, "/api-keys", organization, cluster),
-        None => org::scoped_path("/v1/api-keys", organization, cluster),
+        Some(database) => org::database_path(database, "/api-keys"),
+        None => "/v1/api-keys".to_string(),
     };
     let resp: CreateApiKeyResponse = client.post(&path, &serde_json::to_value(request)?)?;
     output::print_result(&resp, json_mode, |_| {
@@ -130,7 +131,8 @@ pub fn delete(
     id: uuid::Uuid,
     json_mode: bool,
 ) -> Result<()> {
-    let path = org::scoped_path(&format!("/v1/api-keys/{id}"), organization, cluster);
+    let client = client.with_scope(Scope::new(organization, cluster));
+    let path = format!("/v1/api-keys/{id}");
     let resp: DeleteApiKeyResponse = client.delete(&path)?;
     output::print_result(
         &json!({"deleted": resp.deleted, "id": id.to_string()}),

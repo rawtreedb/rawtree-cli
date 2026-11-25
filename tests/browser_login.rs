@@ -59,7 +59,7 @@ fn regions() -> Response {
 
 fn clusters(names: &[&str]) -> Response {
     (
-        "GET /v1/clusters?organization=team".into(),
+        "GET /v1/clusters".into(),
         "200 OK",
         json!({"clusters": names.iter().map(|name| json!({"id": name, "name": name})).collect::<Vec<_>>()}),
     )
@@ -67,7 +67,7 @@ fn clusters(names: &[&str]) -> Response {
 
 fn databases(names: &[&str]) -> Response {
     (
-        "GET /v1/databases?organization=team&cluster=production".into(),
+        "GET /v1/databases".into(),
         "200 OK",
         json!({"databases": names.iter().map(|name| json!({"id": name, "name": name})).collect::<Vec<_>>()}),
     )
@@ -132,7 +132,6 @@ fn missing_cluster_returns_choices_in_the_selected_organization() {
         let mut responses = approved_login();
         responses.extend([
             organizations(&["team", "other"]),
-            organizations(&["team"]),
             regions(),
             clusters(&names),
         ]);
@@ -149,7 +148,6 @@ fn missing_database_returns_choices_in_the_selected_cluster() {
     for names in [vec![], vec!["analytics", "billing"]] {
         let mut responses = approved_login();
         responses.extend([
-            organizations(&["team"]),
             organizations(&["team"]),
             regions(),
             clusters(&["staging", "production"]),
@@ -182,7 +180,6 @@ fn approval_is_reported_before_polling_completes_and_only_once() {
         ),
     );
     responses.extend([
-        organizations(&["team"]),
         organizations(&["team"]),
         regions(),
         clusters(&["production"]),
@@ -227,7 +224,6 @@ fn explicit_json_and_selectors_complete_login_with_no_browser() {
     let mut responses = approved_login();
     responses.extend([
         organizations(&["other", "team"]),
-        organizations(&["team"]),
         regions(),
         clusters(&["staging", "production"]),
         databases(&["billing", "analytics"]),
@@ -266,11 +262,7 @@ fn invalid_selectors_return_json_errors_and_preserve_config() {
         let mut responses = approved_login();
         responses.push(organizations(&["team"]));
         if flag != "--org" {
-            responses.extend([
-                organizations(&["team"]),
-                regions(),
-                clusters(&["production"]),
-            ]);
+            responses.extend([regions(), clusters(&["production"])]);
         }
         if flag == "--database" {
             responses.push(databases(&["analytics"]));
@@ -293,10 +285,9 @@ fn invalid_selectors_return_json_errors_and_preserve_config() {
 
 #[test]
 fn discovery_errors_are_not_treated_as_empty_choices_or_success() {
-    for stage in 0..5 {
+    for stage in 0..4 {
         let mut responses = approved_login();
         let discovery = [
-            organizations(&["team"]),
             organizations(&["team"]),
             regions(),
             clusters(&["production"]),

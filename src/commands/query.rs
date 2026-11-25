@@ -6,7 +6,7 @@ use console::style;
 use serde_json::json;
 use serde_json::{Map, Value};
 
-use crate::client::ApiClient;
+use crate::client::{ApiClient, Scope};
 use crate::org;
 
 #[derive(Default)]
@@ -34,8 +34,8 @@ pub fn query(
 
     let body = json!({ "sql": sql });
 
-    let path = org::database_scoped_path(database, "/query", organization, cluster);
-    let raw = client.post_raw(&path, &body)?;
+    let client = client.with_scope(Scope::new(organization, cluster));
+    let raw = client.post_raw(&org::database_path(database, "/query"), &body)?;
 
     if let Ok(value) = serde_json::from_str::<Value>(&raw) {
         if json_mode {

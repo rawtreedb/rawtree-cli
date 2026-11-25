@@ -20,6 +20,28 @@ pub struct Config {
     pub default_organization: Option<String>,
     #[serde(default, rename = "cluster", alias = "default_cluster")]
     pub default_cluster: Option<String>,
+    /// IDs saved next to the default names, so requests skip name lookups and
+    /// survive renames. Absent in configs written before IDs were saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_organization_id: Option<String>,
+    #[serde(
+        default,
+        rename = "cluster_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_cluster_id: Option<String>,
+}
+
+impl Config {
+    pub fn set_default_organization(&mut self, name: Option<String>, id: Option<String>) {
+        self.default_organization = name;
+        self.default_organization_id = id;
+    }
+
+    pub fn set_default_cluster(&mut self, name: Option<String>, id: Option<String>) {
+        self.default_cluster = name;
+        self.default_cluster_id = id;
+    }
 }
 
 fn config_path() -> Result<PathBuf> {
@@ -113,6 +135,47 @@ mod tests {
 }"#;
         let cfg: Config = serde_json::from_str(new_cfg).expect("new config should parse");
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
+    }
+
+    #[test]
+    fn ids_round_trip_next_to_the_names() {
+        let cfg = Config {
+            default_organization: Some("team".into()),
+            default_organization_id: Some("org-id".into()),
+            default_cluster: Some("prod".into()),
+            default_cluster_id: Some("cluster-id".into()),
+            ..Config::default()
+        };
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(json["default_organization_id"], "org-id");
+        assert_eq!(json["cluster_id"], "cluster-id");
+        let back: Config = serde_json::from_value(json).unwrap();
+        assert_eq!(back.default_organization_id.as_deref(), Some("org-id"));
+        assert_eq!(back.default_cluster_id.as_deref(), Some("cluster-id"));
+    }
+
+    #[test]
+    fn missing_ids_are_not_written_and_old_configs_load_without_them() {
+        let old: Config =
+            serde_json::from_str(r#"{"default_organization":"team","cluster":"prod"}"#).unwrap();
+        assert_eq!(old.default_organization.as_deref(), Some("team"));
+        assert!(old.default_organization_id.is_none());
+        assert!(old.default_cluster_id.is_none());
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json.get("default_organization_id").is_none());
+        assert!(json.get("cluster_id").is_none());
+    }
+
+    #[test]
+    fn setting_a_default_replaces_or_clears_its_id() {
+        let mut cfg = Config::default();
+        cfg.set_default_organization(Some("team".into()), Some("org-id".into()));
+        cfg.set_default_organization(Some("other".into()), None);
+        assert_eq!(cfg.default_organization.as_deref(), Some("other"));
+        assert!(cfg.default_organization_id.is_none());
+        cfg.set_default_cluster(Some("prod".into()), Some("cluster-id".into()));
+        cfg.set_default_cluster(None, None);
+        assert!(cfg.default_cluster.is_none() && cfg.default_cluster_id.is_none());
     }
 
     #[test]

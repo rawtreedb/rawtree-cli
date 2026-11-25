@@ -3,8 +3,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::client::ApiClient;
-use crate::org;
+use crate::client::{ApiClient, Scope};
 use crate::output;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -314,8 +313,9 @@ fn fetch_logs(
         limit,
         offset,
     );
-    let path = org::scoped_path(&format!("/v1/logs?{query_string}"), organization, cluster);
-    client.get(&path)
+    client
+        .with_scope(Scope::new(organization, cluster))
+        .get(&format!("/v1/logs?{query_string}"))
 }
 
 #[allow(clippy::too_many_arguments)]

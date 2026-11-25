@@ -1,21 +1,27 @@
-use super::{discovery::UnavailableRegion, handle_response, ApiClient};
+use super::{
+    discovery::UnavailableRegion, handle_response, ApiClient, CLUSTER_ID_HEADER,
+    ORGANIZATION_ID_HEADER,
+};
 use anyhow::{Context, Result};
 use reqwest::{blocking::RequestBuilder, Method, Url};
 use serde::Deserialize;
 use std::{
-    cell::RefCell,
     collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{Duration, Instant},
 };
 
 #[derive(Clone, Deserialize)]
-struct Organization {
-    organization_id: String,
-    name: String,
+pub(super) struct Organization {
+    pub(super) organization_id: String,
+    pub(super) name: String,
 }
 #[derive(Deserialize)]
-struct Organizations {
-    organizations: Vec<Organization>,
+pub(super) struct Organizations {
+    pub(super) organizations: Vec<Organization>,
 }
 #[derive(Clone, Deserialize)]
 struct Cluster {
@@ -35,52 +41,150 @@ struct Clusters {
 
 #[derive(Default)]
 pub(super) struct RoutingCache {
-    organizations: RefCell<Option<(Instant, Vec<Organization>)>>,
-    clusters: RefCell<HashMap<String, (Instant, Clusters)>>,
+    organizations: Mutex<Option<(Instant, Vec<Organization>)>>,
+    clusters: Mutex<HashMap<String, (Instant, Clusters)>>,
+    bound_cluster: Mutex<Option<Cluster>>,
+    pub(super) saved_id_used: AtomicBool,
+}
+
+impl RoutingCache {
+    pub(super) fn store_organizations(&self, organizations: Vec<Organization>) {
+        *self.organizations.lock().unwrap() = Some((Instant::now(), organizations));
+    }
+
+    pub(super) fn with_organizations_of(&self, other: &RoutingCache) -> RoutingCache {
+        let cache = RoutingCache::default();
+        *cache.organizations.lock().unwrap() = other.organizations.lock().unwrap().clone();
+        cache
+    }
+}
+
+enum ClusterSelector {
+    Id(String),
+    Name(String),
+}
+
+enum OrganizationSelector {
+    Id(String),
+    Name(String),
+}
+
+struct Selectors {
+    organization: Option<OrganizationSelector>,
+    cluster: Option<ClusterSelector>,
+    /// The cluster is addressed by the URL path, so no cluster header is sent.
+    cluster_in_path: bool,
+}
+
+#[derive(Default)]
+pub(super) struct ResolvedScope {
+    organization_id: Option<String>,
+    cluster_id: Option<String>,
+    deployment: Option<(String, String)>,
+}
+
+pub(crate) fn is_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+}
+
+fn organization_selector(value: &str) -> OrganizationSelector {
+    if is_uuid(value) {
+        OrganizationSelector::Id(value.to_owned())
+    } else {
+        OrganizationSelector::Name(value.to_owned())
+    }
+}
+
+pub(super) fn with_scope_headers(
+    request: RequestBuilder,
+    organization_id: Option<&str>,
+    cluster_id: Option<&str>,
+) -> RequestBuilder {
+    let request = match organization_id {
+        Some(id) => request.header(ORGANIZATION_ID_HEADER, id),
+        None => request,
+    };
+    match cluster_id {
+        Some(id) => request.header(CLUSTER_ID_HEADER, id),
+        None => request,
+    }
 }
 
 impl ApiClient {
     pub(super) fn remember_routing_metadata(&self, path: &str, value: &serde_json::Value) {
-        let Ok(url) = Url::parse(&format!("{}{}", self.base_url, path)) else {
-            return;
-        };
-        if url.path() == "/v1/organizations" {
+        if path == "/v1/organizations" {
             if let Ok(response) = serde_json::from_value::<Organizations>(value.clone()) {
-                *self.routing.organizations.borrow_mut() =
-                    Some((Instant::now(), response.organizations));
+                self.routing.store_organizations(response.organizations);
             }
-        } else if url.path() == "/v1/clusters" {
-            if let Some((_, organization)) =
-                url.query_pairs().find(|(key, _)| key == "organization")
-            {
+        } else if path == "/v1/clusters" {
+            let selected = self.scope.organization.as_deref().and_then(|organization| {
+                if is_uuid(organization) {
+                    Some(organization.to_owned())
+                } else {
+                    self.cached_organization(organization)
+                        .map(|item| item.organization_id)
+                }
+            });
+            if let Some(organization_id) = selected {
                 if let Ok(response) = serde_json::from_value::<Clusters>(value.clone()) {
                     self.routing
                         .clusters
-                        .borrow_mut()
-                        .insert(clusters_path(&organization), (Instant::now(), response));
+                        .lock()
+                        .unwrap()
+                        .insert(organization_id, (Instant::now(), response));
                 }
             }
         }
     }
 
-    pub(super) fn organization_id(&self, name: &str) -> Result<String> {
-        let response: Organizations = self.get("/v1/organizations")?;
-        response
-            .organizations
-            .into_iter()
-            .find(|organization| organization.name == name)
+    fn cached_organization(&self, name_or_id: &str) -> Option<Organization> {
+        let cache = self.routing.organizations.lock().unwrap();
+        let (time, organizations) = cache.as_ref()?;
+        if time.elapsed() >= Duration::from_secs(30) {
+            return None;
+        }
+        organizations
+            .iter()
+            .find(|item| item.name == name_or_id || item.organization_id == name_or_id)
+            .cloned()
+    }
+
+    /// Resolves an organization name or ID to its ID.
+    pub fn organization_id(&self, name_or_id: &str) -> Result<String> {
+        self.find_organization(&organization_selector(name_or_id), None)
             .map(|organization| organization.organization_id)
+    }
+
+    fn find_organization(
+        &self,
+        selector: &OrganizationSelector,
+        deadline: Option<Instant>,
+    ) -> Result<Organization> {
+        if let OrganizationSelector::Id(id) = selector {
+            return Ok(Organization {
+                organization_id: id.clone(),
+                name: id.clone(),
+            });
+        }
+        let matches = |item: &Organization| match selector {
+            OrganizationSelector::Id(id) => item.organization_id == *id,
+            OrganizationSelector::Name(name) => item.name == *name,
+        };
+        let organizations = self.organizations(deadline)?;
+        organizations
+            .into_iter()
+            .find(|item| matches(item))
             .context("Organization not found.")
     }
 
-    fn organization_name(&self, id: &str, deadline: Option<Instant>) -> Result<String> {
-        if let Some((time, organizations)) = self.routing.organizations.borrow().as_ref() {
+    pub(super) fn organizations(&self, deadline: Option<Instant>) -> Result<Vec<Organization>> {
+        if let Some((time, organizations)) = self.routing.organizations.lock().unwrap().as_ref() {
             if time.elapsed() < Duration::from_secs(30) {
-                if let Some(organization) =
-                    organizations.iter().find(|item| item.organization_id == id)
-                {
-                    return Ok(organization.name.clone());
-                }
+                return Ok(organizations.clone());
             }
         }
         let response: Organizations = handle_response(
@@ -90,13 +194,9 @@ impl ApiClient {
             )?
             .send()?,
         )?;
-        let name = response
-            .organizations
-            .iter()
-            .find(|item| item.organization_id == id)
-            .map(|item| item.name.clone());
-        *self.routing.organizations.borrow_mut() = Some((Instant::now(), response.organizations));
-        name.context("Organization not found.")
+        self.routing
+            .store_organizations(response.organizations.clone());
+        Ok(response.organizations)
     }
 
     pub(super) fn routed_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
@@ -121,58 +221,128 @@ impl ApiClient {
         path: &str,
         deadline: Option<Instant>,
     ) -> Result<RequestBuilder> {
-        let pair = self.deployment_for(path, deadline)?;
+        let scope = self.resolve_scope(path, deadline)?;
         if method != Method::GET
             && (path.starts_with("/v1/organizations") || path.starts_with("/v1/clusters"))
         {
-            self.routing.clusters.borrow_mut().clear();
-            *self.routing.organizations.borrow_mut() = None;
+            self.routing.clusters.lock().unwrap().clear();
+            *self.routing.organizations.lock().unwrap() = None;
         }
-        let request =
-            self.deployment_request(method, path, pair.as_ref().or(self.deployment.as_ref()))?;
+        let request = self.deployment_request(
+            method,
+            path,
+            scope.deployment.as_ref().or(self.deployment.as_ref()),
+        )?;
+        let request = with_scope_headers(
+            request,
+            scope.organization_id.as_deref(),
+            scope.cluster_id.as_deref(),
+        );
         before_deadline(request, deadline)
     }
 
-    fn deployment_for(
-        &self,
-        path: &str,
-        deadline: Option<Instant>,
-    ) -> Result<Option<(String, String)>> {
-        if self
-            .token()?
-            .as_deref()
-            .is_none_or(|token| token.starts_with("rt_"))
-        {
-            return Ok(None);
+    fn resolve_scope(&self, path: &str, deadline: Option<Instant>) -> Result<ResolvedScope> {
+        let selectors = self.selectors(path);
+        if selectors.organization.is_none() && selectors.cluster.is_none() {
+            return Ok(ResolvedScope::default());
         }
-        let url = Url::parse(&format!("{}{}", self.base_url, path)).context("invalid API URL")?;
-        let Some((organization, cluster)) = scope(&url) else {
-            return Ok(None);
-        };
-        let organization = match organization {
-            OrganizationSelector::Id(id) => self.organization_name(&id, deadline)?,
-            OrganizationSelector::Name(name) => name,
-        };
-        let collection = clusters_path(&organization);
-        let cached = self
-            .routing
-            .clusters
-            .borrow()
-            .get(&collection)
-            .filter(|(time, _)| time.elapsed() < Duration::from_secs(30))
-            .map(|(_, clusters)| clusters.clone());
-        let clusters = match cached {
-            Some(clusters) => clusters,
-            None => {
-                let response: Clusters =
-                    serde_json::from_value(self.discover_clusters(Some(&organization), deadline)?)?;
-                self.routing
-                    .clusters
-                    .borrow_mut()
-                    .insert(collection, (Instant::now(), response.clone()));
-                response
+        if self.has_user_credential()? {
+            self.user_scope(selectors, deadline)
+        } else {
+            self.bound_scope(selectors, deadline)
+        }
+    }
+
+    /// API keys are bound to one organization and cluster. Names are matched
+    /// against the key's own organization (the only entry `GET /v1/organizations`
+    /// returns for a key) and bound cluster.
+    fn bound_scope(
+        &self,
+        selectors: Selectors,
+        deadline: Option<Instant>,
+    ) -> Result<ResolvedScope> {
+        let organization_id = match selectors.organization {
+            Some(OrganizationSelector::Id(id)) => Some(id),
+            Some(OrganizationSelector::Name(name)) if self.token()?.is_some() => {
+                let organization = self
+                    .organizations(deadline)?
+                    .into_iter()
+                    .find(|item| item.name == name)
+                    .with_context(|| {
+                        format!("Organization '{name}' is not the API key's organization.")
+                    })?;
+                Some(organization.organization_id)
             }
+            Some(OrganizationSelector::Name(_)) | None => None,
         };
+        let mut scope = ResolvedScope {
+            organization_id,
+            ..ResolvedScope::default()
+        };
+        if selectors.cluster_in_path {
+            return Ok(scope);
+        }
+        scope.cluster_id = match selectors.cluster {
+            Some(ClusterSelector::Id(id)) => Some(id),
+            Some(ClusterSelector::Name(_)) if self.token()?.is_none() => None,
+            Some(ClusterSelector::Name(name)) => {
+                let bound = self.bound_cluster(deadline)?;
+                anyhow::ensure!(
+                    bound.name == name,
+                    "The API key is not bound to cluster '{name}'."
+                );
+                Some(bound.id)
+            }
+            None => None,
+        };
+        Ok(scope)
+    }
+
+    fn bound_cluster(&self, deadline: Option<Instant>) -> Result<Cluster> {
+        if let Some(cluster) = self.routing.bound_cluster.lock().unwrap().as_ref() {
+            return Ok(cluster.clone());
+        }
+        let bound: Clusters = handle_response(
+            before_deadline(
+                self.unrouted_request(Method::GET, "/v1/clusters")?,
+                deadline,
+            )?
+            .send()?,
+        )?;
+        let cluster = bound
+            .clusters
+            .into_iter()
+            .next()
+            .context("The API key is not bound to a cluster.")?;
+        *self.routing.bound_cluster.lock().unwrap() = Some(cluster.clone());
+        Ok(cluster)
+    }
+
+    fn user_scope(&self, selectors: Selectors, deadline: Option<Instant>) -> Result<ResolvedScope> {
+        let organization = selectors
+            .organization
+            .as_ref()
+            .map(|selector| self.find_organization(selector, deadline))
+            .transpose()?;
+        let mut scope = ResolvedScope {
+            organization_id: organization
+                .as_ref()
+                .map(|organization| organization.organization_id.clone()),
+            ..ResolvedScope::default()
+        };
+        let Some(cluster) = selectors.cluster else {
+            return Ok(scope);
+        };
+        let Some(organization) = organization else {
+            match cluster {
+                ClusterSelector::Id(id) => scope.cluster_id = Some(id),
+                ClusterSelector::Name(name) => anyhow::bail!(
+                    "Choose an organization with --org to select cluster '{name}' by name."
+                ),
+            }
+            return Ok(scope);
+        };
+        let clusters = self.organization_clusters(&organization, deadline)?;
         let target = clusters.clusters.iter().find(|item| match &cluster {
             ClusterSelector::Id(id) => item.id == *id,
             ClusterSelector::Name(name) => item.name == *name,
@@ -181,18 +351,58 @@ impl ApiClient {
             // Keep known routes usable, but retry missing routes after a region recovers.
             self.routing
                 .clusters
-                .borrow_mut()
-                .remove(&clusters_path(&organization));
+                .lock()
+                .unwrap()
+                .remove(&organization.organization_id);
             anyhow::bail!("Some regions are unavailable. Cannot resolve the selected cluster; retry when regional discovery recovers.");
+        }
+        if !selectors.cluster_in_path {
+            scope.cluster_id = match (&cluster, target) {
+                (_, Some(target)) => Some(target.id.clone()),
+                (ClusterSelector::Id(id), None) => Some(id.clone()),
+                (ClusterSelector::Name(name), None) => {
+                    anyhow::bail!(
+                        "Cluster '{name}' not found in organization '{}'.",
+                        organization.name
+                    )
+                }
+            };
         }
         let pair = target.and_then(|item| {
             item.deployment_id
                 .as_deref()
                 .zip(item.cloud_region.as_deref())
         });
-        Ok(pair
+        scope.deployment = pair
             .filter(|(deployment, region)| valid_routing(deployment, region))
-            .map(|(deployment, region)| (deployment.to_owned(), region.to_owned())))
+            .map(|(deployment, region)| (deployment.to_owned(), region.to_owned()));
+        Ok(scope)
+    }
+
+    fn organization_clusters(
+        &self,
+        organization: &Organization,
+        deadline: Option<Instant>,
+    ) -> Result<Clusters> {
+        let cached = self
+            .routing
+            .clusters
+            .lock()
+            .unwrap()
+            .get(&organization.organization_id)
+            .filter(|(time, _)| time.elapsed() < Duration::from_secs(30))
+            .map(|(_, clusters)| clusters.clone());
+        if let Some(clusters) = cached {
+            return Ok(clusters);
+        }
+        let response: Clusters = serde_json::from_value(
+            self.discover_clusters(Some(&organization.organization_id), deadline)?,
+        )?;
+        self.routing.clusters.lock().unwrap().insert(
+            organization.organization_id.clone(),
+            (Instant::now(), response.clone()),
+        );
+        Ok(response)
     }
 }
 
@@ -212,45 +422,67 @@ pub(super) fn before_deadline(
     }
 }
 
-enum ClusterSelector {
-    Id(String),
-    Name(String),
-}
+impl ApiClient {
+    fn selectors(&self, path: &str) -> Selectors {
+        let saved_organization = self
+            .saved
+            .organization
+            .as_ref()
+            .filter(|(name, _)| self.scope.organization.as_deref() == Some(name.as_str()));
+        let saved_cluster = self
+            .saved
+            .cluster
+            .as_ref()
+            .filter(|(name, _)| self.scope.cluster.as_deref() == Some(name.as_str()));
+        let organization = match saved_organization {
+            Some((_, id)) => {
+                self.routing.saved_id_used.store(true, Ordering::Relaxed);
+                Some(OrganizationSelector::Id(id.clone()))
+            }
+            None => self
+                .scope
+                .organization
+                .as_deref()
+                .map(organization_selector),
+        };
+        let path_cluster = path
+            .split('?')
+            .next()
+            .and_then(|path| path.strip_prefix("/v1/clusters/"))
+            .and_then(|path| path.split('/').next())
+            .filter(|part| {
+                !part.is_empty() && !matches!(*part, "sizes" | "metrics" | "verify-s3-access")
+            })
+            .and_then(|id| urlencoding::decode(id).ok())
+            .map(|id| id.into_owned());
+        let cluster_in_path = path_cluster.is_some();
+        let cluster = match (path_cluster, saved_cluster) {
+            (Some(id), _) => Some(ClusterSelector::Id(id)),
+            (None, Some((_, id))) => {
+                self.routing.saved_id_used.store(true, Ordering::Relaxed);
+                Some(ClusterSelector::Id(id.clone()))
+            }
+            (None, None) => self.scope.cluster.as_deref().map(|cluster| {
+                if is_uuid(cluster) {
+                    ClusterSelector::Id(cluster.to_owned())
+                } else {
+                    ClusterSelector::Name(cluster.to_owned())
+                }
+            }),
+        };
+        Selectors {
+            organization,
+            cluster,
+            cluster_in_path,
+        }
+    }
 
-enum OrganizationSelector {
-    Id(String),
-    Name(String),
-}
-
-fn clusters_path(organization: &str) -> String {
-    format!(
-        "/v1/clusters?organization={}",
-        urlencoding::encode(organization)
-    )
-}
-
-fn scope(url: &Url) -> Option<(OrganizationSelector, ClusterSelector)> {
-    let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
-    let organization = if let Some(id) = query.get("organization_id") {
-        OrganizationSelector::Id(id.clone())
-    } else {
-        OrganizationSelector::Name(query.get("organization")?.clone())
-    };
-    let path_cluster = url
-        .path()
-        .strip_prefix("/v1/clusters/")
-        .and_then(|path| path.split('/').next())
-        .filter(|part| {
-            !part.is_empty() && !matches!(*part, "sizes" | "metrics" | "verify-s3-access")
-        });
-    let cluster = if let Some(id) = path_cluster {
-        ClusterSelector::Id(urlencoding::decode(id).ok()?.into_owned())
-    } else if let Some(id) = query.get("cluster_id") {
-        ClusterSelector::Id(id.clone())
-    } else {
-        ClusterSelector::Name(query.get("cluster")?.clone())
-    };
-    Some((organization, cluster))
+    /// The organization and cluster IDs this client's scope resolves to, for
+    /// saving in the config.
+    pub fn resolve_scope_ids(&self) -> Result<(Option<String>, Option<String>)> {
+        let resolved = self.resolve_scope("/v1/databases", None)?;
+        Ok((resolved.organization_id, resolved.cluster_id))
+    }
 }
 
 // Match the backend/worker syntax; do not maintain a catalog of AWS regions.

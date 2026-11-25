@@ -11,11 +11,21 @@ fn run(
 ) -> (Value, Value, Value) {
     let mut command = vec!["--org", "team alpha", "--cluster", "prod/eu", "--json"];
     command.extend_from_slice(args);
-    let (output, saved, bodies) = common::run_cli(
-        &[(format!("{method} {path}"), "200 OK", response)],
-        &command,
-        &config,
-    );
+    let bound_lookup = config["token"]
+        .as_str()
+        .is_some_and(|token| token.starts_with("rt_"))
+        .then(|| {
+            [
+                common::key_organization("team alpha"),
+                common::bound_cluster("prod/eu"),
+            ]
+        });
+    let responses: Vec<_> = bound_lookup
+        .into_iter()
+        .flatten()
+        .chain([(format!("{method} {path}"), "200 OK", response)])
+        .collect();
+    let (output, saved, bodies) = common::run_cli(&responses, &command, &config);
     assert!(
         output.status.success(),
         "{}",
@@ -24,7 +34,7 @@ fn run(
     (
         serde_json::from_slice(&output.stdout).unwrap(),
         saved,
-        bodies[0].clone(),
+        bodies.last().unwrap().clone(),
     )
 }
 
@@ -34,7 +44,7 @@ fn database_create_reads_nested_response_and_saves_requested_context() {
     let (result, saved, body) = run(
         &["database", "create", "analytics"],
         "POST",
-        "/v1/databases?organization=team%20alpha&cluster=prod%2Feu",
+        "/v1/databases",
         response.clone(),
         json!({"token": "rt_fixture", "default_organization": "old-org", "database": "old-db"}),
     );
@@ -43,6 +53,8 @@ fn database_create_reads_nested_response_and_saves_requested_context() {
     assert_eq!(saved["token"], "rt_fixture");
     assert_eq!(saved["default_organization"], "team alpha");
     assert_eq!(saved["cluster"], "prod/eu");
+    assert_eq!(saved["default_organization_id"], common::ORG_ID);
+    assert_eq!(saved["cluster_id"], common::CLUSTER_ID);
     assert_eq!(saved["database"], "analytics");
 }
 
@@ -50,11 +62,15 @@ fn database_create_reads_nested_response_and_saves_requested_context() {
 fn database_create_failure_does_not_overwrite_config() {
     let config = json!({"token": "rt_fixture", "default_organization": "team", "cluster": "prod", "database": "old-db"});
     let (output, saved, _) = common::run_cli(
-        &[(
-            "POST /v1/databases?organization=team&cluster=prod".to_string(),
-            "400 Bad Request",
-            json!({"message": "Invalid database name"}),
-        )],
+        &[
+            common::key_organization("team"),
+            common::bound_cluster("prod"),
+            (
+                "POST /v1/databases".to_string(),
+                "400 Bad Request",
+                json!({"message": "Invalid database name"}),
+            ),
+        ],
         &["--json", "database", "create", "invalid-name"],
         &config,
     );
@@ -71,18 +87,14 @@ fn database_list_preserves_current_metadata_without_obsolete_organization() {
     let (result, _, _) = run(
         &["database", "list"],
         "GET",
-        "/v1/databases?organization=team%20alpha&cluster=prod%2Feu",
+        "/v1/databases",
         response.clone(),
         json!({}),
     );
     assert_eq!(result, response);
 
     let (output, _, _) = common::run_cli(
-        &[(
-            "GET /v1/databases?organization=team&cluster=prod".to_string(),
-            "200 OK",
-            response,
-        )],
+        &[("GET /v1/databases".to_string(), "200 OK", response)],
         &["--org", "team", "--cluster", "prod", "database", "list"],
         &json!({}),
     );
@@ -104,7 +116,7 @@ fn key_list_and_delete_are_cluster_scoped_even_with_a_saved_database() {
         let (result, _, _) = run(
             &["api-key", "list"],
             "GET",
-            "/v1/api-keys?organization=team%20alpha&cluster=prod%2Feu",
+            "/v1/api-keys",
             response.clone(),
             config.clone(),
         );
@@ -112,7 +124,7 @@ fn key_list_and_delete_are_cluster_scoped_even_with_a_saved_database() {
         let (result, _, _) = run(
             &["api-key", "delete", "11111111-1111-4111-8111-111111111111"],
             "DELETE",
-            "/v1/api-keys/11111111-1111-4111-8111-111111111111?organization=team%20alpha&cluster=prod%2Feu",
+            "/v1/api-keys/11111111-1111-4111-8111-111111111111",
             json!({"deleted": true}),
             config,
         );
@@ -126,22 +138,17 @@ fn key_list_and_delete_are_cluster_scoped_even_with_a_saved_database() {
 #[test]
 fn key_create_uses_server_default_or_an_explicit_or_saved_database() {
     for (selectors, config, query, database) in [
-        (
-            vec![],
-            json!({}),
-            "organization=team%20alpha&cluster=prod%2Feu",
-            "default",
-        ),
+        (vec![], json!({}), "", "default"),
         (
             vec!["--database", "analytics"],
             json!({"database": "old-db"}),
-            "database=analytics&organization=team%20alpha&cluster=prod%2Feu",
+            "database=analytics",
             "analytics",
         ),
         (
             vec![],
             json!({"database": "saved-db"}),
-            "database=saved-db&organization=team%20alpha&cluster=prod%2Feu",
+            "database=saved-db",
             "saved-db",
         ),
     ] {
@@ -158,7 +165,14 @@ fn key_create_uses_server_default_or_an_explicit_or_saved_database() {
         let (result, _, body) = run(
             &args,
             "POST",
-            &format!("/v1/api-keys?{query}"),
+            &format!(
+                "/v1/api-keys{}",
+                if query.is_empty() {
+                    String::new()
+                } else {
+                    format!("?{query}")
+                }
+            ),
             response.clone(),
             config,
         );
@@ -174,14 +188,12 @@ fn logs_use_cluster_scope_without_a_database_or_with_a_stale_saved_database() {
         let (result, _, _) = run(
             &["logs", "--start-time", "2026-09-24T00:00:00Z", "--end-time", "2026-09-24T01:00:00Z", "--status-codes", "500"],
             "GET",
-            "/v1/logs?start_time=2026-09-24T00%3A00%3A00Z&end_time=2026-09-24T01%3A00%3A00Z&status_codes=500&limit=50&offset=0&organization=team%20alpha&cluster=prod%2Feu",
+            "/v1/logs?start_time=2026-09-24T00%3A00%3A00Z&end_time=2026-09-24T01%3A00%3A00Z&status_codes=500&limit=50&offset=0",
             response.clone(), config,
         );
         assert_eq!(result, response);
     }
 }
-
-const WORKFLOW_SCOPE: &str = "organization=team%20alpha&cluster=prod%2Feu";
 
 fn workflow_response() -> Value {
     json!({"id": "wf-1", "name": "alerts", "query": {"database": "analytics", "sql": "SELECT 1"},
@@ -207,7 +219,7 @@ fn workflow_create_uses_saved_database_and_sends_sinks() {
             r#"{"type":"table","settings":{"database":"analytics","table":"out"}}"#,
         ],
         "POST",
-        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        "/v1/workflows",
         workflow_response(),
         json!({"database": "analytics"}),
     );
@@ -238,7 +250,7 @@ fn run_workflow_human(args: &[&str], method: &str, path: &str, response: Value) 
 
 #[test]
 fn workflow_list_renders_empty_and_populated_responses() {
-    let path = format!("/v1/workflows?{WORKFLOW_SCOPE}");
+    let path = "/v1/workflows".to_string();
     let stdout = run_workflow_human(
         &["workflow", "list"],
         "GET",
@@ -298,7 +310,7 @@ fn workflow_human_output_reads_query_and_optional_metadata() {
         let list = run_workflow_human(
             &["workflow", "list"],
             "GET",
-            &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+            "/v1/workflows",
             json!({"workflows": [response.clone()]}),
         );
         let row = list.lines().find(|line| line.contains("alerts")).unwrap();
@@ -331,7 +343,7 @@ fn workflow_human_output_reads_query_and_optional_metadata() {
             let text = run_workflow_human(
                 &args,
                 method,
-                &format!("/v1/workflows{suffix}?{WORKFLOW_SCOPE}"),
+                &format!("/v1/workflows{suffix}"),
                 response.clone(),
             );
             assert!(text.contains("analytics"), "{text}");
@@ -370,7 +382,7 @@ fn workflow_query_updates_preserve_unspecified_fields() {
         let (_, _, body) = run(
             &args,
             "PATCH",
-            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            "/v1/workflows/wf-1",
             workflow_response(),
             json!({"database": "saved-db"}),
         );
@@ -395,7 +407,7 @@ fn workflow_scheduling_distinguishes_omitted_null_and_cron() {
         let (_, _, body) = run(
             &create,
             "POST",
-            &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+            "/v1/workflows",
             workflow_response(),
             json!({"database": "analytics"}),
         );
@@ -411,7 +423,7 @@ fn workflow_scheduling_distinguishes_omitted_null_and_cron() {
         let (_, _, body) = run(
             &update,
             "PATCH",
-            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            "/v1/workflows/wf-1",
             workflow_response(),
             json!({}),
         );
@@ -433,7 +445,7 @@ fn workflow_update_sends_only_changed_fields() {
             "--clear-sinks",
         ],
         "PATCH",
-        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1",
         workflow_response(),
         json!({}),
     );
@@ -465,7 +477,7 @@ fn workflow_create_reads_sink_arrays_from_files() {
             &file_arg,
         ],
         "POST",
-        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        "/v1/workflows",
         workflow_response(),
         json!({}),
     );
@@ -476,7 +488,7 @@ fn workflow_create_reads_sink_arrays_from_files() {
 fn rejected_sinks_point_to_help() {
     let (output, _, _) = common::run_cli(
         &[(
-            format!("POST /v1/workflows?{WORKFLOW_SCOPE}"),
+            "POST /v1/workflows".to_string(),
             "422 Unprocessable Entity",
             json!({"message": "Invalid workflow.",
                 "hint": "sinks[0].settings: unknown field `uri`, expected `url` or `headers`"}),
@@ -518,7 +530,7 @@ fn workflow_sink_commands_change_one_sink() {
             r#"{"type":"table","settings":{"database":"analytics","table":"alerts"}}"#,
         ],
         "POST",
-        &format!("/v1/workflows/wf-1/sinks?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1/sinks",
         sink.clone(),
         json!({}),
     );
@@ -536,7 +548,7 @@ fn workflow_sink_commands_change_one_sink() {
     let (_, _, body) = run(
         &["workflow", "sink", "update", "wf-1", "sink 1", &file_arg],
         "PATCH",
-        &format!("/v1/workflows/wf-1/sinks/sink%201?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1/sinks/sink%201",
         sink,
         json!({}),
     );
@@ -545,7 +557,7 @@ fn workflow_sink_commands_change_one_sink() {
     let (result, _, _) = run(
         &["workflow", "sink", "delete", "wf-1", "sink-2"],
         "DELETE",
-        &format!("/v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1/sinks/sink-2",
         Value::Null,
         json!({}),
     );
@@ -567,7 +579,7 @@ fn workflow_sink_human_output_describes_the_sink() {
             r#"{"settings":{"table":"alerts_v2"}}"#,
         ],
         "PATCH",
-        &format!("/v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1/sinks/sink-2",
         json!({"type": "table", "id": "sink-2",
             "settings": {"database": "analytics", "table": "alerts_v2"}}),
     );
@@ -581,7 +593,7 @@ fn workflow_sink_human_output_describes_the_sink() {
 fn rejected_sink_changes_point_to_help() {
     let (output, _, _) = common::run_cli(
         &[(
-            format!("PATCH /v1/workflows/wf-1/sinks/sink-2?{WORKFLOW_SCOPE}"),
+            "PATCH /v1/workflows/wf-1/sinks/sink-2".to_string(),
             "400 Bad Request",
             json!({"message": "Invalid workflow sink.",
                 "hint": "A sink's type cannot change. Delete the sink and add a new one."}),
@@ -611,7 +623,7 @@ fn workflow_delete_and_cancel_accept_empty_responses() {
     let (result, _, _) = run(
         &["workflow", "delete", "wf-1"],
         "DELETE",
-        &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1",
         Value::Null,
         json!({}),
     );
@@ -620,7 +632,7 @@ fn workflow_delete_and_cancel_accept_empty_responses() {
     let (result, _, body) = run(
         &["workflow", "cancel", "wf-1", "run-1"],
         "POST",
-        &format!("/v1/workflows/wf-1/runs/run-1/cancel?{WORKFLOW_SCOPE}"),
+        "/v1/workflows/wf-1/runs/run-1/cancel",
         Value::Null,
         json!({}),
     );
@@ -639,7 +651,7 @@ fn workflow_runs_and_logs_pass_pagination_and_time_window() {
             "workflow", "runs", "wf-1", "--limit", "5", "--cursor", "a+b",
         ],
         "GET",
-        &format!("/v1/workflows/wf-1/runs?{WORKFLOW_SCOPE}&limit=5&cursor=a%2Bb"),
+        "/v1/workflows/wf-1/runs?limit=5&cursor=a%2Bb",
         response.clone(),
         json!({}),
     );
@@ -658,7 +670,7 @@ fn workflow_runs_and_logs_pass_pagination_and_time_window() {
             "2026-10-01T01:00:00Z",
         ],
         "GET",
-        &format!("/v1/workflows/wf-1/logs?{WORKFLOW_SCOPE}&from=1790812800000&to=1790816400000"),
+        "/v1/workflows/wf-1/logs?from=1790812800000&to=1790816400000",
         response.clone(),
         json!({}),
     );
@@ -674,6 +686,35 @@ fn workflow_commands_require_a_cluster() {
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("No cluster specified"));
+}
+
+#[test]
+fn workflow_commands_require_a_cluster_for_user_credentials() {
+    let (output, _, _) = common::run_cli(
+        &[],
+        &["--json", "--org", "team", "workflow", "list"],
+        &json!({"token": "session.fixture"}),
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("No cluster specified"));
+}
+
+#[test]
+fn workflow_commands_let_api_keys_omit_organization_and_cluster() {
+    let (output, _, _) = common::run_cli(
+        &[(
+            "GET /v1/workflows".to_string(),
+            "200 OK",
+            json!({"workflows": []}),
+        )],
+        &["--json", "workflow", "list"],
+        &json!({"token": "rt_fixture"}),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -726,7 +767,7 @@ fn workflow_schedule_pause_and_resume_fields_are_nested() {
             "false",
         ],
         "POST",
-        &format!("/v1/workflows?{WORKFLOW_SCOPE}"),
+        "/v1/workflows",
         workflow_response(),
         json!({"database":"analytics"}),
     );
@@ -756,7 +797,7 @@ fn workflow_schedule_pause_and_resume_fields_are_nested() {
         let (_, _, body) = run(
             &args,
             "PATCH",
-            &format!("/v1/workflows/wf-1?{WORKFLOW_SCOPE}"),
+            "/v1/workflows/wf-1",
             workflow_response(),
             json!({}),
         );
@@ -825,7 +866,7 @@ fn workflow_manual_schedule_rejects_pause_flags_before_http() {
 fn workflow_cron_validation_errors_are_returned_by_the_api() {
     let (output, _, bodies) = common::run_cli(
         &[(
-            "POST /v1/workflows?organization=team&cluster=prod".into(),
+            "POST /v1/workflows".into(),
             "400 Bad Request",
             json!({"message":"Invalid workflow cron", "hint":"Cron must have 5 or 6 fields."}),
         )],
@@ -912,4 +953,126 @@ fn integration_list_preserves_json_and_renders_workspaces() {
         json!({"integrations": [], "slack_available": true}),
     );
     assert!(empty.contains("rtree integration add slack"), "{empty}");
+}
+
+fn config_with_saved_ids() -> Value {
+    json!({
+        "token": "rt_fixture",
+        "default_organization": "team", "default_organization_id": common::ORG_ID,
+        "cluster": "prod", "cluster_id": common::CLUSTER_ID,
+    })
+}
+
+#[test]
+fn saved_ids_need_no_lookup_requests() {
+    let (output, saved, _) = common::run_cli(
+        &[(
+            "GET /v1/databases".to_string(),
+            "200 OK",
+            json!({"databases": []}),
+        )],
+        &["--json", "database", "list"],
+        &config_with_saved_ids(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(saved, config_with_saved_ids());
+}
+
+#[test]
+fn an_org_flag_ignores_the_saved_id_and_resolves_by_name() {
+    let (output, _, _) = common::run_cli(
+        &[
+            common::key_organization("other"),
+            (
+                "GET /v1/databases".to_string(),
+                "200 OK",
+                json!({"databases": []}),
+            ),
+        ],
+        &["--json", "--org", "other", "database", "list"],
+        &config_with_saved_ids(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_rejected_saved_id_fails_with_a_refresh_hint_and_never_falls_back_to_names() {
+    let (output, saved, _) = common::run_cli(
+        &[(
+            "GET /v1/databases".to_string(),
+            "404 Not Found",
+            json!({"message": "Cluster not found."}),
+        )],
+        &["--json", "database", "list"],
+        &config_with_saved_ids(),
+    );
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("saved organization or cluster ID was rejected"));
+    assert!(stderr.contains("rtree organization use"));
+    assert_eq!(saved, config_with_saved_ids());
+}
+
+#[test]
+fn configs_with_only_names_keep_resolving_by_name() {
+    let mut config = config_with_saved_ids();
+    let fields = config.as_object_mut().unwrap();
+    fields.remove("default_organization_id");
+    fields.remove("cluster_id");
+    let (output, _, _) = common::run_cli(
+        &[
+            common::key_organization("team"),
+            common::bound_cluster("prod"),
+            (
+                "GET /v1/databases".to_string(),
+                "200 OK",
+                json!({"databases": []}),
+            ),
+        ],
+        &["--json", "database", "list"],
+        &config,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn organization_use_saves_the_id_and_drops_the_previous_clusters_id() {
+    let (output, saved, _) = common::run_cli(
+        &[common::key_organization("team")],
+        &["--json", "organization", "use", "team"],
+        &json!({"token": "rt_fixture", "default_organization": "old", "default_organization_id": "old-id", "cluster": "prod", "cluster_id": common::CLUSTER_ID}),
+    );
+    assert!(output.status.success());
+    assert_eq!(saved["default_organization"], "team");
+    assert_eq!(saved["default_organization_id"], common::ORG_ID);
+    assert_eq!(saved["cluster"], "prod");
+    assert!(saved.get("cluster_id").is_none());
+}
+
+#[test]
+fn organization_use_without_a_resolvable_id_saves_only_the_name() {
+    let (output, saved, _) = common::run_cli(
+        &[(
+            "GET /v1/organizations".to_string(),
+            "503 Service Unavailable",
+            json!({"message": "down"}),
+        )],
+        &["--json", "organization", "use", "team"],
+        &json!({"token": "rt_fixture", "default_organization": "old", "default_organization_id": "old-id"}),
+    );
+    assert!(output.status.success());
+    assert_eq!(saved["default_organization"], "team");
+    assert!(saved.get("default_organization_id").is_none());
 }

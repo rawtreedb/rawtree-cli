@@ -6,7 +6,10 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{client::ApiClient, org};
+use crate::{
+    client::{ApiClient, Scope},
+    org,
+};
 
 #[derive(Args)]
 pub struct FormatArgs {
@@ -34,11 +37,10 @@ pub fn format(
     sql: &str,
     json_mode: bool,
 ) -> Result<()> {
+    let client = client.with_scope(Scope::new(organization, cluster));
     let path = match database {
-        Some(database) => {
-            org::database_scoped_path(database, "/query-format", organization, cluster)
-        }
-        None => org::scoped_path("/v1/query-format", organization, cluster),
+        Some(database) => org::database_path(database, "/query-format"),
+        None => "/v1/query-format".to_string(),
     };
     // Allow upload/download time in addition to the server's 30-second formatter timeout.
     let response: QueryFormatResponse =

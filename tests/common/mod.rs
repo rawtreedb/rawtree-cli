@@ -4,6 +4,32 @@ use std::net::TcpListener;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+#[allow(dead_code)] // Used by the integration test binaries that select clusters by name.
+pub const CLUSTER_ID: &str = "00000000-0000-4000-8000-0000000000c1";
+
+#[allow(dead_code)]
+pub const ORG_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// The response an API key gets when the CLI resolves an organization name against its own organization.
+#[allow(dead_code)]
+pub fn key_organization(name: &str) -> (String, &'static str, Value) {
+    (
+        "GET /v1/organizations".to_string(),
+        "200 OK",
+        serde_json::json!({"organizations": [{"organization_id": ORG_ID, "name": name, "role": null, "plan_id": "trial"}]}),
+    )
+}
+
+/// The response an API key gets when the CLI resolves a cluster name against its bound cluster.
+#[allow(dead_code)]
+pub fn bound_cluster(name: &str) -> (String, &'static str, Value) {
+    (
+        "GET /v1/clusters".to_string(),
+        "200 OK",
+        serde_json::json!({"clusters": [{"id": CLUSTER_ID, "name": name}]}),
+    )
+}
+
 #[derive(Clone, Copy)]
 pub struct ProgressExpectation {
     pub before_response: &'static str,

@@ -133,7 +133,19 @@ fn rules_use_full_put_and_exact_scope_for_both_access_modes() {
                 json!({"id":"rule","principal_type":"service_account","principal_id":ORG})
             };
             let config = json!({"token":"rt_fixture","default_organization":"wrong","cluster":"wrong","database":"ignored"});
-            let (out,saved,bodies)=common::run_cli(&[(format!("{method} /v1/federation-rules{suffix}?organization=team%20alpha&cluster=prod%2Feu"),"200 OK",response.clone())],&args,&config);
+            let (out, saved, bodies) = common::run_cli(
+                &[
+                    common::key_organization("team alpha"),
+                    common::bound_cluster("prod/eu"),
+                    (
+                        format!("{method} /v1/federation-rules{suffix}"),
+                        "200 OK",
+                        response.clone(),
+                    ),
+                ],
+                &args,
+                &config,
+            );
             assert!(
                 out.status.success(),
                 "{}",
@@ -145,7 +157,7 @@ fn rules_use_full_put_and_exact_scope_for_both_access_modes() {
                 response
             );
             if matches!(action, "create" | "update") {
-                let body = &bodies[0];
+                let body = bodies.last().unwrap();
                 assert_eq!(body["database"], "warehouse");
                 assert_eq!(body["enabled"], false);
                 assert_eq!(body["claim_conditions"]["label"], "a=b");
@@ -246,11 +258,15 @@ fn unknown_org_and_api_errors_are_not_retried_or_retargeted() {
         "409 Conflict",
     ] {
         let (out, _, bodies) = common::run_cli(
-            &[(
-                "DELETE /v1/federation-rules/id?organization=team&cluster=prod".into(),
-                status,
-                json!({"message":"Denied"}),
-            )],
+            &[
+                common::key_organization("team"),
+                common::bound_cluster("prod"),
+                (
+                    "DELETE /v1/federation-rules/id".into(),
+                    status,
+                    json!({"message":"Denied"}),
+                ),
+            ],
             &[
                 "--org",
                 "team",
@@ -264,6 +280,6 @@ fn unknown_org_and_api_errors_are_not_retried_or_retargeted() {
         );
         assert!(!out.status.success());
         assert!(String::from_utf8_lossy(&out.stderr).contains("Denied"));
-        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies.len(), 3);
     }
 }

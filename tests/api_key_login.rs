@@ -3,14 +3,25 @@ mod common;
 use serde_json::{json, Value};
 use std::process::Output;
 
-fn login(responses: &[(&str, &str, Value)], selectors: &[&str]) -> (Output, Value, Value) {
+fn login(
+    key_scope: (Option<&str>, Option<&str>),
+    responses: &[(&str, &str, Value)],
+    selectors: &[&str],
+) -> (Output, Value, Value) {
     let original = json!({
         "token": "old-test-credential", "email": "old@example.test",
         "default_organization": "old-org", "cluster": "old-cluster", "database": "old-db"
     });
-    let responses = responses
-        .iter()
-        .map(|(path, status, body)| (format!("GET {path}"), *status, body.clone()))
+    let responses = key_scope
+        .0
+        .map(common::key_organization)
+        .into_iter()
+        .chain(key_scope.1.map(common::bound_cluster))
+        .chain(
+            responses
+                .iter()
+                .map(|(path, status, body)| (format!("GET {path}"), *status, body.clone())),
+        )
         .collect::<Vec<_>>();
     let mut args = vec!["--api-key", "rt_login_fixture", "--json", "login"];
     args.extend_from_slice(selectors);
@@ -22,11 +33,7 @@ fn login(responses: &[(&str, &str, Value)], selectors: &[&str]) -> (Output, Valu
 fn api_key_login_accepts_current_responses_and_replaces_stale_defaults() {
     for fallback in [false, true] {
         for explicit in [false, true] {
-            let query = if explicit {
-                "?database=analytics&organization=team%20alpha&cluster=prod%2Feu"
-            } else {
-                ""
-            };
+            let query = if explicit { "?database=analytics" } else { "" };
             let keys = format!("/v1/api-keys{query}");
             let tables = format!("/v1/tables{query}");
             let responses = if fallback {
@@ -53,7 +60,14 @@ fn api_key_login_accepts_current_responses_and_replaces_stale_defaults() {
             } else {
                 vec![]
             };
-            let (output, saved, _) = login(&responses, &selectors);
+            let (output, saved, _) = login(
+                (
+                    explicit.then_some("team alpha"),
+                    explicit.then_some("prod/eu"),
+                ),
+                &responses,
+                &selectors,
+            );
             assert!(
                 output.status.success(),
                 "{}",
@@ -91,9 +105,10 @@ fn api_key_login_failures_preserve_saved_credentials() {
         ("200 OK", json!({})),
     ] {
         let (output, saved, original) = login(
+            (None, Some("other")),
             &[
-                ("/v1/api-keys?cluster=other", status, body.clone()),
-                ("/v1/tables?cluster=other", status, body),
+                ("/v1/api-keys", status, body.clone()),
+                ("/v1/tables", status, body),
             ],
             &["--cluster", "other"],
         );
@@ -106,6 +121,7 @@ fn api_key_login_failures_preserve_saved_credentials() {
 #[test]
 fn api_key_login_preserves_legacy_response_metadata() {
     let (output, saved, _) = login(
+        (None, None),
         &[(
             "/v1/api-keys",
             "200 OK",

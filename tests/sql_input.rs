@@ -3,7 +3,7 @@ mod common;
 use serde_json::{json, Value};
 
 fn config() -> Value {
-    json!({"token": "rt_fixture", "database": "analytics", "default_organization": "team", "cluster": "prod"})
+    json!({"token": "rt_fixture", "database": "analytics", "default_organization": common::ORG_ID, "cluster": common::CLUSTER_ID})
 }
 
 fn response(command: &str) -> (String, &'static str, Value) {
@@ -13,7 +13,7 @@ fn response(command: &str) -> (String, &'static str, Value) {
         _ => unreachable!(),
     };
     (
-        format!("POST /v1/{endpoint}?database=analytics&organization=team&cluster=prod"),
+        format!("POST /v1/{endpoint}?database=analytics"),
         "200 OK",
         body,
     )

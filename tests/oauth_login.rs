@@ -41,22 +41,17 @@ fn login_responses() -> Vec<Response> {
             json!({"organizations":[{"name":"team","organization_id":"team-id","role":"owner"}]}),
         ),
         (
-            "GET /v1/organizations".into(),
-            "200 OK",
-            json!({"organizations":[{"name":"team","organization_id":"team-id","role":"owner"}]}),
-        ),
-        (
             "GET /v1/regions?organization_id=team-id".into(),
             "200 OK",
             json!({"regions":[{"id":"legacy","name":"Virginia","cloud_region":"us-east-1","deployment_id":null,"enabled":true}]}),
         ),
         (
-            "GET /v1/clusters?organization=team".into(),
+            "GET /v1/clusters".into(),
             "200 OK",
             json!({"clusters":[{"id":"production","name":"production"}]}),
         ),
         (
-            "GET /v1/databases?organization=team&cluster=production".into(),
+            "GET /v1/databases".into(),
             "200 OK",
             json!({"databases":[{"name":"analytics"}]}),
         ),
@@ -569,11 +564,18 @@ fn oauth_timeout_zero_and_large_values_are_capped_at_ten_minutes() {
 #[test]
 fn deleting_other_or_absent_organizations_preserves_defaults() {
     for (deleted, selected) in [(false, "old"), (false, "other"), (true, "other")] {
-        let responses = [(
-            "DELETE /v1/organizations/old".into(),
-            "200 OK",
-            json!({"deleted":deleted}),
-        )];
+        let responses = [
+            (
+                "GET /v1/organizations".into(),
+                "200 OK",
+                json!({"organizations":[{"name":"old","organization_id":"old-id","role":"owner"}]}),
+            ),
+            (
+                "DELETE /v1/organizations/old-id".into(),
+                "200 OK",
+                json!({"deleted":deleted}),
+            ),
+        ];
         let (output, saved, _) = common::run_cli(
             &responses,
             &["organization", "delete", "old", "--json"],

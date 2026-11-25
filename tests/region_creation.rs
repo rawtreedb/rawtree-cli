@@ -21,7 +21,7 @@ fn create_flag_routes_size_discovery_and_preserves_region_in_body() {
     let mut responses = discovery();
     responses.extend([
         ("GET /v1/clusters/sizes".into(), "200 OK", json!({"sizes":[{"cpu_cores":2,"memory_gib":8}]})),
-        ("POST /v1/clusters?organization=acme".into(), "200 OK", json!({"id":"new","name":"production","created_at":"2026-10-18T00:00:00Z","status":{"phase":"provisioning","ready":false,"message":null},"resources":null,"can_pause":false,"can_resume":false,"idle_timeout_minutes":30})),
+        ("POST /v1/clusters".into(), "200 OK", json!({"id":"new","name":"production","created_at":"2026-10-18T00:00:00Z","status":{"phase":"provisioning","ready":false,"message":null},"resources":null,"can_pause":false,"can_resume":false,"idle_timeout_minutes":30})),
     ]);
     let (output, _, bodies) = common::run_cli(
         &responses,

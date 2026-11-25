@@ -2,6 +2,7 @@ use super::{handle_response, routing, ApiClient};
 use anyhow::{Context, Result};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Deserialize, Serialize)]
@@ -61,6 +62,8 @@ impl ApiClient {
                 "The selected region is not ready for cluster creation. Choose another region.",
             )?;
         let mut client = self.fork()?;
+        client.routing =
+            Arc::new(routing::RoutingCache::default().with_organizations_of(&self.routing));
         client.deployment = Some((deployment, region.cloud_region));
         Ok(client)
     }

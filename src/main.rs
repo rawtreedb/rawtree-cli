@@ -21,7 +21,7 @@ use cli::{
     IntegrationKind, OrganizationCommand, ServiceAccountCommand, ShellType, TableCommand,
     WorkflowCommand, WorkflowSinkCommand,
 };
-use client::ApiClient;
+use client::{ApiClient, SavedIds};
 use constants::DEFAULT_API_URL;
 
 fn resolve_url_from_sources(
@@ -121,6 +121,54 @@ fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<
     resolve_effective_org_with(explicit_org, || org::first_organization_name(client))
 }
 
+/// Saved IDs apply only to selections that come from the config. A flag or
+/// environment variable names its target explicitly and is resolved by name.
+fn saved_ids_from_sources(
+    cli_org: Option<&str>,
+    env_org: Option<&str>,
+    cli_cluster: Option<&str>,
+    env_cluster: Option<&str>,
+    cfg: &config::Config,
+) -> SavedIds {
+    let pair = |name: &Option<String>, id: &Option<String>| name.clone().zip(id.clone());
+    SavedIds {
+        organization: (cli_org.is_none() && env_org.is_none())
+            .then(|| pair(&cfg.default_organization, &cfg.default_organization_id))
+            .flatten(),
+        cluster: (cli_cluster.is_none() && env_cluster.is_none())
+            .then(|| pair(&cfg.default_cluster, &cfg.default_cluster_id))
+            .flatten(),
+    }
+}
+
+fn saved_ids(cli_org: Option<&str>, cli_cluster: Option<&str>) -> SavedIds {
+    let Ok(cfg) = config::load() else {
+        return SavedIds::default();
+    };
+    saved_ids_from_sources(
+        cli_org,
+        std::env::var("RAWTREE_ORG").ok().as_deref(),
+        cli_cluster,
+        std::env::var("RAWTREE_CLUSTER").ok().as_deref(),
+        &cfg,
+    )
+}
+
+/// A rejected saved ID is never replaced by a name lookup, so say how to refresh it.
+fn explain_rejected_saved_ids(client: &ApiClient, error: anyhow::Error) -> anyhow::Error {
+    let message = format!("{error:#}");
+    if client.used_saved_ids()
+        && error.downcast_ref::<output::CliError>().is_none()
+        && (message.contains("(403)") || message.contains("(404)"))
+    {
+        anyhow::anyhow!(
+            "{message}\nThe saved organization or cluster ID was rejected; it may have been deleted or your access may have changed. Run `rtree organization use <name>` and `rtree cluster use <name>`, or `rtree login` again."
+        )
+    } else {
+        error
+    }
+}
+
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
@@ -172,20 +220,25 @@ fn require_organization(organization: Option<&str>) -> Result<&str> {
     })
 }
 
-fn require_workflow_scope<'a>(
-    organization: Option<&'a str>,
-    cluster: Option<&'a str>,
-) -> Result<commands::workflow::WorkflowScope<'a>> {
-    let organization = require_organization(organization)?;
+/// API keys are bound to a cluster, so the backend takes their tenant from the
+/// key; user credentials must select one.
+fn require_workflow_scope(
+    client: &ApiClient,
+    organization: Option<&str>,
+    cluster: Option<&str>,
+) -> Result<client::Scope> {
+    if client.has_api_key()? {
+        return Ok(client::Scope::new(organization, cluster));
+    }
+    if organization.is_none() && !cluster.is_some_and(client::is_uuid) {
+        require_organization(organization)?;
+    }
     let cluster = cluster.ok_or_else(|| {
         anyhow::anyhow!(
             "No cluster specified. Use --cluster, RAWTREE_CLUSTER env, or `rtree cluster use <name>`"
         )
     })?;
-    Ok(commands::workflow::WorkflowScope {
-        organization,
-        cluster,
-    })
+    Ok(client::Scope::new(organization, Some(cluster)))
 }
 
 fn main() -> ExitCode {
@@ -220,551 +273,570 @@ fn run(cli: Cli) -> Result<ExitCode> {
         ApiClient::new(url.clone(), Some(key))
     } else {
         ApiClient::from_saved_config(url.clone())
-    };
+    }
+    .with_saved_ids(saved_ids(cli_org.as_deref(), cli_cluster.as_deref()));
     let effective_cluster = resolve_cluster(cli_cluster.clone());
     let login_cluster = resolve_login_cluster(cli_cluster);
 
-    match command {
-        Command::Login {
-            device_auth,
-            no_browser,
-            timeout_seconds,
-            database,
-        } => {
-            if device_auth && cli_api_key.is_some() {
-                anyhow::bail!("--device-auth cannot be used with --api-key");
-            }
-            let client = ApiClient::new(url.clone(), None);
-            if let Some(api_key) = cli_api_key.or_else(|| {
-                std::env::var("RAWTREE_API_KEY")
-                    .ok()
-                    .filter(|_| !device_auth)
-            }) {
-                commands::auth::login_with_api_key(
-                    &client,
-                    &api_key,
-                    cli_org.clone(),
-                    login_cluster.clone(),
-                    database,
-                    json,
-                )
-            } else {
-                return commands::auth::login_with_browser(
-                    &client,
-                    commands::auth::BrowserLoginOptions {
-                        device_auth,
-                        no_browser,
-                        timeout_seconds,
-                    },
-                    cli_org.clone(),
-                    login_cluster.clone(),
-                    database,
-                    json,
-                );
-            }
-        }
-        Command::Logout => commands::auth::logout(json),
-        Command::Database { action } => match action {
-            DatabaseCommand::List => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::database::list(
-                    &client,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
-                    json,
-                )
-            }
-            DatabaseCommand::Create { name, s3_storage } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::database::create(
-                    &client,
-                    &name,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
-                    s3_storage,
-                    json,
-                )
-            }
-            DatabaseCommand::Use { name } => commands::database::use_database(&name, json),
-            DatabaseCommand::Delete { name } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::database::delete(
-                    &client,
-                    &name,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
-                    json,
-                )
-            }
-        },
-        Command::FederationIssuer { action } => {
-            let organization = resolve_explicit_org(cli_org);
-            commands::federation_issuer::run(&client, organization.as_deref(), action, json)
-        }
-        Command::FederationRule { action } => {
-            let organization = resolve_explicit_org(cli_org);
-            commands::federation_rule::run(
-                &client,
-                organization.as_deref(),
-                effective_cluster.as_deref(),
-                action,
-                json,
-            )
-        }
-        Command::ServiceAccount { action } => {
-            let organization = resolve_explicit_org(cli_org);
-            match action {
-                ServiceAccountCommand::List => {
-                    commands::service_account::list(&client, organization.as_deref(), json)
+    let result = (|| -> Result<ExitCode> {
+        match command {
+            Command::Login {
+                device_auth,
+                no_browser,
+                timeout_seconds,
+                database,
+            } => {
+                if device_auth && cli_api_key.is_some() {
+                    anyhow::bail!("--device-auth cannot be used with --api-key");
                 }
-                ServiceAccountCommand::Create {
-                    name,
-                    description,
-                    role,
-                } => commands::service_account::create(
+                let client = ApiClient::new(url.clone(), None);
+                if let Some(api_key) = cli_api_key.or_else(|| {
+                    std::env::var("RAWTREE_API_KEY")
+                        .ok()
+                        .filter(|_| !device_auth)
+                }) {
+                    commands::auth::login_with_api_key(
+                        &client,
+                        &api_key,
+                        cli_org.clone(),
+                        login_cluster.clone(),
+                        database,
+                        json,
+                    )
+                } else {
+                    return commands::auth::login_with_browser(
+                        &client,
+                        commands::auth::BrowserLoginOptions {
+                            device_auth,
+                            no_browser,
+                            timeout_seconds,
+                        },
+                        cli_org.clone(),
+                        login_cluster.clone(),
+                        database,
+                        json,
+                    );
+                }
+            }
+            Command::Logout => commands::auth::logout(json),
+            Command::Database { action } => match action {
+                DatabaseCommand::List => {
+                    let effective_org = resolve_effective_org(&client, cli_org.clone());
+                    commands::database::list(
+                        &client,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        json,
+                    )
+                }
+                DatabaseCommand::Create { name, s3_storage } => {
+                    let effective_org = resolve_effective_org(&client, cli_org.clone());
+                    commands::database::create(
+                        &client,
+                        &name,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        s3_storage,
+                        json,
+                    )
+                }
+                DatabaseCommand::Use { name } => commands::database::use_database(&name, json),
+                DatabaseCommand::Delete { name } => {
+                    let effective_org = resolve_effective_org(&client, cli_org.clone());
+                    commands::database::delete(
+                        &client,
+                        &name,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        json,
+                    )
+                }
+            },
+            Command::FederationIssuer { action } => {
+                let organization = resolve_explicit_org(cli_org);
+                commands::federation_issuer::run(&client, organization.as_deref(), action, json)
+            }
+            Command::FederationRule { action } => {
+                let organization = resolve_explicit_org(cli_org);
+                commands::federation_rule::run(
                     &client,
                     organization.as_deref(),
-                    commands::service_account::CreateServiceAccount {
+                    effective_cluster.as_deref(),
+                    action,
+                    json,
+                )
+            }
+            Command::ServiceAccount { action } => {
+                let organization = resolve_explicit_org(cli_org);
+                match action {
+                    ServiceAccountCommand::List => {
+                        commands::service_account::list(&client, organization.as_deref(), json)
+                    }
+                    ServiceAccountCommand::Create {
                         name,
                         description,
                         role,
-                    },
-                    json,
-                ),
-            }
-        }
-        Command::Organization { action } => match action {
-            OrganizationCommand::List => commands::organization::list(&client, json),
-            OrganizationCommand::Create { name } => {
-                commands::organization::create(&client, &name, json)
-            }
-            OrganizationCommand::Use { name } => {
-                commands::organization::use_organization(&name, json)
-            }
-            OrganizationCommand::Rename { old, new_name } => {
-                commands::organization::rename(&client, &old, &new_name, json)
-            }
-            OrganizationCommand::Delete { name } => {
-                commands::organization::delete(&client, &name, json)
-            }
-        },
-        Command::Cluster { action } => {
-            let effective_org = match &action {
-                ClusterCommand::Use { .. } | ClusterCommand::Sizes => None,
-                _ => resolve_effective_org(&client, cli_org.clone()),
-            };
-            match action {
-                ClusterCommand::Use { name } => commands::cluster::use_cluster(&name, json),
-                ClusterCommand::List => {
-                    commands::cluster::list(&client, effective_org.as_deref(), json)
+                    } => commands::service_account::create(
+                        &client,
+                        organization.as_deref(),
+                        commands::service_account::CreateServiceAccount {
+                            name,
+                            description,
+                            role,
+                        },
+                        json,
+                    ),
                 }
-                ClusterCommand::Regions => {
-                    commands::cluster::regions(&client, effective_org.as_deref(), json)
+            }
+            Command::Organization { action } => match action {
+                OrganizationCommand::List => commands::organization::list(&client, json),
+                OrganizationCommand::Create { name } => {
+                    commands::organization::create(&client, &name, json)
                 }
-                ClusterCommand::Sizes => commands::cluster::sizes(&client, json),
-                ClusterCommand::Create {
-                    region_id,
-                    name,
-                    replicas,
-                    min_size,
-                    max_size,
-                    idle_timeout_minutes,
-                    s3_storage,
-                    identity,
-                } => commands::cluster::create(
-                    &client,
-                    commands::cluster::ClusterCreateOptions {
-                        region_id: &region_id,
-                        organization: effective_org.as_deref(),
-                        name: &name,
+                OrganizationCommand::Use { name } => {
+                    commands::organization::use_organization(&client, &name, json)
+                }
+                OrganizationCommand::Rename { old, new_name } => {
+                    commands::organization::rename(&client, &old, &new_name, json)
+                }
+                OrganizationCommand::Delete { name } => {
+                    commands::organization::delete(&client, &name, json)
+                }
+            },
+            Command::Cluster { action } => {
+                let effective_org = match &action {
+                    ClusterCommand::Use { .. } | ClusterCommand::Sizes => None,
+                    _ => resolve_effective_org(&client, cli_org.clone()),
+                };
+                match action {
+                    ClusterCommand::Use { name } => commands::cluster::use_cluster(
+                        &client,
+                        &name,
+                        resolve_explicit_org(cli_org.clone()).as_deref(),
+                        json,
+                    ),
+                    ClusterCommand::List => {
+                        commands::cluster::list(&client, effective_org.as_deref(), json)
+                    }
+                    ClusterCommand::Regions => {
+                        commands::cluster::regions(&client, effective_org.as_deref(), json)
+                    }
+                    ClusterCommand::Sizes => commands::cluster::sizes(&client, json),
+                    ClusterCommand::Create {
+                        region_id,
+                        name,
                         replicas,
                         min_size,
                         max_size,
                         idle_timeout_minutes,
                         s3_storage,
                         identity,
-                    },
-                    json,
-                ),
-                ClusterCommand::Status { name_or_id } => {
-                    commands::cluster::status(&client, &name_or_id, effective_org.as_deref(), json)
-                }
-                ClusterCommand::Update {
-                    name_or_id,
-                    name,
-                    idle_timeout_minutes,
-                } => commands::cluster::update(
-                    &client,
-                    &name_or_id,
-                    effective_org.as_deref(),
-                    name.as_deref(),
-                    idle_timeout_minutes,
-                    json,
-                ),
-                ClusterCommand::Stop { name_or_id } => {
-                    commands::cluster::stop(&client, &name_or_id, effective_org.as_deref(), json)
-                }
-                ClusterCommand::Resume { name_or_id } => {
-                    commands::cluster::resume(&client, &name_or_id, effective_org.as_deref(), json)
-                }
-                ClusterCommand::Delete { name_or_id } => {
-                    commands::cluster::delete(&client, &name_or_id, effective_org.as_deref(), json)
-                }
-            }
-        }
-        Command::ApiKey { action } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            match action {
-                ApiKeyCommand::List => commands::keys::list(
-                    &client,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
-                    json,
-                ),
-                ApiKeyCommand::Create {
-                    database,
-                    name,
-                    permission,
-                    expires_at,
-                } => {
-                    let database = resolve_optional_database(database);
-                    commands::keys::create(
+                    } => commands::cluster::create(
                         &client,
-                        database.as_deref(),
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        commands::keys::CreateApiKeyRequest {
+                        commands::cluster::ClusterCreateOptions {
+                            region_id: &region_id,
+                            organization: effective_org.as_deref(),
                             name: &name,
-                            permission: &permission,
-                            expires_at: expires_at.as_deref(),
+                            replicas,
+                            min_size,
+                            max_size,
+                            idle_timeout_minutes,
+                            s3_storage,
+                            identity,
                         },
+                        json,
+                    ),
+                    ClusterCommand::Status { name_or_id } => commands::cluster::status(
+                        &client,
+                        &name_or_id,
+                        effective_org.as_deref(),
+                        json,
+                    ),
+                    ClusterCommand::Update {
+                        name_or_id,
+                        name,
+                        idle_timeout_minutes,
+                    } => commands::cluster::update(
+                        &client,
+                        &name_or_id,
+                        effective_org.as_deref(),
+                        name.as_deref(),
+                        idle_timeout_minutes,
+                        json,
+                    ),
+                    ClusterCommand::Stop { name_or_id } => commands::cluster::stop(
+                        &client,
+                        &name_or_id,
+                        effective_org.as_deref(),
+                        json,
+                    ),
+                    ClusterCommand::Resume { name_or_id } => commands::cluster::resume(
+                        &client,
+                        &name_or_id,
+                        effective_org.as_deref(),
+                        json,
+                    ),
+                    ClusterCommand::Delete { name_or_id } => commands::cluster::delete(
+                        &client,
+                        &name_or_id,
+                        effective_org.as_deref(),
+                        json,
+                    ),
+                }
+            }
+            Command::ApiKey { action } => {
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                match action {
+                    ApiKeyCommand::List => commands::keys::list(
+                        &client,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        json,
+                    ),
+                    ApiKeyCommand::Create {
+                        database,
+                        name,
+                        permission,
+                        expires_at,
+                    } => {
+                        let database = resolve_optional_database(database);
+                        commands::keys::create(
+                            &client,
+                            database.as_deref(),
+                            effective_org.as_deref(),
+                            effective_cluster.as_deref(),
+                            commands::keys::CreateApiKeyRequest {
+                                name: &name,
+                                permission: &permission,
+                                expires_at: expires_at.as_deref(),
+                            },
+                            json,
+                        )
+                    }
+                    ApiKeyCommand::Delete { id } => commands::keys::delete(
+                        &client,
+                        effective_org.as_deref(),
+                        effective_cluster.as_deref(),
+                        id,
+                        json,
+                    ),
+                }
+            }
+            Command::Table { action } => {
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                match action {
+                    TableCommand::List { database } => {
+                        let database = resolve_database(database)?;
+                        commands::table::list(
+                            &client,
+                            &database,
+                            effective_org.as_deref(),
+                            effective_cluster.as_deref(),
+                            json,
+                        )
+                    }
+                    TableCommand::Describe { database, table } => {
+                        let database = resolve_database(database)?;
+                        commands::table::describe(
+                            &client,
+                            &database,
+                            effective_org.as_deref(),
+                            effective_cluster.as_deref(),
+                            &table,
+                            json,
+                        )
+                    }
+                    TableCommand::Create {
+                        database,
+                        table,
+                        sorting_key,
+                    } => {
+                        let database = resolve_database(database)?;
+                        commands::table::create(
+                            &client,
+                            &database,
+                            effective_org.as_deref(),
+                            effective_cluster.as_deref(),
+                            &table,
+                            sorting_key.as_deref(),
+                            json,
+                        )
+                    }
+                    TableCommand::Update {
+                        database,
+                        table,
+                        sorting_key,
+                    } => {
+                        let database = resolve_database(database)?;
+                        commands::table::update(
+                            &client,
+                            &database,
+                            effective_org.as_deref(),
+                            effective_cluster.as_deref(),
+                            &table,
+                            &sorting_key,
+                            json,
+                        )
+                    }
+                }
+            }
+            Command::Integration { action } => match action {
+                IntegrationCommand::List => {
+                    let organization = resolve_explicit_org(cli_org);
+                    commands::integration::list(&client, organization.as_deref(), json)
+                }
+                IntegrationCommand::Add {
+                    kind: IntegrationKind::Slack,
+                } => {
+                    let effective_org = resolve_effective_org(&client, cli_org);
+                    let organization = require_organization(effective_org.as_deref())?;
+                    commands::integration::add_slack(
+                        &commands::open::resolve_ui_base_url(&url),
+                        organization,
                         json,
                     )
                 }
-                ApiKeyCommand::Delete { id } => commands::keys::delete(
+            },
+            Command::Workflow { action } => {
+                let effective_org = if client.has_api_key()? {
+                    resolve_explicit_org(cli_org.clone())
+                } else {
+                    resolve_effective_org(&client, cli_org.clone())
+                };
+                let scope = require_workflow_scope(
                     &client,
                     effective_org.as_deref(),
                     effective_cluster.as_deref(),
-                    id,
-                    json,
-                ),
-            }
-        }
-        Command::Table { action } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            match action {
-                TableCommand::List { database } => {
-                    let database = resolve_database(database)?;
-                    commands::table::list(
-                        &client,
-                        &database,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        json,
-                    )
-                }
-                TableCommand::Describe { database, table } => {
-                    let database = resolve_database(database)?;
-                    commands::table::describe(
-                        &client,
-                        &database,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        &table,
-                        json,
-                    )
-                }
-                TableCommand::Create {
-                    database,
-                    table,
-                    sorting_key,
-                } => {
-                    let database = resolve_database(database)?;
-                    commands::table::create(
-                        &client,
-                        &database,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        &table,
-                        sorting_key.as_deref(),
-                        json,
-                    )
-                }
-                TableCommand::Update {
-                    database,
-                    table,
-                    sorting_key,
-                } => {
-                    let database = resolve_database(database)?;
-                    commands::table::update(
-                        &client,
-                        &database,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        &table,
-                        &sorting_key,
-                        json,
-                    )
-                }
-            }
-        }
-        Command::Integration { action } => match action {
-            IntegrationCommand::List => {
-                let organization = resolve_explicit_org(cli_org);
-                commands::integration::list(&client, organization.as_deref(), json)
-            }
-            IntegrationCommand::Add {
-                kind: IntegrationKind::Slack,
-            } => {
-                let effective_org = resolve_effective_org(&client, cli_org);
-                let organization = require_organization(effective_org.as_deref())?;
-                commands::integration::add_slack(
-                    &commands::open::resolve_ui_base_url(&url),
-                    organization,
-                    json,
-                )
-            }
-        },
-        Command::Workflow { action } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let scope =
-                require_workflow_scope(effective_org.as_deref(), effective_cluster.as_deref())?;
-            match action {
-                WorkflowCommand::List => commands::workflow::list(&client, &scope, json),
-                WorkflowCommand::Get { id } => commands::workflow::get(&client, &scope, &id, json),
-                WorkflowCommand::Create {
-                    name,
-                    database,
-                    sql,
-                    schedule_cron,
-                    schedule_enabled,
-                    sinks,
-                } => {
-                    ensure_single_stdin_reader(Some(&sql), &sinks)?;
-                    commands::workflow::create(
-                        &client,
-                        &scope,
-                        commands::workflow::CreateWorkflow {
-                            name,
-                            database: resolve_database(database)?,
-                            sql: read_sql_arg(sql)?,
-                            cron: schedule_cron.and_then(|cron| cron.0),
-                            enabled: schedule_enabled,
-                            sinks,
-                        },
-                        json,
-                    )
-                }
-                WorkflowCommand::Update {
-                    id,
-                    name,
-                    database,
-                    sql,
-                    schedule_cron,
-                    schedule_enabled,
-                    sinks,
-                    clear_sinks,
-                } => {
-                    ensure_single_stdin_reader(sql.as_deref(), &sinks)?;
-                    commands::workflow::update(
-                        &client,
-                        &scope,
-                        &id,
-                        commands::workflow::UpdateWorkflow {
-                            name,
-                            database,
-                            sql: sql.map(read_sql_arg).transpose()?,
-                            cron: schedule_cron.map(|cron| cron.0),
-                            enabled: schedule_enabled,
-                            sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
-                        },
-                        json,
-                    )
-                }
-                WorkflowCommand::Delete { id } => {
-                    commands::workflow::delete(&client, &scope, &id, json)
-                }
-                WorkflowCommand::Run {
-                    id,
-                    idempotency_key,
-                } => {
-                    commands::workflow::run(&client, &scope, &id, idempotency_key.as_deref(), json)
-                }
-                WorkflowCommand::Runs { id, limit, cursor } => {
-                    commands::workflow::runs(&client, &scope, &id, limit, cursor.as_deref(), json)
-                }
-                WorkflowCommand::Cancel { id, run_id } => {
-                    commands::workflow::cancel(&client, &scope, &id, &run_id, json)
-                }
-                WorkflowCommand::Logs {
-                    id,
-                    range,
-                    limit,
-                    cursor,
-                } => commands::workflow::logs(
-                    &client,
-                    &scope,
-                    &id,
-                    &range,
-                    limit,
-                    cursor.as_deref(),
-                    json,
-                ),
-                WorkflowCommand::Sink { action } => match action {
-                    WorkflowSinkCommand::Create { workflow_id, sink } => {
-                        commands::workflow::sink::create(&client, &scope, &workflow_id, &sink, json)
+                )?;
+                let client = client.with_scope(scope);
+                match action {
+                    WorkflowCommand::List => commands::workflow::list(&client, json),
+                    WorkflowCommand::Get { id } => commands::workflow::get(&client, &id, json),
+                    WorkflowCommand::Create {
+                        name,
+                        database,
+                        sql,
+                        schedule_cron,
+                        schedule_enabled,
+                        sinks,
+                    } => {
+                        ensure_single_stdin_reader(Some(&sql), &sinks)?;
+                        commands::workflow::create(
+                            &client,
+                            commands::workflow::CreateWorkflow {
+                                name,
+                                database: resolve_database(database)?,
+                                sql: read_sql_arg(sql)?,
+                                cron: schedule_cron.and_then(|cron| cron.0),
+                                enabled: schedule_enabled,
+                                sinks,
+                            },
+                            json,
+                        )
                     }
-                    WorkflowSinkCommand::Update {
-                        workflow_id,
-                        sink_id,
-                        changes,
-                    } => commands::workflow::sink::update(
+                    WorkflowCommand::Update {
+                        id,
+                        name,
+                        database,
+                        sql,
+                        schedule_cron,
+                        schedule_enabled,
+                        sinks,
+                        clear_sinks,
+                    } => {
+                        ensure_single_stdin_reader(sql.as_deref(), &sinks)?;
+                        commands::workflow::update(
+                            &client,
+                            &id,
+                            commands::workflow::UpdateWorkflow {
+                                name,
+                                database,
+                                sql: sql.map(read_sql_arg).transpose()?,
+                                cron: schedule_cron.map(|cron| cron.0),
+                                enabled: schedule_enabled,
+                                sinks: (clear_sinks || !sinks.is_empty()).then_some(sinks),
+                            },
+                            json,
+                        )
+                    }
+                    WorkflowCommand::Delete { id } => {
+                        commands::workflow::delete(&client, &id, json)
+                    }
+                    WorkflowCommand::Run {
+                        id,
+                        idempotency_key,
+                    } => commands::workflow::run(&client, &id, idempotency_key.as_deref(), json),
+                    WorkflowCommand::Runs { id, limit, cursor } => {
+                        commands::workflow::runs(&client, &id, limit, cursor.as_deref(), json)
+                    }
+                    WorkflowCommand::Cancel { id, run_id } => {
+                        commands::workflow::cancel(&client, &id, &run_id, json)
+                    }
+                    WorkflowCommand::Logs {
+                        id,
+                        range,
+                        limit,
+                        cursor,
+                    } => commands::workflow::logs(
                         &client,
-                        &scope,
-                        &workflow_id,
-                        &sink_id,
-                        &changes,
+                        &id,
+                        &range,
+                        limit,
+                        cursor.as_deref(),
                         json,
                     ),
-                    WorkflowSinkCommand::Delete {
-                        workflow_id,
-                        sink_id,
-                    } => commands::workflow::sink::delete(
-                        &client,
-                        &scope,
-                        &workflow_id,
-                        &sink_id,
-                        json,
-                    ),
-                },
+                    WorkflowCommand::Sink { action } => match action {
+                        WorkflowSinkCommand::Create { workflow_id, sink } => {
+                            commands::workflow::sink::create(&client, &workflow_id, &sink, json)
+                        }
+                        WorkflowSinkCommand::Update {
+                            workflow_id,
+                            sink_id,
+                            changes,
+                        } => commands::workflow::sink::update(
+                            &client,
+                            &workflow_id,
+                            &sink_id,
+                            &changes,
+                            json,
+                        ),
+                        WorkflowSinkCommand::Delete {
+                            workflow_id,
+                            sink_id,
+                        } => {
+                            commands::workflow::sink::delete(&client, &workflow_id, &sink_id, json)
+                        }
+                    },
+                }
             }
-        }
-        Command::Logs {
-            search,
-            methods,
-            status_codes,
-            levels,
-            sources,
-            user_agent,
-            host,
-            paths,
-            min_duration_ms,
-            max_duration_ms,
-            limit,
-            offset,
-            since,
-            until,
-            start_time,
-            end_time,
-        } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            commands::logs::logs(
-                &client,
-                effective_org.as_deref(),
-                effective_cluster.as_deref(),
-                search.as_deref(),
-                &methods,
-                &status_codes,
-                &levels,
-                &sources,
-                user_agent.as_deref(),
-                host.as_deref(),
-                &paths,
+            Command::Logs {
+                search,
+                methods,
+                status_codes,
+                levels,
+                sources,
+                user_agent,
+                host,
+                paths,
                 min_duration_ms,
                 max_duration_ms,
                 limit,
                 offset,
-                since.as_deref(),
-                until.as_deref(),
-                start_time.as_deref(),
-                end_time.as_deref(),
-                json,
-            )
-        }
-        Command::Query {
-            database,
-            sql_positional,
-            sql,
-            limit,
-        } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let database = resolve_database(database)?;
-            let sql = resolve_sql(sql_positional, sql)?;
-            commands::query::query(
-                &client,
-                &database,
-                effective_org.as_deref(),
-                effective_cluster.as_deref(),
-                &sql,
+                since,
+                until,
+                start_time,
+                end_time,
+            } => {
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                commands::logs::logs(
+                    &client,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    search.as_deref(),
+                    &methods,
+                    &status_codes,
+                    &levels,
+                    &sources,
+                    user_agent.as_deref(),
+                    host.as_deref(),
+                    &paths,
+                    min_duration_ms,
+                    max_duration_ms,
+                    limit,
+                    offset,
+                    since.as_deref(),
+                    until.as_deref(),
+                    start_time.as_deref(),
+                    end_time.as_deref(),
+                    json,
+                )
+            }
+            Command::Query {
+                database,
+                sql_positional,
+                sql,
                 limit,
-                json,
-            )
-        }
-        Command::Format(args) => {
-            let database = resolve_optional_database(args.database);
-            let sql = resolve_sql(args.sql_positional, args.sql)?;
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            commands::format::format(
-                &client,
-                database.as_deref(),
-                effective_org.as_deref(),
-                effective_cluster.as_deref(),
-                &sql,
-                json,
-            )
-        }
-        Command::Insert {
-            database,
-            table,
-            data,
-            file,
-            url,
-            transform,
-        } => {
-            let effective_org = resolve_effective_org(&client, cli_org.clone());
-            let database = resolve_database(database)?;
+            } => {
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                let database = resolve_database(database)?;
+                let sql = resolve_sql(sql_positional, sql)?;
+                commands::query::query(
+                    &client,
+                    &database,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    &sql,
+                    limit,
+                    json,
+                )
+            }
+            Command::Format(args) => {
+                let database = resolve_optional_database(args.database);
+                let sql = resolve_sql(args.sql_positional, args.sql)?;
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                commands::format::format(
+                    &client,
+                    database.as_deref(),
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    &sql,
+                    json,
+                )
+            }
+            Command::Insert {
+                database,
+                table,
+                data,
+                file,
+                url,
+                transform,
+            } => {
+                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                let database = resolve_database(database)?;
 
-            commands::insert::insert(
-                &client,
-                &database,
-                effective_org.as_deref(),
-                effective_cluster.as_deref(),
-                &table,
-                data.as_deref(),
-                file.as_deref(),
-                url.as_deref(),
-                transform.as_deref(),
-                json,
-            )
-        }
-        Command::Feedback(args) => commands::feedback::submit(&client, args, json),
-        Command::Ping => commands::ping::ping(&client, json),
-        Command::Docs => commands::docs::docs(&client),
-        Command::Status => commands::status::status(&url, json),
-        Command::Update => commands::update::update(json),
-        Command::Open { database } => {
-            let ui_base_url = commands::open::resolve_ui_base_url(&url);
-            let effective_org = resolve_effective_org(&client, cli_org);
-            let database = resolve_optional_database(database);
-            commands::open::open(
-                &ui_base_url,
-                effective_org.as_deref(),
-                effective_cluster.as_deref(),
-                database.as_deref(),
-                json,
-            )
-        }
-        Command::Completions { shell } => {
-            let shell = match shell {
-                ShellType::Bash => clap_complete::Shell::Bash,
-                ShellType::Zsh => clap_complete::Shell::Zsh,
-                ShellType::Fish => clap_complete::Shell::Fish,
-            };
-            generate(shell, &mut Cli::command(), "rtree", &mut io::stdout());
-            Ok(())
-        }
-    }?;
-    Ok(ExitCode::SUCCESS)
+                commands::insert::insert(
+                    &client,
+                    &database,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    &table,
+                    data.as_deref(),
+                    file.as_deref(),
+                    url.as_deref(),
+                    transform.as_deref(),
+                    json,
+                )
+            }
+            Command::Feedback(args) => commands::feedback::submit(&client, args, json),
+            Command::Ping => commands::ping::ping(&client, json),
+            Command::Docs => commands::docs::docs(&client),
+            Command::Status => commands::status::status(&url, json),
+            Command::Update => commands::update::update(json),
+            Command::Open { database } => {
+                let ui_base_url = commands::open::resolve_ui_base_url(&url);
+                let effective_org = resolve_effective_org(&client, cli_org);
+                let database = resolve_optional_database(database);
+                commands::open::open(
+                    &ui_base_url,
+                    effective_org.as_deref(),
+                    effective_cluster.as_deref(),
+                    database.as_deref(),
+                    json,
+                )
+            }
+            Command::Completions { shell } => {
+                let shell = match shell {
+                    ShellType::Bash => clap_complete::Shell::Bash,
+                    ShellType::Zsh => clap_complete::Shell::Zsh,
+                    ShellType::Fish => clap_complete::Shell::Fish,
+                };
+                generate(shell, &mut Cli::command(), "rtree", &mut io::stdout());
+                Ok(())
+            }
+        }?;
+        Ok(ExitCode::SUCCESS)
+    })();
+    result.map_err(|error| explain_rejected_saved_ids(&client, error))
 }
 
 #[cfg(test)]
@@ -775,8 +847,50 @@ mod tests {
     use super::{
         effective_json_mode, resolve_cluster_from_sources, resolve_database_from_sources,
         resolve_effective_org_with, resolve_login_cluster_from_sources, resolve_org_from_sources,
-        resolve_url_from_sources, Cli,
+        resolve_url_from_sources, saved_ids_from_sources, Cli,
     };
+
+    fn config_with_ids() -> super::config::Config {
+        super::config::Config {
+            default_organization: Some("team".into()),
+            default_organization_id: Some("org-id".into()),
+            default_cluster: Some("prod".into()),
+            default_cluster_id: Some("cluster-id".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_ids_apply_only_to_config_selections() {
+        let cfg = config_with_ids();
+        let saved = saved_ids_from_sources(None, None, None, None, &cfg);
+        assert_eq!(saved.organization, Some(("team".into(), "org-id".into())));
+        assert_eq!(saved.cluster, Some(("prod".into(), "cluster-id".into())));
+
+        let saved = saved_ids_from_sources(Some("team"), None, None, Some("prod"), &cfg);
+        assert!(
+            saved.organization.is_none(),
+            "an --org flag is resolved by name"
+        );
+        assert!(
+            saved.cluster.is_none(),
+            "RAWTREE_CLUSTER is resolved by name"
+        );
+
+        let saved = saved_ids_from_sources(None, Some("team"), Some("prod"), None, &cfg);
+        assert!(saved.organization.is_none() && saved.cluster.is_none());
+    }
+
+    #[test]
+    fn configs_without_ids_have_nothing_saved() {
+        let cfg = super::config::Config {
+            default_organization: Some("team".into()),
+            default_cluster: Some("prod".into()),
+            ..Default::default()
+        };
+        let saved = saved_ids_from_sources(None, None, None, None, &cfg);
+        assert!(saved.organization.is_none() && saved.cluster.is_none());
+    }
 
     #[test]
     fn json_is_automatic_only_for_non_terminal_login() {
