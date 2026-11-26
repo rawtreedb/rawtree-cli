@@ -124,6 +124,13 @@ impl ApiClient {
             let selected = self.scope.organization.as_deref().and_then(|organization| {
                 if is_uuid(organization) {
                     Some(organization.to_owned())
+                } else if let Some((_, id)) = self
+                    .saved
+                    .organization
+                    .as_ref()
+                    .filter(|(name, _)| name == organization)
+                {
+                    Some(id.clone())
                 } else {
                     self.cached_organization(organization)
                         .map(|item| item.organization_id)
