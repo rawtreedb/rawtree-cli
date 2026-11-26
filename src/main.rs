@@ -22,7 +22,7 @@ use cli::{
     IntegrationKind, OrganizationCommand, ServiceAccountCommand, ShellType, TableCommand,
     WorkflowCommand, WorkflowSinkCommand,
 };
-use client::{ApiClient, Scope, Selector};
+use client::{ApiClient, Scope, Selector, ServerError};
 use constants::DEFAULT_API_URL;
 
 fn resolve_url_from_sources(
@@ -187,18 +187,36 @@ impl Selection {
         client.with_scope(self.scope(organization.as_ref(), self.cluster.as_ref()))
     }
 
-    fn explain_rejected_saved_ids(&self, error: anyhow::Error) -> anyhow::Error {
-        let message = format!("{error:#}");
-        if self.used_saved_ids.get()
-            && error.downcast_ref::<output::CliError>().is_none()
-            && (message.contains("(403)") || message.contains("(404)"))
-        {
-            anyhow::anyhow!(
-                "{message}\nThe saved organization or cluster ID was rejected; it may have been deleted or your access may have changed. Run `rtree organization use <name>` and `rtree cluster use <name>`, or `rtree login` again."
-            )
-        } else {
-            error
+    /// A rejected saved ID is never replaced by a name lookup, so when the
+    /// server refuses a command that used one, check whether the ID is still
+    /// visible and say how to refresh it if not.
+    fn explain_rejected_saved_ids(
+        &self,
+        client: &ApiClient,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
+        let refused =
+            ServerError::of(&error).is_some_and(|error| (400..500).contains(&error.status));
+        if !(self.used_saved_ids.get() && refused) {
+            return error;
         }
+        let saved = Scope {
+            organization: self
+                .organization
+                .as_ref()
+                .map(|choice| self.selector(choice)),
+            cluster: self
+                .cluster
+                .as_ref()
+                .and_then(|choice| choice.saved_id.clone())
+                .map(Selector::Id),
+        };
+        if !matches!(client.can_access(&saved), Ok(false)) {
+            return error;
+        }
+        anyhow::anyhow!(
+            "{error:#}\nThe saved organization or cluster ID was rejected; it may have been deleted or your access may have changed. Run `rtree organization use <name>` and `rtree cluster use <name>`, or `rtree login` again."
+        )
     }
 }
 
@@ -777,7 +795,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }?;
         Ok(ExitCode::SUCCESS)
     })();
-    result.map_err(|error| selection.explain_rejected_saved_ids(error))
+    result.map_err(|error| selection.explain_rejected_saved_ids(&client, error))
 }
 
 #[cfg(test)]

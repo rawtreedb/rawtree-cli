@@ -939,3 +939,31 @@ fn id_selectors_skip_the_organization_listing_but_keep_regional_routing() {
     assert_eq!(requests[2].headers["x-rawtree-cluster-id"], CLUSTER);
     assert_eq!(requests[2].headers["x-rawtree-deployment-id"], "12abcdef");
 }
+
+#[test]
+fn user_credentials_check_saved_ids_against_the_listing_and_cached_discovery() {
+    let (base, server) = server(vec![
+        (
+            "200 OK",
+            json!({"organizations":[{"organization_id":ORG,"name":"acme","role":null}]}),
+        ),
+        (
+            "200 OK",
+            json!({"regions":[{"id":"legacy","name":"Virginia","cloud_region":"us-east-1","deployment_id":null,"enabled":true,"organization_id":null}]}),
+        ),
+        (
+            "200 OK",
+            json!({"clusters":[{"id":CLUSTER,"name":"production"}]}),
+        ),
+    ]);
+    let client = ApiClient::new(base, Some("session.fixture".to_string()));
+    let scope = |organization: &str, cluster: &str| Scope {
+        organization: Some(Selector::Id(organization.into())),
+        cluster: Some(Selector::Id(cluster.into())),
+    };
+    const GONE: &str = "00000000-0000-4000-8000-000000000009";
+    assert!(client.can_access(&scope(ORG, CLUSTER)).unwrap());
+    assert!(!client.can_access(&scope(ORG, GONE)).unwrap());
+    assert!(!client.can_access(&scope(GONE, CLUSTER)).unwrap());
+    assert_eq!(server.join().unwrap().len(), 3);
+}

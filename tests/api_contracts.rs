@@ -1004,22 +1004,82 @@ fn an_org_flag_ignores_both_saved_ids_and_resolves_by_name() {
     );
 }
 
+const REFRESH_HINT: &str = "saved organization or cluster ID was rejected";
+
+fn cluster_not_found() -> (String, &'static str, Value) {
+    (
+        "GET /v1/databases".to_string(),
+        "404 Not Found",
+        json!({"message": "Cluster not found."}),
+    )
+}
+
 #[test]
-fn a_rejected_saved_id_fails_with_a_refresh_hint_and_never_falls_back_to_names() {
-    let (output, saved, _) = common::run_cli(
-        &[(
-            "GET /v1/databases".to_string(),
-            "404 Not Found",
-            json!({"message": "Cluster not found."}),
-        )],
-        &["--json", "database", "list"],
-        &config_with_saved_ids(),
+fn a_saved_id_the_credential_can_no_longer_see_fails_with_a_refresh_hint() {
+    let other_organization = (
+        "GET /v1/organizations".to_string(),
+        "200 OK",
+        json!({"organizations": [{"organization_id": "00000000-0000-4000-8000-000000000002", "name": "other", "role": null}]}),
     );
-    assert_eq!(output.status.code(), Some(4));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("saved organization or cluster ID was rejected"));
-    assert!(stderr.contains("rtree organization use"));
-    assert_eq!(saved, config_with_saved_ids());
+    let other_cluster = (
+        "GET /v1/clusters".to_string(),
+        "200 OK",
+        json!({"clusters": [{"id": "00000000-0000-4000-8000-0000000000c2", "name": "other"}]}),
+    );
+    for responses in [
+        vec![cluster_not_found(), other_organization],
+        vec![
+            cluster_not_found(),
+            common::key_organization("team"),
+            other_cluster,
+        ],
+    ] {
+        let (output, saved, _) = common::run_cli(
+            &responses,
+            &["--json", "database", "list"],
+            &config_with_saved_ids(),
+        );
+        assert_eq!(output.status.code(), Some(4));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(REFRESH_HINT), "{stderr}");
+        assert!(stderr.contains("rtree organization use"));
+        assert_eq!(saved, config_with_saved_ids());
+    }
+}
+
+#[test]
+fn other_refusals_with_valid_saved_ids_get_no_refresh_hint() {
+    for (args, refusal) in [
+        (
+            vec!["--json", "table", "describe", "--database", "db", "missing"],
+            (
+                "GET /v1/tables/missing?database=db".to_string(),
+                "404 Not Found",
+                json!({"message": "Table not found."}),
+            ),
+        ),
+        (
+            vec!["--json", "workflow", "list"],
+            (
+                "GET /v1/workflows".to_string(),
+                "403 Forbidden",
+                json!({"message": "Forbidden", "hint": "Workflow API access requires an admin API key."}),
+            ),
+        ),
+    ] {
+        let (output, _, _) = common::run_cli(
+            &[
+                refusal,
+                common::key_organization("team"),
+                common::bound_cluster("prod"),
+            ],
+            &args,
+            &config_with_saved_ids(),
+        );
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stderr.contains(REFRESH_HINT), "{stderr}");
+    }
 }
 
 #[test]

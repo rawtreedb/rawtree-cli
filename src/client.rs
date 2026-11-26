@@ -347,18 +347,40 @@ fn check_status(resp: Response) -> Result<()> {
     Err(format_server_error(&text, status.as_u16()))
 }
 
-fn format_server_error(body: &str, status: u16) -> anyhow::Error {
-    if let Ok(json) = serde_json::from_str::<Value>(body) {
-        let message = json["message"].as_str().unwrap_or("Unknown error");
-        let hint = json["hint"].as_str().unwrap_or("");
-        if hint.is_empty() {
-            anyhow::anyhow!("Server error ({}): {}", status, message)
-        } else {
-            anyhow::anyhow!("Server error ({}): {}\nHint: {}", status, message, hint)
-        }
-    } else {
-        anyhow::anyhow!("Server error ({}): {}", status, body)
+/// A non-success response from the API.
+#[derive(Debug)]
+pub struct ServerError {
+    pub status: u16,
+    message: String,
+}
+
+impl ServerError {
+    /// The server error behind `error`, if one caused it.
+    pub fn of(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| cause.downcast_ref())
     }
+}
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Server error ({}): {}", self.status, self.message)
+    }
+}
+
+impl std::error::Error for ServerError {}
+
+fn format_server_error(body: &str, status: u16) -> anyhow::Error {
+    let message = match serde_json::from_str::<Value>(body) {
+        Ok(json) => {
+            let message = json["message"].as_str().unwrap_or("Unknown error");
+            match json["hint"].as_str().unwrap_or("") {
+                "" => message.to_owned(),
+                hint => format!("{message}\nHint: {hint}"),
+            }
+        }
+        Err(_) => body.to_owned(),
+    };
+    ServerError { status, message }.into()
 }
 
 #[cfg(test)]

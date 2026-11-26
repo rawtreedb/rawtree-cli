@@ -1,5 +1,5 @@
 use super::{
-    discovery::UnavailableRegion, handle_response, ApiClient, Selector, CLUSTER_ID_HEADER,
+    discovery::UnavailableRegion, handle_response, ApiClient, Scope, Selector, CLUSTER_ID_HEADER,
     ORGANIZATION_ID_HEADER,
 };
 use anyhow::{Context, Result};
@@ -408,6 +408,42 @@ impl ApiClient {
             cluster_in_path: path_cluster.is_some(),
             cluster: path_cluster.or_else(|| self.scope.cluster.clone()),
         }
+    }
+
+    /// Whether this credential can still see the scope's organization and
+    /// cluster. Fails when that cannot be told, such as during a regional outage.
+    pub fn can_access(&self, scope: &Scope) -> Result<bool> {
+        let organization = match &scope.organization {
+            Some(selector) => {
+                let found = self
+                    .organizations(None)?
+                    .into_iter()
+                    .find(|item| match selector {
+                        Selector::Id(id) => item.organization_id == *id,
+                        Selector::Name(name) => item.name == *name,
+                    });
+                let Some(organization) = found else {
+                    return Ok(false);
+                };
+                Some(organization)
+            }
+            None => None,
+        };
+        let Some(Selector::Id(cluster_id)) = &scope.cluster else {
+            return Ok(true);
+        };
+        if !self.has_user_credential()? {
+            return Ok(self.bound_cluster(None)?.id == *cluster_id);
+        }
+        let organization =
+            organization.context("A cluster ID is checked within its organization.")?;
+        let clusters = self.organization_clusters(&organization, None)?;
+        let found = clusters.clusters.iter().any(|item| item.id == *cluster_id);
+        anyhow::ensure!(
+            found || clusters.unavailable_regions.is_empty(),
+            "Some regions are unavailable."
+        );
+        Ok(found)
     }
 
     /// The organization and cluster IDs this client's scope resolves to, for
