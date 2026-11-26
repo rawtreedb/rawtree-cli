@@ -3,22 +3,16 @@ use std::io::Read;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use super::{describe_sink, WorkflowScope};
+use super::describe_sink;
 use crate::client::ApiClient;
 use crate::output;
 
 const HELP_HINT: &str = "Run `rtree workflow sink --help` for sink commands and their help.";
 
-pub fn create(
-    client: &ApiClient,
-    scope: &WorkflowScope,
-    workflow_id: &str,
-    sink: &str,
-    json_mode: bool,
-) -> Result<()> {
+pub fn create(client: &ApiClient, workflow_id: &str, sink: &str, json_mode: bool) -> Result<()> {
     let body = read_object(sink, "sink")?;
     let value: Value = client
-        .post(&scope.workflow_path(workflow_id, "/sinks"), &body)
+        .post(&super::workflow_path(workflow_id, "/sinks"), &body)
         .map_err(with_help_hint)?;
     print_sink(
         &value,
@@ -30,7 +24,6 @@ pub fn create(
 
 pub fn update(
     client: &ApiClient,
-    scope: &WorkflowScope,
     workflow_id: &str,
     sink_id: &str,
     changes: &str,
@@ -38,20 +31,14 @@ pub fn update(
 ) -> Result<()> {
     let body = read_object(changes, "changes")?;
     let value: Value = client
-        .patch(&sink_path(scope, workflow_id, sink_id), &body)
+        .patch(&sink_path(workflow_id, sink_id), &body)
         .map_err(with_help_hint)?;
     print_sink(&value, json_mode, &format!("Sink '{sink_id}' updated:"));
     Ok(())
 }
 
-pub fn delete(
-    client: &ApiClient,
-    scope: &WorkflowScope,
-    workflow_id: &str,
-    sink_id: &str,
-    json_mode: bool,
-) -> Result<()> {
-    client.delete_no_content(&sink_path(scope, workflow_id, sink_id))?;
+pub fn delete(client: &ApiClient, workflow_id: &str, sink_id: &str, json_mode: bool) -> Result<()> {
+    client.delete_no_content(&sink_path(workflow_id, sink_id))?;
     output::print_result(
         &json!({"workflow_id": workflow_id, "sink_id": sink_id, "deleted": true}),
         json_mode,
@@ -60,8 +47,8 @@ pub fn delete(
     Ok(())
 }
 
-fn sink_path(scope: &WorkflowScope, workflow_id: &str, sink_id: &str) -> String {
-    scope.workflow_path(
+fn sink_path(workflow_id: &str, sink_id: &str) -> String {
+    super::workflow_path(
         workflow_id,
         &format!("/sinks/{}", urlencoding::encode(sink_id)),
     )

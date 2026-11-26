@@ -72,12 +72,12 @@ fn database_storage_create_uses_current_response_and_persists_only_on_success() 
                     json!({"regions":[{"id":"legacy","name":"Virginia","cloud_region":"us-east-1","deployment_id":null,"organization_id":null,"enabled":true}]}),
                 ),
                 (
-                    "GET /v1/clusters?organization=team%20alpha".into(),
+                    "GET /v1/clusters".into(),
                     "200 OK",
-                    json!({"clusters": []}),
+                    json!({"clusters": [{"id": common::CLUSTER_ID, "name": "prod/eu"}]}),
                 ),
                 (
-                    "POST /v1/databases?organization=team%20alpha&cluster=prod%2Feu".into(),
+                    "POST /v1/databases".into(),
                     if success { "200 OK" } else { "400 Bad Request" },
                     response.clone(),
                 ),
@@ -173,11 +173,7 @@ fn cluster_creation_forwards_optional_identity_and_nested_storage() {
                     "200 OK",
                     json!({"sizes": [{"cpu_cores": 2, "memory_gib": 8}]}),
                 ),
-                (
-                    "POST /v1/clusters?organization=team".into(),
-                    "200 OK",
-                    response.clone(),
-                ),
+                ("POST /v1/clusters".into(), "200 OK", response.clone()),
             ],
             &args,
             &json!({"token":"session.fixture"}),
@@ -241,7 +237,7 @@ fn cluster_list_and_status_show_storage_without_an_organization_envelope() {
             args.extend_from_slice(&action);
             let (output, _, _) = common::run_cli(
                 &[(
-                    "GET /v1/clusters?organization=team".into(),
+                    "GET /v1/clusters".into(),
                     "200 OK",
                     json!({"clusters": [cluster()]}),
                 )],
@@ -341,7 +337,7 @@ fn managed_cluster_storage_and_inherited_database_storage_have_distinct_labels()
         args.extend_from_slice(&action);
         let (output, _, _) = common::run_cli(
             &[(
-                "GET /v1/clusters?organization=team".into(),
+                "GET /v1/clusters".into(),
                 "200 OK",
                 json!({"clusters": [managed]}),
             )],
@@ -359,7 +355,7 @@ fn managed_cluster_storage_and_inherited_database_storage_have_distinct_labels()
     }
     let (output, _, _) = common::run_cli(
         &[(
-            "GET /v1/databases?organization=team&cluster=production".into(),
+            "GET /v1/databases".into(),
             "200 OK",
             json!({"databases": [{"name": "analytics", "s3_storage": null}]}),
         )],
@@ -399,7 +395,7 @@ fn cluster_identity_validation_errors_come_from_the_api() {
                 json!({"sizes": [{"cpu_cores": 2, "memory_gib": 8}]}),
             ),
             (
-                "POST /v1/clusters?organization=team".into(),
+                "POST /v1/clusters".into(),
                 "400 Bad Request",
                 json!({"message": "Custom S3 storage requires s3_storage_access.external_id."}),
             ),

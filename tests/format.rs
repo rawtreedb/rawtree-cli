@@ -2,10 +2,10 @@ mod common;
 
 use serde_json::{json, Value};
 
-const PATH: &str = "POST /v1/query-format?organization=team&cluster=prod";
+const PATH: &str = "POST /v1/query-format";
 
 fn config() -> Value {
-    json!({"token": "rt_fixture", "default_organization": "team", "cluster": "prod"})
+    json!({"token": "rt_fixture", "default_organization": common::ORG_ID, "cluster": common::CLUSTER_ID})
 }
 
 #[test]
@@ -28,11 +28,22 @@ fn json_output_and_scope_overrides_preserve_the_document() {
     let formatted = "SELECT 1;\n\n";
     let (output, _, bodies) = common::run_cli(
         &[(
-            "POST /v1/query-format?database=analytics%20db&organization=team%20alpha&cluster=prod%2Feu".to_string(),
+            "POST /v1/query-format?database=analytics%20db".to_string(),
             "200 OK",
             json!({"formatted": formatted}),
         )],
-        &["format", "--sql", "select 1", "--database", "analytics db", "--org", "team alpha", "--cluster", "prod/eu", "--json"],
+        &[
+            "format",
+            "--sql",
+            "select 1",
+            "--database",
+            "analytics db",
+            "--org",
+            common::ORG_ID,
+            "--cluster",
+            common::CLUSTER_ID,
+            "--json",
+        ],
         &config(),
     );
     assert!(output.status.success(), "{:?}", output);
@@ -72,7 +83,7 @@ fn uses_saved_database_scope() {
     configuration["database"] = json!("saved db");
     let (output, _, _) = common::run_cli(
         &[(
-            "POST /v1/query-format?database=saved%20db&organization=team&cluster=prod".to_string(),
+            "POST /v1/query-format?database=saved%20db".to_string(),
             "200 OK",
             json!({"formatted": "SELECT 1"}),
         )],

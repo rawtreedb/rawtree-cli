@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{read_selection_input, AuthSelection};
-use crate::{client::ApiClient, org};
+use crate::{
+    client::{ApiClient, Scope},
+    org,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "needs", rename_all = "lowercase")]
@@ -163,8 +166,8 @@ fn list_databases_for_organization(
     organization_name: &str,
     cluster: Option<&str>,
 ) -> Result<Vec<String>> {
-    let path = org::databases_collection_path(Some(organization_name), cluster);
-    let resp: ListDatabasesResponse = client.get(&path)?;
+    let client = client.with_scope(Scope::new(Some(organization_name), cluster));
+    let resp: ListDatabasesResponse = client.get("/v1/databases")?;
     Ok(resp.databases.into_iter().map(|item| item.name).collect())
 }
 
@@ -172,8 +175,8 @@ fn list_clusters_for_organization(
     client: &ApiClient,
     organization_name: &str,
 ) -> Result<Vec<String>> {
-    let path = org::scoped_path("/v1/clusters", Some(organization_name), None);
-    let resp: ListClustersResponse = client.get(&path)?;
+    let client = client.with_scope(Scope::organization(Some(organization_name)));
+    let resp: ListClustersResponse = client.get("/v1/clusters")?;
     Ok(resp.clusters.into_iter().map(|item| item.name).collect())
 }
 
@@ -258,11 +261,15 @@ pub(super) fn resolve_browser_auth_selection(
         Err(err) if json_mode || cli_database.is_some() => return Err(err.into()),
         Err(_) => None,
     };
-    Ok(AuthSelection {
-        organization: Some(organization),
-        cluster,
-        database,
-    })
+    Ok(super::attach_ids(
+        &client,
+        AuthSelection {
+            organization: Some(organization),
+            cluster,
+            database,
+            ..AuthSelection::default()
+        },
+    ))
 }
 
 #[cfg(test)]

@@ -29,16 +29,12 @@ struct QueryFormatResponse {
 pub fn format(
     client: &ApiClient,
     database: Option<&str>,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     sql: &str,
     json_mode: bool,
 ) -> Result<()> {
     let path = match database {
-        Some(database) => {
-            org::database_scoped_path(database, "/query-format", organization, cluster)
-        }
-        None => org::scoped_path("/v1/query-format", organization, cluster),
+        Some(database) => org::database_path(database, "/query-format"),
+        None => "/v1/query-format".to_string(),
     };
     // Allow upload/download time in addition to the server's 30-second formatter timeout.
     let response: QueryFormatResponse =

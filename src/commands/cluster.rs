@@ -6,9 +6,9 @@ use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
 use crate::cli::ClusterSizeArg;
-use crate::client::{ApiClient, UnavailableRegion};
+use crate::client::{ApiClient, Scope, UnavailableRegion};
 use crate::cluster_identity::ClusterIdentityArgs;
-use crate::config;
+use crate::config::{self, Config};
 use crate::output;
 use crate::s3_storage::{format_storage, S3StorageArgs, S3StorageMetadata};
 
@@ -100,28 +100,20 @@ struct DeleteClusterResponse {
     deleted: bool,
 }
 
-fn renamed_default_cluster(
-    current_default_cluster: Option<&str>,
-    old_name: &str,
-    cluster_id: &str,
-    new_name: &str,
-) -> Option<String> {
-    match current_default_cluster {
-        Some(current) if current == old_name || current == cluster_id => Some(new_name.to_string()),
-        Some(current) => Some(current.to_string()),
-        None => None,
+fn is_default_cluster(cfg: &Config, name: &str, cluster_id: &str) -> bool {
+    cfg.default_cluster_id.as_deref() == Some(cluster_id)
+        || matches!(cfg.default_cluster.as_deref(), Some(current) if current == name || current == cluster_id)
+}
+
+fn rename_default_cluster(cfg: &mut Config, old_name: &str, cluster_id: &str, new_name: &str) {
+    if is_default_cluster(cfg, old_name, cluster_id) {
+        cfg.set_default_cluster(Some(new_name.to_string()), Some(cluster_id.to_string()));
     }
 }
 
-fn default_cluster_after_delete(
-    current_default_cluster: Option<&str>,
-    deleted_name: &str,
-    cluster_id: &str,
-) -> Option<String> {
-    match current_default_cluster {
-        Some(current) if current == deleted_name || current == cluster_id => None,
-        Some(current) => Some(current.to_string()),
-        None => None,
+fn clear_default_cluster_if_deleted(cfg: &mut Config, name: &str, cluster_id: &str) {
+    if is_default_cluster(cfg, name, cluster_id) {
+        cfg.set_default_cluster(None, None);
     }
 }
 
@@ -131,7 +123,7 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let s3_storage = options.s3_storage.to_json()?;
-    let placement_client = client.for_region(options.organization, options.region_id)?;
+    let placement_client = client.for_region(options.region_id)?;
     let (_, sizes) = load_cluster_sizes(&placement_client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
@@ -154,7 +146,7 @@ pub fn create(
     );
 
     body["region_id"] = json!(options.region_id);
-    let value: Value = client.post(&clusters_collection_path(options.organization), &body)?;
+    let value: Value = client.post("/v1/clusters", &body)?;
     let created: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
 
@@ -190,7 +182,6 @@ pub fn create(
 
 pub struct ClusterCreateOptions<'a> {
     pub region_id: &'a str,
-    pub organization: Option<&'a str>,
     pub name: &'a str,
     pub replicas: u32,
     pub min_size: ClusterSizeArg,
@@ -203,7 +194,6 @@ pub struct ClusterCreateOptions<'a> {
 pub fn update(
     client: &ApiClient,
     name_or_id: &str,
-    organization: Option<&str>,
     name: Option<&str>,
     idle_timeout_minutes: Option<u64>,
     json_mode: bool,
@@ -214,7 +204,7 @@ pub fn update(
         );
     }
 
-    let (_, response) = load_dedicated_clusters(client, organization)?;
+    let (_, response) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&response, name_or_id)?;
     let mut body = serde_json::Map::new();
     if let Some(name) = name {
@@ -227,21 +217,13 @@ pub fn update(
         );
     }
 
-    let value: Value = client.patch(
-        &cluster_path(&cluster.id, None, organization),
-        &Value::Object(body),
-    )?;
+    let value: Value = client.patch(&cluster_path(&cluster.id, None), &Value::Object(body))?;
     let updated: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
     if name.is_some() {
         let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
-        cfg.default_cluster = renamed_default_cluster(
-            cfg.default_cluster.as_deref(),
-            &cluster.name,
-            &cluster.id,
-            &updated.name,
-        );
+        rename_default_cluster(&mut cfg, &cluster.name, &cluster.id, &updated.name);
         config::save(&cfg)?;
     }
 
@@ -256,7 +238,7 @@ pub fn update(
 }
 
 pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
-    let (value, resp) = load_dedicated_clusters(client, organization)?;
+    let (value, resp) = load_dedicated_clusters(client)?;
     output::print_result(&value, json_mode, |_| {
         if !resp.unavailable_regions.is_empty() {
             let names = resp
@@ -319,7 +301,8 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
     Ok(())
 }
 
-pub fn regions(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
+pub fn regions(client: &ApiClient, json_mode: bool) -> Result<()> {
+    let organization = client.scope().organization.as_ref();
     let response =
         client.list_regions(organization.context("Choose an organization with --org.")?)?;
     output::print_result(&response, json_mode, |response| {
@@ -370,10 +353,20 @@ pub fn sizes(client: &ApiClient, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn use_cluster(name: &str, json_mode: bool) -> Result<()> {
+pub fn use_cluster(
+    client: &ApiClient,
+    name: &str,
+    organization: Option<&str>,
+    json_mode: bool,
+) -> Result<()> {
+    let cluster_id = client
+        .with_scope(Scope::new(organization, Some(name)))
+        .resolve_scope_ids()
+        .ok()
+        .and_then(|(_, cluster_id)| cluster_id);
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
-    cfg.default_cluster = Some(name.to_string());
+    cfg.set_default_cluster(Some(name.to_string()), cluster_id);
     config::save(&cfg)?;
 
     output::print_result(&json!({"default_cluster": name}), json_mode, |_| {
@@ -382,13 +375,8 @@ pub fn use_cluster(name: &str, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn status(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let (_, resp) = load_dedicated_clusters(client, organization)?;
+pub fn status(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&resp, name_or_id)?;
 
     output::print_result(cluster, json_mode, |cluster| {
@@ -427,55 +415,24 @@ pub fn status(
     Ok(())
 }
 
-pub fn stop(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    request_lifecycle(
-        client,
-        name_or_id,
-        organization,
-        LifecycleAction::Stop,
-        json_mode,
-    )
+pub fn stop(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    request_lifecycle(client, name_or_id, LifecycleAction::Stop, json_mode)
 }
 
-pub fn resume(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    request_lifecycle(
-        client,
-        name_or_id,
-        organization,
-        LifecycleAction::Resume,
-        json_mode,
-    )
+pub fn resume(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    request_lifecycle(client, name_or_id, LifecycleAction::Resume, json_mode)
 }
 
-pub fn delete(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let (_, resp) = load_dedicated_clusters(client, organization)?;
+pub fn delete(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&resp, name_or_id)?.clone();
-    let path = cluster_path(&cluster.id, None, organization);
+    let path = cluster_path(&cluster.id, None);
     let result: DeleteClusterResponse = client.delete(&path)?;
     let value = delete_output(&cluster, result.deleted);
     if result.deleted {
         let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
-        cfg.default_cluster = default_cluster_after_delete(
-            cfg.default_cluster.as_deref(),
-            &cluster.name,
-            &cluster.id,
-        );
+        clear_default_cluster_if_deleted(&mut cfg, &cluster.name, &cluster.id);
         config::save(&cfg)?;
     }
 
@@ -510,12 +467,8 @@ fn empty_list_message(resp: &ListClustersResponse, organization: Option<&str>) -
     }
 }
 
-fn load_dedicated_clusters(
-    client: &ApiClient,
-    organization: Option<&str>,
-) -> Result<(Value, ListClustersResponse)> {
-    let path = clusters_collection_path(organization);
-    let value: Value = client.get(&path)?;
+fn load_dedicated_clusters(client: &ApiClient) -> Result<(Value, ListClustersResponse)> {
+    let value: Value = client.get("/v1/clusters")?;
     let resp =
         serde_json::from_value(value.clone()).context("invalid clusters response from server")?;
     Ok((value, resp))
@@ -623,13 +576,12 @@ fn resolve_cluster<'a>(
 fn request_lifecycle(
     client: &ApiClient,
     name_or_id: &str,
-    organization: Option<&str>,
     action: LifecycleAction,
     json_mode: bool,
 ) -> Result<()> {
-    let (_, resp) = load_dedicated_clusters(client, organization)?;
+    let (_, resp) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&resp, name_or_id)?;
-    let path = cluster_path(&cluster.id, Some(action.path_segment()), organization);
+    let path = cluster_path(&cluster.id, Some(action.path_segment()));
     let value: Value = client.post_empty(&path)?;
     let updated: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
@@ -649,22 +601,11 @@ fn request_lifecycle(
     Ok(())
 }
 
-fn clusters_collection_path(organization: Option<&str>) -> String {
-    match organization {
-        Some(name) => format!("/v1/clusters?organization={}", urlencoding::encode(name)),
-        None => "/v1/clusters".to_string(),
-    }
-}
-
-fn cluster_path(cluster_id: &str, action: Option<&str>, organization: Option<&str>) -> String {
+fn cluster_path(cluster_id: &str, action: Option<&str>) -> String {
     let mut path = format!("/v1/clusters/{}", urlencoding::encode(cluster_id));
     if let Some(action) = action {
         path.push('/');
         path.push_str(action);
-    }
-    if let Some(name) = organization {
-        path.push_str("?organization=");
-        path.push_str(&urlencoding::encode(name));
     }
     path
 }
@@ -723,37 +664,21 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        cluster_path, cluster_size_json, clusters_collection_path, create_request_body,
-        default_cluster_after_delete, delete_output, empty_list_message, format_created_at,
-        format_idle_timeout, format_phase, format_size_per_replica, renamed_default_cluster,
-        resolve_cluster, resolve_cluster_size, ClusterItem, ClusterResources, ClusterSizeItem,
-        ClusterStatus, ListClustersResponse,
+        clear_default_cluster_if_deleted, cluster_path, cluster_size_json, create_request_body,
+        delete_output, empty_list_message, format_created_at, format_idle_timeout, format_phase,
+        format_size_per_replica, rename_default_cluster, resolve_cluster, resolve_cluster_size,
+        ClusterItem, ClusterResources, ClusterSizeItem, ClusterStatus, ListClustersResponse,
     };
     use crate::cli::ClusterSizeArg;
+    use crate::config::Config;
 
     #[test]
-    fn collection_path_encodes_organization() {
+    fn lifecycle_paths_encode_cluster() {
         assert_eq!(
-            clusters_collection_path(Some("team alpha")),
-            "/v1/clusters?organization=team%20alpha"
+            cluster_path("cluster/id", Some("stop")),
+            "/v1/clusters/cluster%2Fid/stop"
         );
-        assert_eq!(clusters_collection_path(None), "/v1/clusters");
-    }
-
-    #[test]
-    fn lifecycle_paths_encode_cluster_and_organization() {
-        assert_eq!(
-            cluster_path("cluster/id", Some("stop"), Some("team alpha")),
-            "/v1/clusters/cluster%2Fid/stop?organization=team%20alpha"
-        );
-        assert_eq!(
-            cluster_path("cluster-id", Some("resume"), None),
-            "/v1/clusters/cluster-id/resume"
-        );
-        assert_eq!(
-            cluster_path("cluster-id", None, Some("team alpha")),
-            "/v1/clusters/cluster-id?organization=team%20alpha"
-        );
+        assert_eq!(cluster_path("cluster-id", None), "/v1/clusters/cluster-id");
     }
 
     #[test]
@@ -987,39 +912,48 @@ mod tests {
         );
     }
 
-    #[test]
-    fn renamed_cluster_updates_matching_default_name_or_id() {
-        assert_eq!(
-            renamed_default_cluster(Some("production"), "production", "cluster-id", "analytics")
-                .as_deref(),
-            Some("analytics")
-        );
-        assert_eq!(
-            renamed_default_cluster(Some("cluster-id"), "production", "cluster-id", "analytics")
-                .as_deref(),
-            Some("analytics")
-        );
-        assert_eq!(
-            renamed_default_cluster(Some("other"), "production", "cluster-id", "analytics")
-                .as_deref(),
-            Some("other")
-        );
+    fn config_with_default_cluster(name: &str, id: Option<&str>) -> Config {
+        Config {
+            default_cluster: Some(name.to_string()),
+            default_cluster_id: id.map(str::to_string),
+            ..Config::default()
+        }
     }
 
     #[test]
-    fn deleted_cluster_clears_matching_default_name_or_id() {
-        assert_eq!(
-            default_cluster_after_delete(Some("production"), "production", "cluster-id"),
-            None
-        );
-        assert_eq!(
-            default_cluster_after_delete(Some("cluster-id"), "production", "cluster-id"),
-            None
-        );
-        assert_eq!(
-            default_cluster_after_delete(Some("other"), "production", "cluster-id").as_deref(),
-            Some("other")
-        );
+    fn renamed_cluster_updates_matching_default_name_or_id_and_keeps_the_id() {
+        for (current, id) in [
+            ("production", None),
+            ("cluster-id", None),
+            ("stale-name", Some("cluster-id")),
+        ] {
+            let mut cfg = config_with_default_cluster(current, id);
+            rename_default_cluster(&mut cfg, "production", "cluster-id", "analytics");
+            assert_eq!(cfg.default_cluster.as_deref(), Some("analytics"));
+            assert_eq!(cfg.default_cluster_id.as_deref(), Some("cluster-id"));
+        }
+        let mut cfg = config_with_default_cluster("other", Some("other-id"));
+        rename_default_cluster(&mut cfg, "production", "cluster-id", "analytics");
+        assert_eq!(cfg.default_cluster.as_deref(), Some("other"));
+        assert_eq!(cfg.default_cluster_id.as_deref(), Some("other-id"));
+    }
+
+    #[test]
+    fn deleted_cluster_clears_matching_default_name_id_and_saved_id() {
+        for (current, id) in [
+            ("production", None),
+            ("cluster-id", None),
+            ("stale-name", Some("cluster-id")),
+        ] {
+            let mut cfg = config_with_default_cluster(current, id);
+            clear_default_cluster_if_deleted(&mut cfg, "production", "cluster-id");
+            assert_eq!(cfg.default_cluster, None);
+            assert_eq!(cfg.default_cluster_id, None);
+        }
+        let mut cfg = config_with_default_cluster("other", Some("other-id"));
+        clear_default_cluster_if_deleted(&mut cfg, "production", "cluster-id");
+        assert_eq!(cfg.default_cluster.as_deref(), Some("other"));
+        assert_eq!(cfg.default_cluster_id.as_deref(), Some("other-id"));
     }
 
     #[test]

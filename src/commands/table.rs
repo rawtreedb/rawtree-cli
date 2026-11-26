@@ -55,14 +55,8 @@ struct TableMutationResponse {
     storage: Option<serde_json::Value>,
 }
 
-pub fn list(
-    client: &ApiClient,
-    database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let list_path = org::database_scoped_path(database, "/tables", organization, cluster);
+pub fn list(client: &ApiClient, database: &str, json_mode: bool) -> Result<()> {
+    let list_path = org::database_path(database, "/tables");
     let resp: TablesResponse = client.get(&list_path)?;
     output::print_result(
         &json!({
@@ -93,16 +87,8 @@ pub fn list(
     Ok(())
 }
 
-pub fn describe(
-    client: &ApiClient,
-    database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    table: &str,
-    json_mode: bool,
-) -> Result<()> {
-    let describe_path =
-        org::database_scoped_path(database, &format!("/tables/{table}"), organization, cluster);
+pub fn describe(client: &ApiClient, database: &str, table: &str, json_mode: bool) -> Result<()> {
+    let describe_path = org::database_path(database, &format!("/tables/{table}"));
     let resp: DescribeTableResponse = client.get(&describe_path)?;
     let details = &resp.table;
     output::print_result(
@@ -148,13 +134,11 @@ pub fn describe(
 pub fn create(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     sorting_key: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let path = org::database_scoped_path(database, "/tables", organization, cluster);
+    let path = org::database_path(database, "/tables");
     let body = match sorting_key {
         Some(key) => json!({ "name": table, "sorting_key": key }),
         None => json!({ "name": table }),
@@ -177,14 +161,11 @@ pub fn create(
 pub fn update(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     sorting_key: &str,
     json_mode: bool,
 ) -> Result<()> {
-    let path =
-        org::database_scoped_path(database, &format!("/tables/{table}"), organization, cluster);
+    let path = org::database_path(database, &format!("/tables/{table}"));
     let response: TableMutationResponse =
         client.patch(&path, &json!({ "sorting_key": sorting_key }))?;
     output::print_result(&response, json_mode, |_| {
@@ -217,7 +198,7 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{create, update, DescribeTableResponse, TablesResponse};
-    use crate::client::ApiClient;
+    use crate::client::{ApiClient, Scope};
     use serde_json::json;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
@@ -280,19 +261,21 @@ mod tests {
 
     #[test]
     fn table_mutations_send_sorting_key_as_one_string() {
+        const ORG: &str = "00000000-0000-4000-8000-000000000001";
+        const CLUSTER: &str = "00000000-0000-4000-8000-0000000000c1";
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let address = listener.local_addr().expect("test server address");
         let server = std::thread::spawn(move || {
             for (method, path, expected_body, response) in [
                 (
                     "POST",
-                    "/v1/tables?database=analytics&organization=acme&cluster=production",
+                    "/v1/tables?database=analytics",
                     json!({"name":"events","sorting_key":"region, ifNull(cityHash64(host, instanceId), 0)"}),
                     r#"{"database":"analytics","table":"events","sorting_key":"region, ifNull(cityHash64(host, instanceId), 0)","storage":{"type":"default"}}"#,
                 ),
                 (
                     "PATCH",
-                    "/v1/tables/events?database=analytics&organization=acme&cluster=production",
+                    "/v1/tables/events?database=analytics",
                     json!({"sorting_key":"region, toStartOfHour(timestamp)"}),
                     r#"{"database":"analytics","table":"events","sorting_key":"region, toStartOfHour(timestamp)"}"#,
                 ),
@@ -306,17 +289,32 @@ mod tests {
                     "{start}"
                 );
                 let mut content_length = 0;
+                let mut scope_headers = Vec::new();
                 loop {
                     let mut line = String::new();
                     reader.read_line(&mut line).expect("header");
                     if line == "\r\n" {
                         break;
                     }
+                    let lowered = line.to_ascii_lowercase();
+                    if lowered.starts_with("x-rawtree-organization-id:")
+                        || lowered.starts_with("x-rawtree-cluster-id:")
+                    {
+                        scope_headers.push(lowered.trim().to_owned());
+                    }
                     if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length: ")
                     {
                         content_length = value.trim().parse().expect("content length");
                     }
                 }
+                scope_headers.sort();
+                assert_eq!(
+                    scope_headers,
+                    [
+                        format!("x-rawtree-cluster-id: {CLUSTER}"),
+                        format!("x-rawtree-organization-id: {ORG}"),
+                    ]
+                );
                 let mut body = vec![0; content_length];
                 reader.read_exact(&mut body).expect("request body");
                 assert_eq!(
@@ -327,12 +325,11 @@ mod tests {
             }
         });
 
-        let client = ApiClient::new(format!("http://{address}"), None);
+        let client = ApiClient::new(format!("http://{address}"), None)
+            .with_scope(Scope::new(Some(ORG), Some(CLUSTER)));
         create(
             &client,
             "analytics",
-            Some("acme"),
-            Some("production"),
             "events",
             Some("region, ifNull(cityHash64(host, instanceId), 0)"),
             true,
@@ -341,8 +338,6 @@ mod tests {
         update(
             &client,
             "analytics",
-            Some("acme"),
-            Some("production"),
             "events",
             "region, toStartOfHour(timestamp)",
             true,

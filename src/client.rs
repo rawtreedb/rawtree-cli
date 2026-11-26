@@ -14,12 +14,15 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 const RAWTREE_CLIENT_HEADER: &str = "x-rawtree-client";
 const RAWTREE_CLIENT_VALUE: &str = "cli";
 const RAWTREE_CLIENT_VERSION_HEADER: &str = "x-rawtree-client-version";
 const RAWTREE_CLIENT_VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
+const ORGANIZATION_ID_HEADER: &str = "x-rawtree-organization-id";
+const CLUSTER_ID_HEADER: &str = "x-rawtree-cluster-id";
 const RAWTREE_USER_AGENT: &str = concat!("rawtree-cli/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone)]
@@ -34,12 +37,52 @@ struct SavedCredential {
     oauth_client_id: Option<String>,
 }
 
+/// How a request names an organization or cluster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selector {
+    Id(String),
+    Name(String),
+}
+
+impl Selector {
+    /// UUIDs select by ID; anything else is a name.
+    pub fn parse(value: &str) -> Self {
+        if routing::is_uuid(value) {
+            Self::Id(value.to_owned())
+        } else {
+            Self::Name(value.to_owned())
+        }
+    }
+}
+
+/// The organization and cluster a request acts on. The client resolves them
+/// to the ID headers the API expects.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Scope {
+    pub organization: Option<Selector>,
+    pub cluster: Option<Selector>,
+}
+
+impl Scope {
+    pub fn new(organization: Option<&str>, cluster: Option<&str>) -> Self {
+        Self {
+            organization: organization.map(Selector::parse),
+            cluster: cluster.map(Selector::parse),
+        }
+    }
+
+    pub fn organization(organization: Option<&str>) -> Self {
+        Self::new(organization, None)
+    }
+}
+
 pub struct ApiClient {
     pub base_url: String,
     credentials: CredentialSource,
     client: Client,
-    routing: routing::RoutingCache,
+    routing: Arc<routing::RoutingCache>,
     deployment: Option<(String, String)>,
+    scope: Scope,
 }
 
 impl ApiClient {
@@ -48,8 +91,31 @@ impl ApiClient {
             base_url: base_url.trim_end_matches('/').to_owned(),
             credentials: CredentialSource::Explicit(token),
             client: Client::new(),
-            routing: routing::RoutingCache::default(),
+            routing: Arc::default(),
             deployment: None,
+            scope: Scope::default(),
+        }
+    }
+
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    pub fn has_api_key(&self) -> Result<bool> {
+        Ok(self.token()?.is_some_and(|token| token.starts_with("rt_")))
+    }
+
+    /// A view of this client whose requests act on `scope`; it shares the routing cache.
+    pub fn with_scope(&self, scope: Scope) -> Self {
+        // Settle the saved identity first, so every view of this client shares it.
+        let _ = self.token();
+        Self {
+            base_url: self.base_url.clone(),
+            credentials: self.credentials.clone(),
+            client: self.client.clone(),
+            routing: self.routing.clone(),
+            deployment: self.deployment.clone(),
+            scope,
         }
     }
 
@@ -89,8 +155,9 @@ impl ApiClient {
             base_url: self.base_url.clone(),
             credentials: self.credentials.clone(),
             client: self.client.clone(),
-            routing: routing::RoutingCache::default(),
+            routing: Arc::default(),
             deployment: self.deployment.clone(),
+            scope: self.scope.clone(),
         })
     }
 
@@ -204,17 +271,13 @@ impl ApiClient {
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let url = reqwest::Url::parse(&format!("{}{}", self.base_url, path))?;
-        let organization = url.query_pairs().find(|(key, _)| key == "organization");
-        let value: Value = if url.path() == "/v1/clusters"
-            && self.has_user_credential()?
-            && self.deployment.is_none()
-        {
-            self.discover_clusters(organization.as_ref().map(|(_, name)| name.as_ref()), None)?
-        } else {
-            let req = self.routed_request(reqwest::Method::GET, path)?;
-            handle_response(req.send().context("failed to connect to server")?)?
-        };
+        let value: Value =
+            if path == "/v1/clusters" && self.has_user_credential()? && self.deployment.is_none() {
+                self.discover_clusters(self.scope.organization.as_ref(), None)?
+            } else {
+                let req = self.routed_request(reqwest::Method::GET, path)?;
+                handle_response(req.send().context("failed to connect to server")?)?
+            };
         self.remember_routing_metadata(path, &value);
         serde_json::from_value(value).context("failed to parse server response")
     }
@@ -284,18 +347,40 @@ fn check_status(resp: Response) -> Result<()> {
     Err(format_server_error(&text, status.as_u16()))
 }
 
-fn format_server_error(body: &str, status: u16) -> anyhow::Error {
-    if let Ok(json) = serde_json::from_str::<Value>(body) {
-        let message = json["message"].as_str().unwrap_or("Unknown error");
-        let hint = json["hint"].as_str().unwrap_or("");
-        if hint.is_empty() {
-            anyhow::anyhow!("Server error ({}): {}", status, message)
-        } else {
-            anyhow::anyhow!("Server error ({}): {}\nHint: {}", status, message, hint)
-        }
-    } else {
-        anyhow::anyhow!("Server error ({}): {}", status, body)
+/// A non-success response from the API.
+#[derive(Debug)]
+pub struct ServerError {
+    pub status: u16,
+    message: String,
+}
+
+impl ServerError {
+    /// The server error behind `error`, if one caused it.
+    pub fn of(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| cause.downcast_ref())
     }
+}
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Server error ({}): {}", self.status, self.message)
+    }
+}
+
+impl std::error::Error for ServerError {}
+
+fn format_server_error(body: &str, status: u16) -> anyhow::Error {
+    let message = match serde_json::from_str::<Value>(body) {
+        Ok(json) => {
+            let message = json["message"].as_str().unwrap_or("Unknown error");
+            match json["hint"].as_str().unwrap_or("") {
+                "" => message.to_owned(),
+                hint => format!("{message}\nHint: {hint}"),
+            }
+        }
+        Err(_) => body.to_owned(),
+    };
+    ServerError { status, message }.into()
 }
 
 #[cfg(test)]

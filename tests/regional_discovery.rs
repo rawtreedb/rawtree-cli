@@ -65,7 +65,7 @@ fn run(args: &[&str], failure: Failure, all_fail: bool) -> (Output, Vec<String>,
                         {"id":"duplicate","name":"Oregon duplicate","cloud_region":"us-west-2","deployment_id":"22222222","enabled":true},
                         {"id":"failed2","name":"Ireland","cloud_region":"eu-west-1","deployment_id":"33333333","enabled":true}
                     ]}));
-                } else if first.starts_with("GET /v1/clusters?") {
+                } else if first.starts_with("GET /v1/clusters ") {
                     if !all_fail && headers["x-rawtree-deployment-id"] == "11111111" {
                         reply(&mut socket, 200, json!({"clusters":[{
                             "id":"healthy-id", "name":"production", "region_id":"healthy", "created_at":"2026-10-28T00:00:00Z", "shared":false,
@@ -135,7 +135,7 @@ fn table_list_survives_http_and_connection_failures_in_other_regions() {
         assert_eq!(
             requests
                 .iter()
-                .filter(|path| path.starts_with("GET /v1/clusters?"))
+                .filter(|path| path.starts_with("GET /v1/clusters "))
                 .count(),
             3
         );

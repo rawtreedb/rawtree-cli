@@ -11,28 +11,14 @@ use super::logs::parse_duration;
 use super::table_output::new_cli_table;
 use crate::cli::WorkflowTimeRange;
 use crate::client::ApiClient;
-use crate::org;
 use crate::output;
 
-/// Organization and cluster are mandatory on every workflow route, even for
-/// API keys that are already bound to a cluster.
-pub struct WorkflowScope<'a> {
-    pub organization: &'a str,
-    pub cluster: &'a str,
+fn collection_path(suffix: &str) -> String {
+    format!("/v1/workflows{suffix}")
 }
 
-impl WorkflowScope<'_> {
-    fn path(&self, suffix: &str) -> String {
-        org::scoped_path(
-            &format!("/v1/workflows{suffix}"),
-            Some(self.organization),
-            Some(self.cluster),
-        )
-    }
-
-    fn workflow_path(&self, id: &str, suffix: &str) -> String {
-        self.path(&format!("/{}{suffix}", urlencoding::encode(id)))
-    }
+fn workflow_path(id: &str, suffix: &str) -> String {
+    collection_path(&format!("/{}{suffix}", urlencoding::encode(id)))
 }
 
 #[derive(Deserialize)]
@@ -278,10 +264,12 @@ fn window_params(range: &WorkflowTimeRange) -> Result<Vec<String>> {
     Ok(params)
 }
 
-fn with_params(scoped_path: String, params: &[String]) -> String {
-    params
-        .iter()
-        .fold(scoped_path, |path, param| format!("{path}&{param}"))
+fn with_params(path: String, params: &[String]) -> String {
+    if params.is_empty() {
+        path
+    } else {
+        format!("{path}?{}", params.join("&"))
+    }
 }
 
 fn format_ms(ms: i64) -> String {
@@ -359,8 +347,8 @@ fn print_workflow(workflow: &Workflow) {
     }
 }
 
-pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Result<()> {
-    let value: Value = client.get(&scope.path(""))?;
+pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
+    let value: Value = client.get(&collection_path(""))?;
     print_response(value, json_mode, |resp: ListWorkflowsResponse| {
         if resp.workflows.is_empty() {
             println!("No workflows yet. Create one with `rtree workflow create`.");
@@ -405,28 +393,22 @@ pub fn list(client: &ApiClient, scope: &WorkflowScope, json_mode: bool) -> Resul
     })
 }
 
-pub fn get(client: &ApiClient, scope: &WorkflowScope, id: &str, json_mode: bool) -> Result<()> {
-    let value: Value = client.get(&scope.workflow_path(id, ""))?;
+pub fn get(client: &ApiClient, id: &str, json_mode: bool) -> Result<()> {
+    let value: Value = client.get(&workflow_path(id, ""))?;
     print_response(value, json_mode, |workflow: Workflow| {
         println!("Workflow '{}':", workflow.name);
         print_workflow(&workflow);
     })
 }
 
-pub fn create(
-    client: &ApiClient,
-    scope: &WorkflowScope,
-    request: CreateWorkflow,
-    json_mode: bool,
-) -> Result<()> {
+pub fn create(client: &ApiClient, request: CreateWorkflow, json_mode: bool) -> Result<()> {
     let body = create_body(request)?;
-    let value: Value =
-        client
-            .post(&scope.path(""), &body)
-            .map_err(|error| match body["sinks"].as_array() {
-                Some(sinks) if !sinks.is_empty() => sink::with_help_hint(error),
-                _ => error,
-            })?;
+    let value: Value = client.post(&collection_path(""), &body).map_err(|error| {
+        match body["sinks"].as_array() {
+            Some(sinks) if !sinks.is_empty() => sink::with_help_hint(error),
+            _ => error,
+        }
+    })?;
     print_response(value, json_mode, |workflow: Workflow| {
         println!("Workflow '{}' created:", workflow.name);
         print_workflow(&workflow);
@@ -435,27 +417,25 @@ pub fn create(
 
 pub fn update(
     client: &ApiClient,
-    scope: &WorkflowScope,
     id: &str,
     request: UpdateWorkflow,
     json_mode: bool,
 ) -> Result<()> {
     let body = update_body(request)?;
-    let value: Value =
-        client
-            .patch(&scope.workflow_path(id, ""), &body)
-            .map_err(|error| match body["sinks"].as_array() {
-                Some(sinks) if !sinks.is_empty() => sink::with_help_hint(error),
-                _ => error,
-            })?;
+    let value: Value = client
+        .patch(&workflow_path(id, ""), &body)
+        .map_err(|error| match body["sinks"].as_array() {
+            Some(sinks) if !sinks.is_empty() => sink::with_help_hint(error),
+            _ => error,
+        })?;
     print_response(value, json_mode, |workflow: Workflow| {
         println!("Workflow '{}' updated:", workflow.name);
         print_workflow(&workflow);
     })
 }
 
-pub fn delete(client: &ApiClient, scope: &WorkflowScope, id: &str, json_mode: bool) -> Result<()> {
-    client.delete_no_content(&scope.workflow_path(id, ""))?;
+pub fn delete(client: &ApiClient, id: &str, json_mode: bool) -> Result<()> {
+    client.delete_no_content(&workflow_path(id, ""))?;
     output::print_result(&json!({"id": id, "deleted": true}), json_mode, |_| {
         println!("Workflow '{id}' deleted.");
     });
@@ -464,13 +444,12 @@ pub fn delete(client: &ApiClient, scope: &WorkflowScope, id: &str, json_mode: bo
 
 pub fn run(
     client: &ApiClient,
-    scope: &WorkflowScope,
     id: &str,
     idempotency_key: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
     let value: Value =
-        client.post_empty_idempotent(&scope.workflow_path(id, "/runs"), idempotency_key)?;
+        client.post_empty_idempotent(&workflow_path(id, "/runs"), idempotency_key)?;
     print_response(value, json_mode, |run: AcceptedRun| {
         println!("Run {} started for workflow {}.", run.id, run.workflow_id);
         println!(
@@ -482,7 +461,6 @@ pub fn run(
 
 pub fn runs(
     client: &ApiClient,
-    scope: &WorkflowScope,
     id: &str,
     limit: Option<u16>,
     cursor: Option<&str>,
@@ -495,7 +473,7 @@ pub fn runs(
     if let Some(cursor) = cursor {
         params.push(format!("cursor={}", urlencoding::encode(cursor)));
     }
-    let path = with_params(scope.workflow_path(id, "/runs"), &params);
+    let path = with_params(workflow_path(id, "/runs"), &params);
     let value: Value = client.get(&path)?;
     print_response(value, json_mode, |resp: WorkflowRunsResponse| {
         if resp.runs.is_empty() {
@@ -520,14 +498,8 @@ pub fn runs(
     })
 }
 
-pub fn cancel(
-    client: &ApiClient,
-    scope: &WorkflowScope,
-    id: &str,
-    run_id: &str,
-    json_mode: bool,
-) -> Result<()> {
-    let path = scope.workflow_path(id, &format!("/runs/{}/cancel", urlencoding::encode(run_id)));
+pub fn cancel(client: &ApiClient, id: &str, run_id: &str, json_mode: bool) -> Result<()> {
+    let path = workflow_path(id, &format!("/runs/{}/cancel", urlencoding::encode(run_id)));
     client.post_no_content(&path)?;
     output::print_result(
         &json!({"workflow_id": id, "run_id": run_id, "cancel_requested": true}),
@@ -565,7 +537,6 @@ fn log_detail(log: &WorkflowLog) -> String {
 
 pub fn logs(
     client: &ApiClient,
-    scope: &WorkflowScope,
     id: &str,
     range: &WorkflowTimeRange,
     limit: Option<u16>,
@@ -579,7 +550,7 @@ pub fn logs(
     if let Some(cursor) = cursor {
         params.push(format!("cursor={}", urlencoding::encode(cursor)));
     }
-    let path = with_params(scope.workflow_path(id, "/logs"), &params);
+    let path = with_params(workflow_path(id, "/logs"), &params);
     let value: Value = client.get(&path)?;
     print_response(value, json_mode, |resp: WorkflowLogsResponse| {
         if resp.logs.is_empty() {
@@ -616,23 +587,10 @@ pub fn logs(
 mod tests {
     use super::*;
 
-    fn scope() -> WorkflowScope<'static> {
-        WorkflowScope {
-            organization: "team alpha",
-            cluster: "prod/eu",
-        }
-    }
-
     #[test]
-    fn paths_carry_required_scope_and_encode_ids() {
-        assert_eq!(
-            scope().path(""),
-            "/v1/workflows?organization=team%20alpha&cluster=prod%2Feu"
-        );
-        assert_eq!(
-            scope().workflow_path("a/b", "/runs"),
-            "/v1/workflows/a%2Fb/runs?organization=team%20alpha&cluster=prod%2Feu"
-        );
+    fn paths_encode_ids() {
+        assert_eq!(collection_path(""), "/v1/workflows");
+        assert_eq!(workflow_path("a/b", "/runs"), "/v1/workflows/a%2Fb/runs");
     }
 
     #[test]

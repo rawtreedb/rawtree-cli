@@ -12,7 +12,7 @@ use reqwest::blocking::Client as HttpClient;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::client::ApiClient;
+use crate::client::{ApiClient, Scope};
 use crate::config;
 use crate::constants::DEFAULT_API_URL;
 use crate::org;
@@ -56,8 +56,31 @@ enum CliDeviceTokenPoll {
 #[derive(Clone, Debug, Default)]
 struct AuthSelection {
     organization: Option<String>,
+    organization_id: Option<String>,
     cluster: Option<String>,
+    cluster_id: Option<String>,
     database: Option<String>,
+}
+
+/// Saves the IDs of the selected organization and cluster next to their names.
+/// Best effort: a lookup that fails only leaves the ID unsaved, and requests
+/// keep resolving that name.
+fn attach_ids(client: &ApiClient, mut selection: AuthSelection) -> AuthSelection {
+    if let Some(organization) = selection.organization.as_deref() {
+        selection.organization_id = client
+            .with_scope(Scope::organization(Some(organization)))
+            .resolve_scope_ids()
+            .ok()
+            .and_then(|(organization_id, _)| organization_id);
+    }
+    if let Some(cluster) = selection.cluster.as_deref() {
+        selection.cluster_id = client
+            .with_scope(Scope::new(selection.organization.as_deref(), Some(cluster)))
+            .resolve_scope_ids()
+            .ok()
+            .and_then(|(_, cluster_id)| cluster_id);
+    }
+    selection
 }
 
 #[derive(Deserialize)]
@@ -102,8 +125,11 @@ fn apply_auth_config(
     cfg.oauth = None;
     cfg.token = Some(token.to_string());
     cfg.email = email.map(str::to_string);
-    cfg.default_organization = selection.organization.clone();
-    cfg.default_cluster = selection.cluster.clone();
+    cfg.set_default_organization(
+        selection.organization.clone(),
+        selection.organization_id.clone(),
+    );
+    cfg.set_default_cluster(selection.cluster.clone(), selection.cluster_id.clone());
     cfg.default_database = selection.database.clone();
     cfg.url = (base_url != DEFAULT_API_URL).then(|| base_url.to_string());
 }
@@ -149,6 +175,7 @@ fn auth_selection_from_database_context(
         organization: organization.or_else(|| cli_org.map(str::to_string)),
         cluster: cluster.map(str::to_string),
         database: database.or_else(|| cli_database.map(str::to_string)),
+        ..AuthSelection::default()
     })
 }
 
@@ -159,10 +186,11 @@ fn resolve_api_key_auth_selection(
     cli_cluster: Option<&str>,
     cli_database: Option<&str>,
 ) -> Result<AuthSelection> {
-    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()));
-    let (keys_path, tables_path) = api_key_context_paths(cli_org, cli_cluster, cli_database);
+    let authed_client = ApiClient::new(base_url.to_string(), Some(token.to_string()))
+        .with_scope(Scope::new(cli_org, cli_cluster));
+    let (keys_path, tables_path) = api_key_context_paths(cli_database);
 
-    match authed_client.get::<ApiKeyValidationResponse>(&keys_path) {
+    let selection = match authed_client.get::<ApiKeyValidationResponse>(&keys_path) {
         Ok(response) => auth_selection_from_database_context(
             response.context,
             cli_org,
@@ -182,20 +210,17 @@ fn resolve_api_key_auth_selection(
                 tables_err
             )),
         },
-    }
+    };
+    selection.map(|selection| attach_ids(&authed_client, selection))
 }
 
-fn api_key_context_paths(
-    cli_org: Option<&str>,
-    cli_cluster: Option<&str>,
-    cli_database: Option<&str>,
-) -> (String, String) {
+fn api_key_context_paths(cli_database: Option<&str>) -> (String, String) {
     let keys_path = cli_database
-        .map(|database| org::database_scoped_path(database, "/api-keys", cli_org, cli_cluster))
-        .unwrap_or_else(|| org::scoped_path("/v1/api-keys", cli_org, cli_cluster));
+        .map(|database| org::database_path(database, "/api-keys"))
+        .unwrap_or_else(|| "/v1/api-keys".to_string());
     let tables_path = cli_database
-        .map(|database| org::database_scoped_path(database, "/tables", cli_org, cli_cluster))
-        .unwrap_or_else(|| org::scoped_path("/v1/tables", cli_org, cli_cluster));
+        .map(|database| org::database_path(database, "/tables"))
+        .unwrap_or_else(|| "/v1/tables".to_string());
     (keys_path, tables_path)
 }
 
@@ -584,7 +609,9 @@ mod tests {
         let resp = sample_auth_response();
         let selection = AuthSelection {
             organization: Some("team_alpha".to_string()),
+            organization_id: Some("org-id".to_string()),
             cluster: Some("production".to_string()),
+            cluster_id: Some("cluster-id".to_string()),
             database: Some("analytics".to_string()),
         };
         apply_auth_config(
@@ -595,6 +622,8 @@ mod tests {
             &selection,
         );
 
+        assert_eq!(cfg.default_organization_id.as_deref(), Some("org-id"));
+        assert_eq!(cfg.default_cluster_id.as_deref(), Some("cluster-id"));
         assert_eq!(cfg.token.as_deref(), Some("jwt"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("team_alpha"));
@@ -652,6 +681,8 @@ mod tests {
             default_database: Some("old_database".to_string()),
             default_organization: Some("old_team".to_string()),
             default_cluster: Some("old_cluster".to_string()),
+            default_organization_id: Some("old-org-id".to_string()),
+            default_cluster_id: Some("old-cluster-id".to_string()),
             ..Config::default()
         };
         let resp = sample_auth_response();
@@ -666,6 +697,8 @@ mod tests {
 
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_cluster, None);
+        assert_eq!(cfg.default_organization_id, None);
+        assert_eq!(cfg.default_cluster_id, None);
         assert_eq!(cfg.default_database, None);
     }
 
@@ -711,26 +744,12 @@ mod tests {
     }
 
     #[test]
-    fn api_key_context_paths_do_not_invent_organization() {
-        let (keys_path, tables_path) = api_key_context_paths(None, None, Some("analytics"));
+    fn api_key_context_paths_carry_only_the_database() {
+        let (keys_path, tables_path) = api_key_context_paths(Some("analytics"));
 
         assert_eq!(keys_path, "/v1/api-keys?database=analytics");
         assert_eq!(tables_path, "/v1/tables?database=analytics");
-    }
-
-    #[test]
-    fn api_key_context_paths_include_explicit_organization() {
-        let (keys_path, tables_path) =
-            api_key_context_paths(Some("team alpha"), Some("prod/eu"), Some("analytics"));
-
-        assert_eq!(
-            keys_path,
-            "/v1/api-keys?database=analytics&organization=team%20alpha&cluster=prod%2Feu"
-        );
-        assert_eq!(
-            tables_path,
-            "/v1/tables?database=analytics&organization=team%20alpha&cluster=prod%2Feu"
-        );
+        assert_eq!(api_key_context_paths(None).0, "/v1/api-keys");
     }
 
     #[test]
@@ -743,6 +762,8 @@ mod tests {
             default_database: Some("analytics".to_string()),
             default_organization: Some("team_alpha".to_string()),
             default_cluster: Some("production".to_string()),
+            default_organization_id: Some("org-id".to_string()),
+            default_cluster_id: Some("cluster-id".to_string()),
         };
 
         clear_auth_config(&mut cfg);
@@ -753,6 +774,8 @@ mod tests {
         assert_eq!(cfg.default_database, None);
         assert_eq!(cfg.default_organization, None);
         assert_eq!(cfg.default_cluster, None);
+        assert_eq!(cfg.default_organization_id, None);
+        assert_eq!(cfg.default_cluster_id, None);
     }
 
     #[test]

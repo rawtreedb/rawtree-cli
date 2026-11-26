@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::open;
 use super::table_output::new_cli_table;
-use crate::client::ApiClient;
+use crate::client::{ApiClient, Selector};
 use crate::output;
 
 #[derive(Deserialize)]
@@ -24,7 +24,7 @@ struct Integration {
     created_at: String,
 }
 
-fn integrations_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
+fn integrations_path(client: &ApiClient, organization: Option<&Selector>) -> Result<String> {
     Ok(format!(
         "{}/integrations",
         crate::org::organization_path(client, organization)?
@@ -64,7 +64,7 @@ fn describe_settings(integration: &Integration) -> String {
     }
 }
 
-pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
+pub fn list(client: &ApiClient, organization: Option<&Selector>, json_mode: bool) -> Result<()> {
     let value: Value = client.get(&integrations_path(client, organization)?)?;
     print_response(value, json_mode, |resp: IntegrationsResponse| {
         if resp.integrations.is_empty() {

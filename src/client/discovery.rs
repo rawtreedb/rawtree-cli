@@ -1,8 +1,8 @@
 use super::{
     handle_response,
     regions::Region,
-    routing::{before_deadline, valid_routing},
-    ApiClient,
+    routing::{before_deadline, valid_routing, with_scope_headers},
+    ApiClient, Selector,
 };
 use anyhow::{Context, Result};
 use reqwest::{blocking::RequestBuilder, Method, StatusCode};
@@ -30,7 +30,7 @@ struct DeploymentTarget {
 }
 
 struct OrganizationCatalog {
-    name: String,
+    id: String,
     regions: HashMap<String, Region>,
     deployments: Vec<DeploymentTarget>,
 }
@@ -103,17 +103,6 @@ enum CatalogAuthority {
     OwningDeployment,
 }
 
-#[derive(Deserialize)]
-struct Organization {
-    organization_id: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct Organizations {
-    organizations: Vec<Organization>,
-}
-
 impl ApiClient {
     pub(super) fn has_user_credential(&self) -> Result<bool> {
         Ok(self
@@ -125,25 +114,13 @@ impl ApiClient {
     /// Discover enabled deployments concurrently, retaining explicit partial-catalog metadata.
     pub(super) fn discover_clusters(
         &self,
-        organization: Option<&str>,
+        organization: Option<&Selector>,
         deadline: Option<Instant>,
     ) -> Result<Value> {
-        let organizations: Organizations = handle_response(
-            before_deadline(
-                self.unrouted_request(Method::GET, "/v1/organizations")?,
-                deadline,
-            )?
-            .send()?,
-        )?;
-        let selected: Vec<_> = organizations
-            .organizations
-            .into_iter()
-            .filter(|item| organization.is_none_or(|name| item.name == name))
-            .collect();
-        anyhow::ensure!(
-            organization.is_none() || !selected.is_empty(),
-            "Organization not found."
-        );
+        let selected: Vec<_> = match organization {
+            Some(selector) => vec![self.find_organization(selector, deadline)?],
+            None => self.organizations(deadline)?,
+        };
         let mut catalogs = Vec::new();
         for owner in selected {
             let regions = self.regions_for_organization(&owner.organization_id, deadline)?;
@@ -168,7 +145,7 @@ impl ApiClient {
                 }
             }
             catalogs.push(OrganizationCatalog {
-                name: owner.name,
+                id: owner.organization_id,
                 regions: regions
                     .regions
                     .into_iter()
@@ -197,14 +174,11 @@ impl ApiClient {
         let requests = targets
             .iter()
             .map(|(catalog, target)| {
-                self.deployment_request(
-                    Method::GET,
-                    &format!(
-                        "/v1/clusters?organization={}",
-                        urlencoding::encode(&catalog.name)
-                    ),
-                    target.routing.as_ref(),
-                )
+                Ok(with_scope_headers(
+                    self.deployment_request(Method::GET, "/v1/clusters", target.routing.as_ref())?,
+                    Some(&catalog.id),
+                    None,
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
         let responses = load_catalogs(requests, lookup_deadline)?;

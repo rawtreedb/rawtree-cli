@@ -3,7 +3,10 @@ use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::{client::ApiClient, output};
+use crate::{
+    client::{ApiClient, Scope},
+    output,
+};
 
 #[derive(Clone, Debug, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -73,14 +76,18 @@ pub fn submit(client: &ApiClient, args: FeedbackArgs, json_mode: bool) -> Result
         serde_json::to_vec(&body)?.len() <= 32 * 1024,
         "feedback body exceeds 32 KiB"
     );
-    // Reuse regional routing when user credentials provide both scope UUIDs.
-    let path = match (&args.organization_id, &args.cluster_id) {
-        (Some(org), Some(cluster)) => format!(
-            "/v1/feedback?organization_id={}&cluster_id={}",
-            urlencoding::encode(org),
-            urlencoding::encode(cluster)
-        ),
-        _ => "/v1/feedback".into(),
+    let scoped;
+    let (client, path) = match (&args.organization_id, &args.cluster_id) {
+        (Some(org), Some(cluster)) => {
+            scoped = client.with_scope(Scope::new(Some(org), Some(cluster)));
+            let path = format!(
+                "/v1/feedback?organization_id={}&cluster_id={}",
+                urlencoding::encode(org),
+                urlencoding::encode(cluster)
+            );
+            (&scoped, path)
+        }
+        _ => (client, "/v1/feedback".to_owned()),
     };
     let receipt: Receipt = client
         .post(&path, &body)

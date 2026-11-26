@@ -4,7 +4,6 @@ use serde_json::json;
 
 use crate::client::ApiClient;
 use crate::config;
-use crate::org;
 use crate::output;
 use crate::s3_storage::{format_storage, S3StorageArgs, S3StorageMetadata};
 
@@ -34,26 +33,17 @@ fn apply_database_create_config(
     resp: &CreateDatabaseResponse,
     organization: Option<&str>,
     cluster: Option<&str>,
+    ids: (Option<String>, Option<String>),
 ) {
     cfg.default_database = Some(resp.database.name.clone());
-    cfg.default_organization = organization.map(str::to_string);
+    cfg.set_default_organization(organization.map(str::to_string), ids.0);
     if let Some(cluster) = cluster {
-        cfg.default_cluster = Some(cluster.to_string());
+        cfg.set_default_cluster(Some(cluster.to_string()), ids.1);
     }
 }
 
-fn database_create_collection_path(organization: Option<&str>, cluster: Option<&str>) -> String {
-    org::databases_collection_path(organization, cluster)
-}
-
-pub fn list(
-    client: &ApiClient,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let path = org::databases_collection_path(organization, cluster);
-    let resp: ListDatabasesResponse = client.get(&path)?;
+pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
+    let resp: ListDatabasesResponse = client.get("/v1/databases")?;
     output::print_result(&resp, json_mode, |resp| {
         if resp.databases.is_empty() {
             println!("No databases yet. Create one with `rtree database create <name>`.");
@@ -84,11 +74,12 @@ pub fn create(
     if let Some(storage) = s3_storage {
         body["s3_storage"] = storage;
     }
-    let path = database_create_collection_path(organization, cluster);
-    let resp: CreateDatabaseResponse = client.post(&path, &body)?;
+    let resp: CreateDatabaseResponse = client.post("/v1/databases", &body)?;
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
-    apply_database_create_config(&mut cfg, &resp, organization, cluster);
+    // Best effort: without IDs the names keep resolving on each request.
+    let ids = client.resolve_scope_ids().unwrap_or_default();
+    apply_database_create_config(&mut cfg, &resp, organization, cluster, ids);
     config::save(&cfg)?;
     output::print_result(&resp, json_mode, |resp| {
         println!("Database '{}' created.", resp.database.name);
@@ -116,18 +107,8 @@ struct DeleteDatabaseResponse {
     deleted: bool,
 }
 
-pub fn delete(
-    client: &ApiClient,
-    name: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let path = org::scoped_path(
-        &format!("/v1/databases/{}", urlencoding::encode(name)),
-        organization,
-        cluster,
-    );
+pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
+    let path = format!("/v1/databases/{}", urlencoding::encode(name));
     let resp: DeleteDatabaseResponse = client.delete(&path)?;
     output::print_result(
         &json!({"deleted": resp.deleted, "name": name}),
@@ -143,10 +124,7 @@ pub fn delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_database_create_config, database_create_collection_path, CreateDatabaseResponse,
-        DatabaseRef,
-    };
+    use super::{apply_database_create_config, CreateDatabaseResponse, DatabaseRef};
     use crate::config::Config;
 
     #[test]
@@ -163,21 +141,20 @@ mod tests {
             },
         };
 
-        apply_database_create_config(&mut cfg, &resp, Some("new_team"), Some("production"));
+        apply_database_create_config(
+            &mut cfg,
+            &resp,
+            Some("new_team"),
+            Some("production"),
+            (Some("org-id".into()), Some("cluster-id".into())),
+        );
 
         assert_eq!(cfg.token.as_deref(), Some("jwt.token.value"));
         assert_eq!(cfg.email.as_deref(), Some("user@example.com"));
         assert_eq!(cfg.default_organization.as_deref(), Some("new_team"));
         assert_eq!(cfg.default_cluster.as_deref(), Some("production"));
+        assert_eq!(cfg.default_organization_id.as_deref(), Some("org-id"));
+        assert_eq!(cfg.default_cluster_id.as_deref(), Some("cluster-id"));
         assert_eq!(cfg.default_database.as_deref(), Some("analytics"));
-    }
-
-    #[test]
-    fn database_create_collection_path_uses_databases_endpoint() {
-        assert_eq!(database_create_collection_path(None, None), "/v1/databases");
-        assert_eq!(
-            database_create_collection_path(Some("team alpha"), Some("prod/eu")),
-            "/v1/databases?organization=team%20alpha&cluster=prod%2Feu"
-        );
     }
 }

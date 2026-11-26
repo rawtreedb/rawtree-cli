@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::client::ApiClient;
-use crate::org;
 use crate::output;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -281,8 +280,6 @@ fn format_log_line(entry: &LogEntry) -> String {
 #[allow(clippy::too_many_arguments)]
 fn fetch_logs(
     client: &ApiClient,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     start_time: &str,
     end_time: &str,
     search: Option<&str>,
@@ -314,15 +311,12 @@ fn fetch_logs(
         limit,
         offset,
     );
-    let path = org::scoped_path(&format!("/v1/logs?{query_string}"), organization, cluster);
-    client.get(&path)
+    client.get(&format!("/v1/logs?{query_string}"))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn logs(
     client: &ApiClient,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     search: Option<&str>,
     methods: &[String],
     status_codes: &[u16],
@@ -352,8 +346,6 @@ pub fn logs(
     let (resolved_start, resolved_end) = resolve_time_range(since, until, start_time, end_time)?;
     let resp = fetch_logs(
         client,
-        organization,
-        cluster,
         &resolved_start,
         &resolved_end,
         search,

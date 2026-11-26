@@ -72,8 +72,6 @@ fn append_transform_param(path: &str, transform: Option<&str>) -> String {
 pub fn insert(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     data: Option<&str>,
     file: Option<&str>,
@@ -81,8 +79,7 @@ pub fn insert(
     transform: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let base_path =
-        org::database_scoped_path(database, &format!("/tables/{table}"), organization, cluster);
+    let base_path = org::database_path(database, &format!("/tables/{table}"));
     let api_path = append_transform_param(&base_path, transform);
 
     // Small inline data — send in one request
@@ -94,32 +91,14 @@ pub fn insert(
     }
 
     if let Some(raw_url) = url {
-        return insert_from_url(
-            client,
-            database,
-            organization,
-            cluster,
-            table,
-            raw_url,
-            transform,
-            json_mode,
-        );
+        return insert_from_url(client, database, table, raw_url, transform, json_mode);
     }
 
     let path =
         file.ok_or_else(|| anyhow::anyhow!("provide exactly one of --data, --file, or --url"))?;
 
     if is_jsonl(path) {
-        insert_jsonl_streaming(
-            client,
-            database,
-            organization,
-            cluster,
-            table,
-            path,
-            transform,
-            json_mode,
-        )?;
+        insert_jsonl_streaming(client, database, table, path, transform, json_mode)?;
     } else {
         // Non-JSONL files: parse entire file (assumed to be a JSON array or object)
         let contents =
@@ -136,14 +115,12 @@ pub fn insert(
 fn insert_from_url(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     url: &str,
     transform: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let base_path = build_url_ingest_path(database, organization, cluster, table, url);
+    let base_path = build_url_ingest_path(database, table, url);
     let path = append_transform_param(&base_path, transform);
     let (response, query_id): (UrlInsertResponse, _) = client.post_empty_with_query_id(&path)?;
     if json_mode {
@@ -160,27 +137,14 @@ fn insert_from_url(
     Ok(())
 }
 
-fn build_url_ingest_path(
-    database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    table: &str,
-    url: &str,
-) -> String {
+fn build_url_ingest_path(database: &str, table: &str, url: &str) -> String {
     let encoded_url = urlencoding::encode(url);
-    org::database_scoped_path(
-        database,
-        &format!("/tables/{table}?url={encoded_url}"),
-        organization,
-        cluster,
-    )
+    org::database_path(database, &format!("/tables/{table}?url={encoded_url}"))
 }
 
 fn insert_jsonl_streaming(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     path: &str,
     transform: Option<&str>,
@@ -213,8 +177,7 @@ fn insert_jsonl_streaming(
     let first_error: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
 
     // Spawn sender threads — each reuses a body buffer, compresses, and POSTs
-    let base_url =
-        org::database_scoped_path(database, &format!("/tables/{table}"), organization, cluster);
+    let base_url = org::database_path(database, &format!("/tables/{table}"));
     let url = append_transform_param(&base_url, transform);
     let mut handles = Vec::with_capacity(senders);
     for _ in 0..senders {
@@ -330,17 +293,11 @@ mod tests {
 
     #[test]
     fn url_ingest_path_uses_query_param_route() {
-        let path = build_url_ingest_path(
-            "events_2",
-            None,
-            Some("production"),
-            "events",
-            "https://example.com/a b.ndjson",
-        );
+        let path = build_url_ingest_path("events_2", "events", "https://example.com/a b.ndjson");
 
         assert_eq!(
             path,
-            "/v1/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson&database=events_2&cluster=production"
+            "/v1/tables/events?url=https%3A%2F%2Fexample.com%2Fa%20b.ndjson&database=events_2"
         );
     }
 

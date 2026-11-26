@@ -2,8 +2,8 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::client::ApiClient;
-use crate::config;
+use crate::client::{ApiClient, Selector};
+use crate::config::{self, Config};
 use crate::org;
 use crate::output;
 
@@ -22,27 +22,28 @@ struct DeleteOrganizationResponse {
     deleted: bool,
 }
 
-fn renamed_default_org(
-    current_default_organization: Option<&str>,
-    old_name: &str,
-    new_name: &str,
-) -> Option<String> {
-    match current_default_organization {
-        Some(current) if current == old_name => Some(new_name.to_string()),
-        Some(current) => Some(current.to_string()),
-        None => None,
+fn is_default_org(cfg: &Config, name: &str, id: &str) -> bool {
+    cfg.default_organization_id.as_deref() == Some(id)
+        || matches!(cfg.default_organization.as_deref(), Some(current) if current == name || current == id)
+}
+
+fn rename_default_org(cfg: &mut Config, old_name: &str, id: &str, new_name: &str) {
+    if is_default_org(cfg, old_name, id) {
+        cfg.set_default_organization(Some(new_name.to_string()), Some(id.to_string()));
     }
 }
 
+/// The saved cluster belongs to the previous default organization.
 fn default_org_after_delete(
-    current_default_organization: Option<&str>,
+    cfg: &mut Config,
     deleted_name: &str,
-    next_available_organization: Option<String>,
-) -> Option<String> {
-    match current_default_organization {
-        Some(current) if current == deleted_name => next_available_organization,
-        Some(current) => Some(current.to_string()),
-        None => None,
+    id: &str,
+    next_available_organization: Option<(String, String)>,
+) {
+    if is_default_org(cfg, deleted_name, id) {
+        let (name, id) = next_available_organization.unzip();
+        cfg.set_default_organization(name, id);
+        cfg.default_cluster_id = None;
     }
 }
 
@@ -60,7 +61,11 @@ pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
                 );
             } else {
                 for item in &organizations {
-                    println!("{:<20} {:<8}", item.name, item.role);
+                    println!(
+                        "{:<20} {:<8}",
+                        item.name,
+                        item.role.as_deref().unwrap_or("-")
+                    );
                 }
             }
         },
@@ -83,10 +88,14 @@ pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn use_organization(name: &str, json_mode: bool) -> Result<()> {
+pub fn use_organization(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
+    let id = client.organization_id(&Selector::parse(name)).ok();
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
-    cfg.default_organization = Some(name.to_string());
+    if cfg.default_organization_id != id {
+        cfg.default_cluster_id = None;
+    }
+    cfg.set_default_organization(Some(name.to_string()), id);
     config::save(&cfg)?;
 
     output::print_result(&json!({"default_organization": name}), json_mode, |_| {
@@ -96,14 +105,14 @@ pub fn use_organization(name: &str, json_mode: bool) -> Result<()> {
 }
 
 pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) -> Result<()> {
+    let id = client.organization_id(&Selector::parse(old))?;
     let resp: RenameOrganizationResponse = client.patch(
-        &format!("/v1/organizations/{old}"),
+        &format!("/v1/organizations/{}", urlencoding::encode(&id)),
         &json!({"organization_name": new_name}),
     )?;
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
-    cfg.default_organization =
-        renamed_default_org(cfg.default_organization.as_deref(), old, &resp.name);
+    rename_default_org(&mut cfg, old, &id, &resp.name);
     config::save(&cfg)?;
 
     output::print_result(
@@ -117,17 +126,18 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
 }
 
 pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
-    let resp: DeleteOrganizationResponse = client.delete(&format!("/v1/organizations/{name}"))?;
-    if resp.deleted && config::load()?.default_organization.as_deref() == Some(name) {
+    let id = client.organization_id(&Selector::parse(name))?;
+    let resp: DeleteOrganizationResponse =
+        client.delete(&format!("/v1/organizations/{}", urlencoding::encode(&id)))?;
+    if resp.deleted && is_default_org(&config::load()?, name, &id) {
         let next = org::list_organizations(client)?
             .into_iter()
             .next()
-            .map(|item| item.name);
+            .map(|item| (item.name, item.organization_id));
         let _config_lock = config::lock()?;
         let mut cfg = config::load()?;
-        if cfg.default_organization.as_deref() == Some(name) {
-            cfg.default_organization =
-                default_org_after_delete(cfg.default_organization.as_deref(), name, next);
+        if is_default_org(&cfg, name, &id) {
+            default_org_after_delete(&mut cfg, name, &id, next);
             config::save(&cfg)?;
         }
     }
@@ -146,40 +156,65 @@ pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_org_after_delete, renamed_default_org};
+    use super::{default_org_after_delete, rename_default_org};
+    use crate::config::Config;
+
+    fn config_with(name: &str, id: Option<&str>) -> Config {
+        Config {
+            default_organization: Some(name.to_string()),
+            default_organization_id: id.map(str::to_string),
+            default_cluster_id: Some("cluster-id".to_string()),
+            ..Config::default()
+        }
+    }
 
     #[test]
-    fn renamed_default_org_updates_matching_default() {
-        let updated = renamed_default_org(Some("team_old"), "team_old", "team_new");
-        assert_eq!(updated.as_deref(), Some("team_new"));
+    fn renamed_default_org_updates_the_name_and_keeps_the_id() {
+        for (current, id) in [
+            ("team_old", None),
+            ("org-id", None),
+            ("stale_name", Some("org-id")),
+        ] {
+            let mut cfg = config_with(current, id);
+            rename_default_org(&mut cfg, "team_old", "org-id", "team_new");
+            assert_eq!(cfg.default_organization.as_deref(), Some("team_new"));
+            assert_eq!(cfg.default_organization_id.as_deref(), Some("org-id"));
+        }
     }
 
     #[test]
     fn renamed_default_org_preserves_non_matching_default() {
-        let updated = renamed_default_org(Some("team_other"), "team_old", "team_new");
-        assert_eq!(updated.as_deref(), Some("team_other"));
+        let mut cfg = config_with("team_other", Some("other-id"));
+        rename_default_org(&mut cfg, "team_old", "org-id", "team_new");
+        assert_eq!(cfg.default_organization.as_deref(), Some("team_other"));
+        assert_eq!(cfg.default_organization_id.as_deref(), Some("other-id"));
     }
 
     #[test]
-    fn default_org_after_delete_promotes_next_org() {
-        let updated =
-            default_org_after_delete(Some("team_old"), "team_old", Some("team_next".to_string()));
-        assert_eq!(updated.as_deref(), Some("team_next"));
+    fn default_org_after_delete_promotes_next_org_with_its_id() {
+        let mut cfg = config_with("team_old", Some("org-id"));
+        let next = Some(("team_next".to_string(), "next-id".to_string()));
+        default_org_after_delete(&mut cfg, "team_old", "org-id", next);
+        assert_eq!(cfg.default_organization.as_deref(), Some("team_next"));
+        assert_eq!(cfg.default_organization_id.as_deref(), Some("next-id"));
+        assert_eq!(cfg.default_cluster_id, None);
     }
 
     #[test]
     fn default_org_after_delete_keeps_non_matching_default() {
-        let updated = default_org_after_delete(
-            Some("team_other"),
-            "team_old",
-            Some("team_next".to_string()),
-        );
-        assert_eq!(updated.as_deref(), Some("team_other"));
+        let mut cfg = config_with("team_other", Some("other-id"));
+        let next = Some(("team_next".to_string(), "next-id".to_string()));
+        default_org_after_delete(&mut cfg, "team_old", "org-id", next);
+        assert_eq!(cfg.default_organization.as_deref(), Some("team_other"));
+        assert_eq!(cfg.default_organization_id.as_deref(), Some("other-id"));
+        assert_eq!(cfg.default_cluster_id.as_deref(), Some("cluster-id"));
     }
 
     #[test]
-    fn default_org_after_delete_clears_when_no_next_org() {
-        let updated = default_org_after_delete(Some("team_old"), "team_old", None);
-        assert_eq!(updated, None);
+    fn default_org_after_delete_clears_name_and_id_when_no_next_org() {
+        let mut cfg = config_with("team_old", Some("org-id"));
+        default_org_after_delete(&mut cfg, "team_old", "org-id", None);
+        assert_eq!(cfg.default_organization, None);
+        assert_eq!(cfg.default_organization_id, None);
     }
 }

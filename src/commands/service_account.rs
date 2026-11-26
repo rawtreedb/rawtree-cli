@@ -3,7 +3,10 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{client::ApiClient, output};
+use crate::{
+    client::{ApiClient, Selector},
+    output,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -59,14 +62,14 @@ pub fn parse_description(description: &str) -> Result<String, String> {
     Ok(description.to_string())
 }
 
-fn collection_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
+fn collection_path(client: &ApiClient, organization: Option<&Selector>) -> Result<String> {
     Ok(format!(
         "{}/service-accounts",
         crate::org::organization_path(client, organization)?
     ))
 }
 
-pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
+pub fn list(client: &ApiClient, organization: Option<&Selector>, json_mode: bool) -> Result<()> {
     let accounts: Vec<ServiceAccount> = client.get(&collection_path(client, organization)?)?;
     output::print_result(&json!({ "service_accounts": accounts }), json_mode, |_| {
         if accounts.is_empty() {
@@ -88,7 +91,7 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
 
 pub fn create(
     client: &ApiClient,
-    organization: Option<&str>,
+    organization: Option<&Selector>,
     request: CreateServiceAccount,
     json_mode: bool,
 ) -> Result<()> {
