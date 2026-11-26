@@ -98,7 +98,7 @@ pub fn organization_path(client: &ApiClient, organization: Option<&str>) -> Resu
         Some(name) => response
             .organizations
             .into_iter()
-            .find(|item| item.name == name)
+            .find(|item| item.name == name || item.organization_id == name)
             .with_context(|| {
                 format!("Organization '{name}' was not found. Run `rtree organization list`.")
             })?,

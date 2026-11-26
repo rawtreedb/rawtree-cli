@@ -1077,3 +1077,24 @@ fn organization_use_without_a_resolvable_id_saves_only_the_name() {
     assert_eq!(saved["default_organization"], "team");
     assert!(saved.get("default_organization_id").is_none());
 }
+
+#[test]
+fn cluster_list_uses_the_saved_organization_id_without_a_name_lookup() {
+    let (output, _, _) = common::run_cli(
+        &[(
+            format!("GET /v1/regions?organization_id={}", common::ORG_ID),
+            "200 OK",
+            json!({"regions": []}),
+        )],
+        &["--json", "cluster", "list"],
+        &json!({
+            "token": "user_fixture",
+            "default_organization": "team", "default_organization_id": common::ORG_ID,
+        }),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

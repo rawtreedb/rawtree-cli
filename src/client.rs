@@ -288,7 +288,15 @@ impl ApiClient {
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let value: Value =
             if path == "/v1/clusters" && self.has_user_credential()? && self.deployment.is_none() {
-                self.discover_clusters(self.scope.organization.as_deref(), None)?
+                let saved = self
+                    .scope
+                    .organization
+                    .as_deref()
+                    .and_then(|name| self.saved_organization_id(name));
+                self.discover_clusters(
+                    saved.as_deref().or(self.scope.organization.as_deref()),
+                    None,
+                )?
             } else {
                 let req = self.routed_request(reqwest::Method::GET, path)?;
                 handle_response(req.send().context("failed to connect to server")?)?

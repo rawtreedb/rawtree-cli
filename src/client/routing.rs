@@ -155,6 +155,9 @@ impl ApiClient {
 
     /// Resolves an organization name or ID to its ID.
     pub fn organization_id(&self, name_or_id: &str) -> Result<String> {
+        if let Some(id) = self.saved_organization_id(name_or_id) {
+            return Ok(id);
+        }
         self.find_organization(&organization_selector(name_or_id), None)
             .map(|organization| organization.organization_id)
     }
