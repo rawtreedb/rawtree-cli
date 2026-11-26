@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::client::{ApiClient, Scope};
+use crate::client::ApiClient;
 use crate::config;
 use crate::output;
 use crate::s3_storage::{format_storage, S3StorageArgs, S3StorageMetadata};
@@ -42,13 +42,7 @@ fn apply_database_create_config(
     }
 }
 
-pub fn list(
-    client: &ApiClient,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
+pub fn list(client: &ApiClient, json_mode: bool) -> Result<()> {
     let resp: ListDatabasesResponse = client.get("/v1/databases")?;
     output::print_result(&resp, json_mode, |resp| {
         if resp.databases.is_empty() {
@@ -80,7 +74,6 @@ pub fn create(
     if let Some(storage) = s3_storage {
         body["s3_storage"] = storage;
     }
-    let client = client.with_scope(Scope::new(organization, cluster));
     let resp: CreateDatabaseResponse = client.post("/v1/databases", &body)?;
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
@@ -114,14 +107,7 @@ struct DeleteDatabaseResponse {
     deleted: bool,
 }
 
-pub fn delete(
-    client: &ApiClient,
-    name: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
+pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
     let path = format!("/v1/databases/{}", urlencoding::encode(name));
     let resp: DeleteDatabaseResponse = client.delete(&path)?;
     output::print_result(

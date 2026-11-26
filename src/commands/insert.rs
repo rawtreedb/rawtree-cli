@@ -11,7 +11,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::client::{ApiClient, Scope};
+use crate::client::ApiClient;
 use crate::org;
 use crate::output;
 
@@ -72,8 +72,6 @@ fn append_transform_param(path: &str, transform: Option<&str>) -> String {
 pub fn insert(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     data: Option<&str>,
     file: Option<&str>,
@@ -81,8 +79,6 @@ pub fn insert(
     transform: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let scoped = client.with_scope(Scope::new(organization, cluster));
-    let client = &scoped;
     let base_path = org::database_path(database, &format!("/tables/{table}"));
     let api_path = append_transform_param(&base_path, transform);
 

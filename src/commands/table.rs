@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::table_output::new_cli_table;
-use crate::client::{ApiClient, Scope};
+use crate::client::ApiClient;
 use crate::org;
 use crate::output;
 
@@ -55,14 +55,7 @@ struct TableMutationResponse {
     storage: Option<serde_json::Value>,
 }
 
-pub fn list(
-    client: &ApiClient,
-    database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
+pub fn list(client: &ApiClient, database: &str, json_mode: bool) -> Result<()> {
     let list_path = org::database_path(database, "/tables");
     let resp: TablesResponse = client.get(&list_path)?;
     output::print_result(
@@ -94,15 +87,7 @@ pub fn list(
     Ok(())
 }
 
-pub fn describe(
-    client: &ApiClient,
-    database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    table: &str,
-    json_mode: bool,
-) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
+pub fn describe(client: &ApiClient, database: &str, table: &str, json_mode: bool) -> Result<()> {
     let describe_path = org::database_path(database, &format!("/tables/{table}"));
     let resp: DescribeTableResponse = client.get(&describe_path)?;
     let details = &resp.table;
@@ -149,13 +134,10 @@ pub fn describe(
 pub fn create(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     sorting_key: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
     let path = org::database_path(database, "/tables");
     let body = match sorting_key {
         Some(key) => json!({ "name": table, "sorting_key": key }),
@@ -179,13 +161,10 @@ pub fn create(
 pub fn update(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     table: &str,
     sorting_key: &str,
     json_mode: bool,
 ) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
     let path = org::database_path(database, &format!("/tables/{table}"));
     let response: TableMutationResponse =
         client.patch(&path, &json!({ "sorting_key": sorting_key }))?;
@@ -219,7 +198,7 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{create, update, DescribeTableResponse, TablesResponse};
-    use crate::client::ApiClient;
+    use crate::client::{ApiClient, Scope};
     use serde_json::json;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
@@ -346,12 +325,11 @@ mod tests {
             }
         });
 
-        let client = ApiClient::new(format!("http://{address}"), None);
+        let client = ApiClient::new(format!("http://{address}"), None)
+            .with_scope(Scope::new(Some(ORG), Some(CLUSTER)));
         create(
             &client,
             "analytics",
-            Some(ORG),
-            Some(CLUSTER),
             "events",
             Some("region, ifNull(cityHash64(host, instanceId), 0)"),
             true,
@@ -360,8 +338,6 @@ mod tests {
         update(
             &client,
             "analytics",
-            Some(ORG),
-            Some(CLUSTER),
             "events",
             "region, toStartOfHour(timestamp)",
             true,

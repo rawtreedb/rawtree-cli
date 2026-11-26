@@ -1,4 +1,4 @@
-use super::{handle_response, routing, ApiClient};
+use super::{handle_response, routing, ApiClient, Scope, Selector};
 use anyhow::{Context, Result};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub struct Regions {
 }
 
 impl ApiClient {
-    pub fn list_regions(&self, organization: &str) -> Result<Regions> {
+    pub fn list_regions(&self, organization: &Selector) -> Result<Regions> {
         let id = self.organization_id(organization)?;
         self.regions_for_organization(&id, None)
     }
@@ -37,8 +37,9 @@ impl ApiClient {
         handle_response(routing::before_deadline(request, deadline)?.send()?)
     }
 
-    /// Scope pre-creation size discovery to the selected region without mutating this client.
-    pub fn for_region(&self, organization: Option<&str>, region_id: &str) -> Result<Self> {
+    /// An unscoped client for pre-creation size discovery in a region of this
+    /// client's organization.
+    pub fn for_region(&self, region_id: &str) -> Result<Self> {
         anyhow::ensure!(
             !self
                 .token()?
@@ -46,8 +47,11 @@ impl ApiClient {
                 .is_some_and(|token| token.starts_with("rt_")),
             "Region selection requires a user credential. Run `rtree login`."
         );
-        let organization =
-            organization.context("Choose an organization with --org when selecting a region.")?;
+        let organization = self
+            .scope
+            .organization
+            .as_ref()
+            .context("Choose an organization with --org when selecting a region.")?;
         let region = self
             .list_regions(organization)?
             .regions
@@ -65,6 +69,7 @@ impl ApiClient {
         client.routing =
             Arc::new(routing::RoutingCache::default().with_organizations_of(&self.routing));
         client.deployment = Some((deployment, region.cloud_region));
+        client.scope = Scope::default();
         Ok(client)
     }
 }

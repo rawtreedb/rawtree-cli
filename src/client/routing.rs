@@ -1,5 +1,5 @@
 use super::{
-    discovery::UnavailableRegion, handle_response, ApiClient, CLUSTER_ID_HEADER,
+    discovery::UnavailableRegion, handle_response, ApiClient, Selector, CLUSTER_ID_HEADER,
     ORGANIZATION_ID_HEADER,
 };
 use anyhow::{Context, Result};
@@ -7,10 +7,7 @@ use reqwest::{blocking::RequestBuilder, Method, Url};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
-    },
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -44,7 +41,6 @@ pub(super) struct RoutingCache {
     organizations: Mutex<Option<(Instant, Vec<Organization>)>>,
     clusters: Mutex<HashMap<String, (Instant, Clusters)>>,
     bound_cluster: Mutex<Option<Cluster>>,
-    pub(super) saved_id_used: AtomicBool,
 }
 
 impl RoutingCache {
@@ -59,19 +55,9 @@ impl RoutingCache {
     }
 }
 
-enum ClusterSelector {
-    Id(String),
-    Name(String),
-}
-
-enum OrganizationSelector {
-    Id(String),
-    Name(String),
-}
-
 struct Selectors {
-    organization: Option<OrganizationSelector>,
-    cluster: Option<ClusterSelector>,
+    organization: Option<Selector>,
+    cluster: Option<Selector>,
     /// The cluster is addressed by the URL path, so no cluster header is sent.
     cluster_in_path: bool,
 }
@@ -83,20 +69,12 @@ pub(super) struct ResolvedScope {
     deployment: Option<(String, String)>,
 }
 
-pub(crate) fn is_uuid(value: &str) -> bool {
+pub(super) fn is_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| match index {
             8 | 13 | 18 | 23 => byte == b'-',
             _ => byte.is_ascii_hexdigit(),
         })
-}
-
-fn organization_selector(value: &str) -> OrganizationSelector {
-    if is_uuid(value) {
-        OrganizationSelector::Id(value.to_owned())
-    } else {
-        OrganizationSelector::Name(value.to_owned())
-    }
 }
 
 pub(super) fn with_scope_headers(
@@ -121,21 +99,13 @@ impl ApiClient {
                 self.routing.store_organizations(response.organizations);
             }
         } else if path == "/v1/clusters" {
-            let selected = self.scope.organization.as_deref().and_then(|organization| {
-                if is_uuid(organization) {
-                    Some(organization.to_owned())
-                } else if let Some((_, id)) = self
-                    .saved
-                    .organization
-                    .as_ref()
-                    .filter(|(name, _)| name == organization)
-                {
-                    Some(id.clone())
-                } else {
-                    self.cached_organization(organization)
-                        .map(|item| item.organization_id)
-                }
-            });
+            let selected = match &self.scope.organization {
+                Some(Selector::Id(id)) => Some(id.clone()),
+                Some(Selector::Name(name)) => self
+                    .cached_organization(name)
+                    .map(|item| item.organization_id),
+                None => None,
+            };
             if let Some(organization_id) = selected {
                 if let Ok(response) = serde_json::from_value::<Clusters>(value.clone()) {
                     self.routing
@@ -148,47 +118,36 @@ impl ApiClient {
         }
     }
 
-    fn cached_organization(&self, name_or_id: &str) -> Option<Organization> {
+    fn cached_organization(&self, name: &str) -> Option<Organization> {
         let cache = self.routing.organizations.lock().unwrap();
         let (time, organizations) = cache.as_ref()?;
         if time.elapsed() >= Duration::from_secs(30) {
             return None;
         }
-        organizations
-            .iter()
-            .find(|item| item.name == name_or_id || item.organization_id == name_or_id)
-            .cloned()
+        organizations.iter().find(|item| item.name == name).cloned()
     }
 
-    /// Resolves an organization name or ID to its ID.
-    pub fn organization_id(&self, name_or_id: &str) -> Result<String> {
-        if let Some(id) = self.saved_organization_id(name_or_id) {
-            return Ok(id);
-        }
-        self.find_organization(&organization_selector(name_or_id), None)
+    pub fn organization_id(&self, organization: &Selector) -> Result<String> {
+        self.find_organization(organization, None)
             .map(|organization| organization.organization_id)
     }
 
-    fn find_organization(
+    pub(super) fn find_organization(
         &self,
-        selector: &OrganizationSelector,
+        selector: &Selector,
         deadline: Option<Instant>,
     ) -> Result<Organization> {
-        if let OrganizationSelector::Id(id) = selector {
-            return Ok(Organization {
+        match selector {
+            Selector::Id(id) => Ok(Organization {
                 organization_id: id.clone(),
                 name: id.clone(),
-            });
+            }),
+            Selector::Name(name) => self
+                .organizations(deadline)?
+                .into_iter()
+                .find(|item| item.name == *name)
+                .context("Organization not found."),
         }
-        let matches = |item: &Organization| match selector {
-            OrganizationSelector::Id(id) => item.organization_id == *id,
-            OrganizationSelector::Name(name) => item.name == *name,
-        };
-        let organizations = self.organizations(deadline)?;
-        organizations
-            .into_iter()
-            .find(|item| matches(item))
-            .context("Organization not found.")
     }
 
     pub(super) fn organizations(&self, deadline: Option<Instant>) -> Result<Vec<Organization>> {
@@ -272,8 +231,8 @@ impl ApiClient {
         deadline: Option<Instant>,
     ) -> Result<ResolvedScope> {
         let organization_id = match selectors.organization {
-            Some(OrganizationSelector::Id(id)) => Some(id),
-            Some(OrganizationSelector::Name(name)) if self.token()?.is_some() => {
+            Some(Selector::Id(id)) => Some(id),
+            Some(Selector::Name(name)) if self.token()?.is_some() => {
                 let organization = self
                     .organizations(deadline)?
                     .into_iter()
@@ -283,7 +242,7 @@ impl ApiClient {
                     })?;
                 Some(organization.organization_id)
             }
-            Some(OrganizationSelector::Name(_)) | None => None,
+            Some(Selector::Name(_)) | None => None,
         };
         let mut scope = ResolvedScope {
             organization_id,
@@ -293,9 +252,9 @@ impl ApiClient {
             return Ok(scope);
         }
         scope.cluster_id = match selectors.cluster {
-            Some(ClusterSelector::Id(id)) => Some(id),
-            Some(ClusterSelector::Name(_)) if self.token()?.is_none() => None,
-            Some(ClusterSelector::Name(name)) => {
+            Some(Selector::Id(id)) => Some(id),
+            Some(Selector::Name(_)) if self.token()?.is_none() => None,
+            Some(Selector::Name(name)) => {
                 let bound = self.bound_cluster(deadline)?;
                 anyhow::ensure!(
                     bound.name == name,
@@ -345,8 +304,8 @@ impl ApiClient {
         };
         let Some(organization) = organization else {
             match cluster {
-                ClusterSelector::Id(id) => scope.cluster_id = Some(id),
-                ClusterSelector::Name(name) => anyhow::bail!(
+                Selector::Id(id) => scope.cluster_id = Some(id),
+                Selector::Name(name) => anyhow::bail!(
                     "Choose an organization with --org to select cluster '{name}' by name."
                 ),
             }
@@ -354,8 +313,8 @@ impl ApiClient {
         };
         let clusters = self.organization_clusters(&organization, deadline)?;
         let target = clusters.clusters.iter().find(|item| match &cluster {
-            ClusterSelector::Id(id) => item.id == *id,
-            ClusterSelector::Name(name) => item.name == *name,
+            Selector::Id(id) => item.id == *id,
+            Selector::Name(name) => item.name == *name,
         });
         if target.is_none() && !clusters.unavailable_regions.is_empty() {
             // Keep known routes usable, but retry missing routes after a region recovers.
@@ -369,8 +328,8 @@ impl ApiClient {
         if !selectors.cluster_in_path {
             scope.cluster_id = match (&cluster, target) {
                 (_, Some(target)) => Some(target.id.clone()),
-                (ClusterSelector::Id(id), None) => Some(id.clone()),
-                (ClusterSelector::Name(name), None) => {
+                (Selector::Id(id), None) => Some(id.clone()),
+                (Selector::Name(name), None) => {
                     anyhow::bail!(
                         "Cluster '{name}' not found in organization '{}'.",
                         organization.name
@@ -405,9 +364,9 @@ impl ApiClient {
         if let Some(clusters) = cached {
             return Ok(clusters);
         }
-        let response: Clusters = serde_json::from_value(
-            self.discover_clusters(Some(&organization.organization_id), deadline)?,
-        )?;
+        let selector = Selector::Id(organization.organization_id.clone());
+        let response: Clusters =
+            serde_json::from_value(self.discover_clusters(Some(&selector), deadline)?)?;
         self.routing.clusters.lock().unwrap().insert(
             organization.organization_id.clone(),
             (Instant::now(), response.clone()),
@@ -434,27 +393,6 @@ pub(super) fn before_deadline(
 
 impl ApiClient {
     fn selectors(&self, path: &str) -> Selectors {
-        let saved_organization = self
-            .saved
-            .organization
-            .as_ref()
-            .filter(|(name, _)| self.scope.organization.as_deref() == Some(name.as_str()));
-        let saved_cluster = self
-            .saved
-            .cluster
-            .as_ref()
-            .filter(|(name, _)| self.scope.cluster.as_deref() == Some(name.as_str()));
-        let organization = match saved_organization {
-            Some((_, id)) => {
-                self.routing.saved_id_used.store(true, Ordering::Relaxed);
-                Some(OrganizationSelector::Id(id.clone()))
-            }
-            None => self
-                .scope
-                .organization
-                .as_deref()
-                .map(organization_selector),
-        };
         let path_cluster = path
             .split('?')
             .next()
@@ -464,26 +402,11 @@ impl ApiClient {
                 !part.is_empty() && !matches!(*part, "sizes" | "metrics" | "verify-s3-access")
             })
             .and_then(|id| urlencoding::decode(id).ok())
-            .map(|id| id.into_owned());
-        let cluster_in_path = path_cluster.is_some();
-        let cluster = match (path_cluster, saved_cluster) {
-            (Some(id), _) => Some(ClusterSelector::Id(id)),
-            (None, Some((_, id))) => {
-                self.routing.saved_id_used.store(true, Ordering::Relaxed);
-                Some(ClusterSelector::Id(id.clone()))
-            }
-            (None, None) => self.scope.cluster.as_deref().map(|cluster| {
-                if is_uuid(cluster) {
-                    ClusterSelector::Id(cluster.to_owned())
-                } else {
-                    ClusterSelector::Name(cluster.to_owned())
-                }
-            }),
-        };
+            .map(|id| Selector::Id(id.into_owned()));
         Selectors {
-            organization,
-            cluster,
-            cluster_in_path,
+            organization: self.scope.organization.clone(),
+            cluster_in_path: path_cluster.is_some(),
+            cluster: path_cluster.or_else(|| self.scope.cluster.clone()),
         }
     }
 

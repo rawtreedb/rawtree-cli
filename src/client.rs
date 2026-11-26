@@ -2,7 +2,6 @@ mod discovery;
 pub(crate) use discovery::UnavailableRegion;
 mod regions;
 mod routing;
-pub(crate) use routing::is_uuid;
 #[cfg(test)]
 mod routing_tests;
 
@@ -15,7 +14,6 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::io::Write;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,35 +37,43 @@ struct SavedCredential {
     oauth_client_id: Option<String>,
 }
 
-/// The organization and cluster a request acts on, as the user typed them:
-/// names or IDs. The client resolves them to the ID headers the API expects.
+/// How a request names an organization or cluster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selector {
+    Id(String),
+    Name(String),
+}
+
+impl Selector {
+    /// UUIDs select by ID; anything else is a name.
+    pub fn parse(value: &str) -> Self {
+        if routing::is_uuid(value) {
+            Self::Id(value.to_owned())
+        } else {
+            Self::Name(value.to_owned())
+        }
+    }
+}
+
+/// The organization and cluster a request acts on. The client resolves them
+/// to the ID headers the API expects.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scope {
-    pub organization: Option<String>,
-    pub cluster: Option<String>,
+    pub organization: Option<Selector>,
+    pub cluster: Option<Selector>,
 }
 
 impl Scope {
     pub fn new(organization: Option<&str>, cluster: Option<&str>) -> Self {
         Self {
-            organization: organization.map(str::to_owned),
-            cluster: cluster.map(str::to_owned),
+            organization: organization.map(Selector::parse),
+            cluster: cluster.map(Selector::parse),
         }
     }
 
     pub fn organization(organization: Option<&str>) -> Self {
         Self::new(organization, None)
     }
-}
-
-/// IDs saved in the config for the default organization and cluster, each with
-/// the name it was saved under. A scope that names the same organization or
-/// cluster uses the saved ID instead of looking it up. Only set them for
-/// selections that came from the config, never for flags or environment.
-#[derive(Clone, Debug, Default)]
-pub struct SavedIds {
-    pub organization: Option<(String, String)>,
-    pub cluster: Option<(String, String)>,
 }
 
 pub struct ApiClient {
@@ -77,7 +83,6 @@ pub struct ApiClient {
     routing: Arc<routing::RoutingCache>,
     deployment: Option<(String, String)>,
     scope: Scope,
-    saved: SavedIds,
 }
 
 impl ApiClient {
@@ -89,29 +94,11 @@ impl ApiClient {
             routing: Arc::default(),
             deployment: None,
             scope: Scope::default(),
-            saved: SavedIds::default(),
         }
     }
 
-    pub fn with_saved_ids(mut self, saved: SavedIds) -> Self {
-        self.saved = saved;
-        self
-    }
-
-    /// Whether any request used an ID from the config instead of resolving a name.
-    pub fn used_saved_ids(&self) -> bool {
-        self.routing.saved_id_used.load(Ordering::Relaxed)
-    }
-
-    /// The saved ID for `name`, when it is the organization the config saved.
-    pub fn saved_organization_id(&self, name: &str) -> Option<String> {
-        let (_, id) = self
-            .saved
-            .organization
-            .as_ref()
-            .filter(|(saved, _)| saved == name)?;
-        self.routing.saved_id_used.store(true, Ordering::Relaxed);
-        Some(id.clone())
+    pub fn scope(&self) -> &Scope {
+        &self.scope
     }
 
     pub fn has_api_key(&self) -> Result<bool> {
@@ -129,7 +116,6 @@ impl ApiClient {
             routing: self.routing.clone(),
             deployment: self.deployment.clone(),
             scope,
-            saved: self.saved.clone(),
         }
     }
 
@@ -172,7 +158,6 @@ impl ApiClient {
             routing: Arc::default(),
             deployment: self.deployment.clone(),
             scope: self.scope.clone(),
-            saved: self.saved.clone(),
         })
     }
 
@@ -288,15 +273,7 @@ impl ApiClient {
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let value: Value =
             if path == "/v1/clusters" && self.has_user_credential()? && self.deployment.is_none() {
-                let saved = self
-                    .scope
-                    .organization
-                    .as_deref()
-                    .and_then(|name| self.saved_organization_id(name));
-                self.discover_clusters(
-                    saved.as_deref().or(self.scope.organization.as_deref()),
-                    None,
-                )?
+                self.discover_clusters(self.scope.organization.as_ref(), None)?
             } else {
                 let req = self.routed_request(reqwest::Method::GET, path)?;
                 handle_response(req.send().context("failed to connect to server")?)?

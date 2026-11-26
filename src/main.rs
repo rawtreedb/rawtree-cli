@@ -9,6 +9,7 @@ mod org;
 mod output;
 mod s3_storage;
 
+use std::cell::Cell;
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
 
@@ -21,7 +22,7 @@ use cli::{
     IntegrationKind, OrganizationCommand, ServiceAccountCommand, ShellType, TableCommand,
     WorkflowCommand, WorkflowSinkCommand,
 };
-use client::{ApiClient, SavedIds};
+use client::{ApiClient, Scope, Selector};
 use constants::DEFAULT_API_URL;
 
 fn resolve_url_from_sources(
@@ -64,20 +65,6 @@ fn resolve_database(cli_database: Option<String>) -> Result<String> {
     })
 }
 
-fn resolve_cluster_from_sources(
-    cli_cluster: Option<String>,
-    env_cluster: Option<String>,
-    cfg_cluster: Option<String>,
-) -> Option<String> {
-    cli_cluster.or(env_cluster).or(cfg_cluster)
-}
-
-fn resolve_cluster(cli_cluster: Option<String>) -> Option<String> {
-    let env_cluster = std::env::var("RAWTREE_CLUSTER").ok();
-    let cfg_cluster = config::load().ok().and_then(|c| c.default_cluster);
-    resolve_cluster_from_sources(cli_cluster, env_cluster, cfg_cluster)
-}
-
 fn resolve_login_cluster_from_sources(
     cli_cluster: Option<String>,
     env_cluster: Option<String>,
@@ -92,83 +79,126 @@ fn resolve_login_cluster(cli_cluster: Option<String>) -> Option<String> {
     resolve_login_cluster_from_sources(cli_cluster, env_cluster)
 }
 
-fn resolve_org_from_sources(
-    cli_org: Option<String>,
-    env_org: Option<String>,
-    cfg_org: Option<String>,
-) -> Option<String> {
-    cli_org.or(env_org).or(cfg_org)
+/// An organization or cluster chosen by flag, environment or config. Only a
+/// config choice carries the ID saved next to its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Choice {
+    name: String,
+    saved_id: Option<String>,
 }
 
-fn resolve_explicit_org(cli_org: Option<String>) -> Option<String> {
-    let env_org = std::env::var("RAWTREE_ORG").ok();
-    let cfg_org = config::load().ok().and_then(|c| c.default_organization);
-    resolve_org_from_sources(cli_org, env_org, cfg_org)
-}
-
-fn resolve_effective_org_with<F>(
-    explicit_org: Option<String>,
-    fetch_default_org: F,
-) -> Option<String>
-where
-    F: FnOnce() -> Option<String>,
-{
-    explicit_org.or_else(fetch_default_org)
-}
-
-fn resolve_effective_org(client: &ApiClient, cli_org: Option<String>) -> Option<String> {
-    let explicit_org = resolve_explicit_org(cli_org);
-    resolve_effective_org_with(explicit_org, || org::first_organization_name(client))
-}
-
-/// Saved IDs apply only to selections that come from the config. A flag or
-/// environment variable names its target explicitly and is resolved by name.
-fn saved_ids_from_sources(
-    cli_org: Option<&str>,
-    env_org: Option<&str>,
-    cli_cluster: Option<&str>,
-    env_cluster: Option<&str>,
-    cfg: &config::Config,
-) -> SavedIds {
-    let pair = |name: &Option<String>, id: &Option<String>| name.clone().zip(id.clone());
-    SavedIds {
-        organization: (cli_org.is_none() && env_org.is_none())
-            .then(|| pair(&cfg.default_organization, &cfg.default_organization_id))
-            .flatten(),
-        cluster: (cli_org.is_none()
-            && env_org.is_none()
-            && cli_cluster.is_none()
-            && env_cluster.is_none())
-        .then(|| pair(&cfg.default_cluster, &cfg.default_cluster_id))
-        .flatten(),
+impl Choice {
+    fn name(&self) -> &str {
+        &self.name
     }
 }
 
-fn saved_ids(cli_org: Option<&str>, cli_cluster: Option<&str>) -> SavedIds {
-    let Ok(cfg) = config::load() else {
-        return SavedIds::default();
-    };
-    saved_ids_from_sources(
-        cli_org,
-        std::env::var("RAWTREE_ORG").ok().as_deref(),
-        cli_cluster,
-        std::env::var("RAWTREE_CLUSTER").ok().as_deref(),
-        &cfg,
-    )
+fn choose(
+    explicit: Option<String>,
+    configured: Option<String>,
+    saved_id: Option<String>,
+) -> Option<Choice> {
+    match explicit {
+        Some(name) => Some(Choice {
+            name,
+            saved_id: None,
+        }),
+        None => configured.map(|name| Choice { name, saved_id }),
+    }
 }
 
-/// A rejected saved ID is never replaced by a name lookup, so say how to refresh it.
-fn explain_rejected_saved_ids(client: &ApiClient, error: anyhow::Error) -> anyhow::Error {
-    let message = format!("{error:#}");
-    if client.used_saved_ids()
-        && error.downcast_ref::<output::CliError>().is_none()
-        && (message.contains("(403)") || message.contains("(404)"))
-    {
-        anyhow::anyhow!(
-            "{message}\nThe saved organization or cluster ID was rejected; it may have been deleted or your access may have changed. Run `rtree organization use <name>` and `rtree cluster use <name>`, or `rtree login` again."
+/// The organization and cluster commands act on unless they name their own.
+/// Remembers whether a command used an ID saved in the config, because a
+/// rejected saved ID is never replaced by a name lookup.
+struct Selection {
+    organization: Option<Choice>,
+    cluster: Option<Choice>,
+    used_saved_ids: Cell<bool>,
+}
+
+impl Selection {
+    fn from_sources(
+        cli_org: Option<String>,
+        env_org: Option<String>,
+        cli_cluster: Option<String>,
+        env_cluster: Option<String>,
+        cfg: config::Config,
+    ) -> Self {
+        let explicit_org = cli_org.or(env_org);
+        // A saved cluster ID belongs to the saved organization.
+        let cluster_id = cfg.default_cluster_id.filter(|_| explicit_org.is_none());
+        Self {
+            organization: choose(
+                explicit_org,
+                cfg.default_organization,
+                cfg.default_organization_id,
+            ),
+            cluster: choose(cli_cluster.or(env_cluster), cfg.default_cluster, cluster_id),
+            used_saved_ids: Cell::new(false),
+        }
+    }
+
+    fn load(cli_org: Option<String>, cli_cluster: Option<String>) -> Self {
+        Self::from_sources(
+            cli_org,
+            std::env::var("RAWTREE_ORG").ok(),
+            cli_cluster,
+            std::env::var("RAWTREE_CLUSTER").ok(),
+            config::load().unwrap_or_default(),
         )
-    } else {
-        error
+    }
+
+    /// The chosen organization, or else the first one the credential can see.
+    fn effective_organization(&self, client: &ApiClient) -> Option<Choice> {
+        self.organization.clone().or_else(|| {
+            org::first_organization_name(client).map(|name| Choice {
+                name,
+                saved_id: None,
+            })
+        })
+    }
+
+    fn selector(&self, choice: &Choice) -> Selector {
+        match &choice.saved_id {
+            Some(id) => {
+                self.used_saved_ids.set(true);
+                Selector::Id(id.clone())
+            }
+            None => Selector::parse(&choice.name),
+        }
+    }
+
+    fn organization_selector(&self) -> Option<Selector> {
+        self.organization
+            .as_ref()
+            .map(|choice| self.selector(choice))
+    }
+
+    fn scope(&self, organization: Option<&Choice>, cluster: Option<&Choice>) -> Scope {
+        Scope {
+            organization: organization.map(|choice| self.selector(choice)),
+            cluster: cluster.map(|choice| self.selector(choice)),
+        }
+    }
+
+    /// A client acting on the effective organization and the chosen cluster.
+    fn scoped(&self, client: &ApiClient) -> ApiClient {
+        let organization = self.effective_organization(client);
+        client.with_scope(self.scope(organization.as_ref(), self.cluster.as_ref()))
+    }
+
+    fn explain_rejected_saved_ids(&self, error: anyhow::Error) -> anyhow::Error {
+        let message = format!("{error:#}");
+        if self.used_saved_ids.get()
+            && error.downcast_ref::<output::CliError>().is_none()
+            && (message.contains("(403)") || message.contains("(404)"))
+        {
+            anyhow::anyhow!(
+                "{message}\nThe saved organization or cluster ID was rejected; it may have been deleted or your access may have changed. Run `rtree organization use <name>` and `rtree cluster use <name>`, or `rtree login` again."
+            )
+        } else {
+            error
+        }
     }
 }
 
@@ -215,7 +245,7 @@ fn ensure_single_stdin_reader(sql: Option<&str>, sinks: &[String]) -> Result<()>
     Ok(())
 }
 
-fn require_organization(organization: Option<&str>) -> Result<&str> {
+fn require_organization<T>(organization: Option<T>) -> Result<T> {
     organization.ok_or_else(|| {
         anyhow::anyhow!(
             "No organization specified. Use --org, RAWTREE_ORG env, or `rtree organization use <name>`"
@@ -225,23 +255,18 @@ fn require_organization(organization: Option<&str>) -> Result<&str> {
 
 /// API keys are bound to a cluster, so the backend takes their tenant from the
 /// key; user credentials must select one.
-fn require_workflow_scope(
-    client: &ApiClient,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-) -> Result<client::Scope> {
+fn require_workflow_scope(client: &ApiClient, scope: Scope) -> Result<Scope> {
     if client.has_api_key()? {
-        return Ok(client::Scope::new(organization, cluster));
+        return Ok(scope);
     }
-    if organization.is_none() && !cluster.is_some_and(client::is_uuid) {
-        require_organization(organization)?;
+    if !matches!(scope.cluster, Some(Selector::Id(_))) {
+        require_organization(scope.organization.as_ref())?;
     }
-    let cluster = cluster.ok_or_else(|| {
-        anyhow::anyhow!(
-            "No cluster specified. Use --cluster, RAWTREE_CLUSTER env, or `rtree cluster use <name>`"
-        )
-    })?;
-    Ok(client::Scope::new(organization, Some(cluster)))
+    anyhow::ensure!(
+        scope.cluster.is_some(),
+        "No cluster specified. Use --cluster, RAWTREE_CLUSTER env, or `rtree cluster use <name>`"
+    );
+    Ok(scope)
 }
 
 fn main() -> ExitCode {
@@ -276,9 +301,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         ApiClient::new(url.clone(), Some(key))
     } else {
         ApiClient::from_saved_config(url.clone())
-    }
-    .with_saved_ids(saved_ids(cli_org.as_deref(), cli_cluster.as_deref()));
-    let effective_cluster = resolve_cluster(cli_cluster.clone());
+    };
+    let selection = Selection::load(cli_org.clone(), cli_cluster.clone());
     let login_cluster = resolve_login_cluster(cli_cluster);
 
     let result = (|| -> Result<ExitCode> {
@@ -323,57 +347,40 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             Command::Logout => commands::auth::logout(json),
             Command::Database { action } => match action {
-                DatabaseCommand::List => {
-                    let effective_org = resolve_effective_org(&client, cli_org.clone());
-                    commands::database::list(
-                        &client,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        json,
-                    )
-                }
+                DatabaseCommand::List => commands::database::list(&selection.scoped(&client), json),
                 DatabaseCommand::Create { name, s3_storage } => {
-                    let effective_org = resolve_effective_org(&client, cli_org.clone());
+                    let organization = selection.effective_organization(&client);
+                    let cluster = selection.cluster.as_ref();
                     commands::database::create(
-                        &client,
+                        &client.with_scope(selection.scope(organization.as_ref(), cluster)),
                         &name,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
+                        organization.as_ref().map(Choice::name),
+                        cluster.map(Choice::name),
                         s3_storage,
                         json,
                     )
                 }
                 DatabaseCommand::Use { name } => commands::database::use_database(&name, json),
                 DatabaseCommand::Delete { name } => {
-                    let effective_org = resolve_effective_org(&client, cli_org.clone());
-                    commands::database::delete(
-                        &client,
-                        &name,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        json,
-                    )
+                    commands::database::delete(&selection.scoped(&client), &name, json)
                 }
             },
-            Command::FederationIssuer { action } => {
-                let organization = resolve_explicit_org(cli_org);
-                commands::federation_issuer::run(&client, organization.as_deref(), action, json)
-            }
+            Command::FederationIssuer { action } => commands::federation_issuer::run(
+                &client,
+                selection.organization_selector().as_ref(),
+                action,
+                json,
+            ),
             Command::FederationRule { action } => {
-                let organization = resolve_explicit_org(cli_org);
-                commands::federation_rule::run(
-                    &client,
-                    organization.as_deref(),
-                    effective_cluster.as_deref(),
-                    action,
-                    json,
-                )
+                let scope =
+                    selection.scope(selection.organization.as_ref(), selection.cluster.as_ref());
+                commands::federation_rule::run(&client.with_scope(scope), action, json)
             }
             Command::ServiceAccount { action } => {
-                let organization = resolve_explicit_org(cli_org);
+                let organization = selection.organization_selector();
                 match action {
                     ServiceAccountCommand::List => {
-                        commands::service_account::list(&client, organization.as_deref(), json)
+                        commands::service_account::list(&client, organization.as_ref(), json)
                     }
                     ServiceAccountCommand::Create {
                         name,
@@ -381,7 +388,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         role,
                     } => commands::service_account::create(
                         &client,
-                        organization.as_deref(),
+                        organization.as_ref(),
                         commands::service_account::CreateServiceAccount {
                             name,
                             description,
@@ -407,23 +414,24 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             },
             Command::Cluster { action } => {
-                let effective_org = match &action {
+                let organization = match &action {
                     ClusterCommand::Use { .. } | ClusterCommand::Sizes => None,
-                    _ => resolve_effective_org(&client, cli_org.clone()),
+                    _ => selection.effective_organization(&client),
                 };
+                let scoped = client.with_scope(selection.scope(organization.as_ref(), None));
                 match action {
                     ClusterCommand::Use { name } => commands::cluster::use_cluster(
                         &client,
                         &name,
-                        resolve_explicit_org(cli_org.clone()).as_deref(),
+                        selection.organization.as_ref().map(Choice::name),
                         json,
                     ),
-                    ClusterCommand::List => {
-                        commands::cluster::list(&client, effective_org.as_deref(), json)
-                    }
-                    ClusterCommand::Regions => {
-                        commands::cluster::regions(&client, effective_org.as_deref(), json)
-                    }
+                    ClusterCommand::List => commands::cluster::list(
+                        &scoped,
+                        organization.as_ref().map(Choice::name),
+                        json,
+                    ),
+                    ClusterCommand::Regions => commands::cluster::regions(&scoped, json),
                     ClusterCommand::Sizes => commands::cluster::sizes(&client, json),
                     ClusterCommand::Create {
                         region_id,
@@ -435,10 +443,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         s3_storage,
                         identity,
                     } => commands::cluster::create(
-                        &client,
+                        &scoped,
                         commands::cluster::ClusterCreateOptions {
                             region_id: &region_id,
-                            organization: effective_org.as_deref(),
                             name: &name,
                             replicas,
                             min_size,
@@ -449,53 +456,35 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         },
                         json,
                     ),
-                    ClusterCommand::Status { name_or_id } => commands::cluster::status(
-                        &client,
-                        &name_or_id,
-                        effective_org.as_deref(),
-                        json,
-                    ),
+                    ClusterCommand::Status { name_or_id } => {
+                        commands::cluster::status(&scoped, &name_or_id, json)
+                    }
                     ClusterCommand::Update {
                         name_or_id,
                         name,
                         idle_timeout_minutes,
                     } => commands::cluster::update(
-                        &client,
+                        &scoped,
                         &name_or_id,
-                        effective_org.as_deref(),
                         name.as_deref(),
                         idle_timeout_minutes,
                         json,
                     ),
-                    ClusterCommand::Stop { name_or_id } => commands::cluster::stop(
-                        &client,
-                        &name_or_id,
-                        effective_org.as_deref(),
-                        json,
-                    ),
-                    ClusterCommand::Resume { name_or_id } => commands::cluster::resume(
-                        &client,
-                        &name_or_id,
-                        effective_org.as_deref(),
-                        json,
-                    ),
-                    ClusterCommand::Delete { name_or_id } => commands::cluster::delete(
-                        &client,
-                        &name_or_id,
-                        effective_org.as_deref(),
-                        json,
-                    ),
+                    ClusterCommand::Stop { name_or_id } => {
+                        commands::cluster::stop(&scoped, &name_or_id, json)
+                    }
+                    ClusterCommand::Resume { name_or_id } => {
+                        commands::cluster::resume(&scoped, &name_or_id, json)
+                    }
+                    ClusterCommand::Delete { name_or_id } => {
+                        commands::cluster::delete(&scoped, &name_or_id, json)
+                    }
                 }
             }
             Command::ApiKey { action } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                let client = selection.scoped(&client);
                 match action {
-                    ApiKeyCommand::List => commands::keys::list(
-                        &client,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        json,
-                    ),
+                    ApiKeyCommand::List => commands::keys::list(&client, json),
                     ApiKeyCommand::Create {
                         database,
                         name,
@@ -506,8 +495,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         commands::keys::create(
                             &client,
                             database.as_deref(),
-                            effective_org.as_deref(),
-                            effective_cluster.as_deref(),
                             commands::keys::CreateApiKeyRequest {
                                 name: &name,
                                 permission: &permission,
@@ -516,100 +503,71 @@ fn run(cli: Cli) -> Result<ExitCode> {
                             json,
                         )
                     }
-                    ApiKeyCommand::Delete { id } => commands::keys::delete(
-                        &client,
-                        effective_org.as_deref(),
-                        effective_cluster.as_deref(),
-                        id,
-                        json,
-                    ),
+                    ApiKeyCommand::Delete { id } => commands::keys::delete(&client, id, json),
                 }
             }
             Command::Table { action } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                let client = selection.scoped(&client);
                 match action {
                     TableCommand::List { database } => {
-                        let database = resolve_database(database)?;
-                        commands::table::list(
-                            &client,
-                            &database,
-                            effective_org.as_deref(),
-                            effective_cluster.as_deref(),
-                            json,
-                        )
+                        commands::table::list(&client, &resolve_database(database)?, json)
                     }
-                    TableCommand::Describe { database, table } => {
-                        let database = resolve_database(database)?;
-                        commands::table::describe(
-                            &client,
-                            &database,
-                            effective_org.as_deref(),
-                            effective_cluster.as_deref(),
-                            &table,
-                            json,
-                        )
-                    }
+                    TableCommand::Describe { database, table } => commands::table::describe(
+                        &client,
+                        &resolve_database(database)?,
+                        &table,
+                        json,
+                    ),
                     TableCommand::Create {
                         database,
                         table,
                         sorting_key,
-                    } => {
-                        let database = resolve_database(database)?;
-                        commands::table::create(
-                            &client,
-                            &database,
-                            effective_org.as_deref(),
-                            effective_cluster.as_deref(),
-                            &table,
-                            sorting_key.as_deref(),
-                            json,
-                        )
-                    }
+                    } => commands::table::create(
+                        &client,
+                        &resolve_database(database)?,
+                        &table,
+                        sorting_key.as_deref(),
+                        json,
+                    ),
                     TableCommand::Update {
                         database,
                         table,
                         sorting_key,
-                    } => {
-                        let database = resolve_database(database)?;
-                        commands::table::update(
-                            &client,
-                            &database,
-                            effective_org.as_deref(),
-                            effective_cluster.as_deref(),
-                            &table,
-                            &sorting_key,
-                            json,
-                        )
-                    }
+                    } => commands::table::update(
+                        &client,
+                        &resolve_database(database)?,
+                        &table,
+                        &sorting_key,
+                        json,
+                    ),
                 }
             }
             Command::Integration { action } => match action {
-                IntegrationCommand::List => {
-                    let organization = resolve_explicit_org(cli_org);
-                    commands::integration::list(&client, organization.as_deref(), json)
-                }
+                IntegrationCommand::List => commands::integration::list(
+                    &client,
+                    selection.organization_selector().as_ref(),
+                    json,
+                ),
                 IntegrationCommand::Add {
                     kind: IntegrationKind::Slack,
                 } => {
-                    let effective_org = resolve_effective_org(&client, cli_org);
-                    let organization = require_organization(effective_org.as_deref())?;
+                    let organization = selection.effective_organization(&client);
                     commands::integration::add_slack(
                         &commands::open::resolve_ui_base_url(&url),
-                        organization,
+                        require_organization(organization.as_ref())?.name(),
                         json,
                     )
                 }
             },
             Command::Workflow { action } => {
-                let effective_org = if client.has_api_key()? {
-                    resolve_explicit_org(cli_org.clone())
+                let organization = if client.has_api_key()? {
+                    selection.organization.clone()
                 } else {
-                    resolve_effective_org(&client, cli_org.clone())
+                    selection.effective_organization(&client)
                 };
                 let scope = require_workflow_scope(
                     &client,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
+                    selection.scope(organization.as_ref(), selection.cluster.as_ref()),
                 )?;
                 let client = client.with_scope(scope);
                 match action {
@@ -729,59 +687,43 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 until,
                 start_time,
                 end_time,
-            } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
-                commands::logs::logs(
-                    &client,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
-                    search.as_deref(),
-                    &methods,
-                    &status_codes,
-                    &levels,
-                    &sources,
-                    user_agent.as_deref(),
-                    host.as_deref(),
-                    &paths,
-                    min_duration_ms,
-                    max_duration_ms,
-                    limit,
-                    offset,
-                    since.as_deref(),
-                    until.as_deref(),
-                    start_time.as_deref(),
-                    end_time.as_deref(),
-                    json,
-                )
-            }
+            } => commands::logs::logs(
+                &selection.scoped(&client),
+                search.as_deref(),
+                &methods,
+                &status_codes,
+                &levels,
+                &sources,
+                user_agent.as_deref(),
+                host.as_deref(),
+                &paths,
+                min_duration_ms,
+                max_duration_ms,
+                limit,
+                offset,
+                since.as_deref(),
+                until.as_deref(),
+                start_time.as_deref(),
+                end_time.as_deref(),
+                json,
+            ),
             Command::Query {
                 database,
                 sql_positional,
                 sql,
                 limit,
             } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
+                let client = selection.scoped(&client);
                 let database = resolve_database(database)?;
                 let sql = resolve_sql(sql_positional, sql)?;
-                commands::query::query(
-                    &client,
-                    &database,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
-                    &sql,
-                    limit,
-                    json,
-                )
+                commands::query::query(&client, &database, &sql, limit, json)
             }
             Command::Format(args) => {
                 let database = resolve_optional_database(args.database);
                 let sql = resolve_sql(args.sql_positional, args.sql)?;
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
                 commands::format::format(
-                    &client,
+                    &selection.scoped(&client),
                     database.as_deref(),
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
                     &sql,
                     json,
                 )
@@ -794,14 +736,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 url,
                 transform,
             } => {
-                let effective_org = resolve_effective_org(&client, cli_org.clone());
-                let database = resolve_database(database)?;
-
+                let client = selection.scoped(&client);
                 commands::insert::insert(
                     &client,
-                    &database,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
+                    &resolve_database(database)?,
                     &table,
                     data.as_deref(),
                     file.as_deref(),
@@ -817,12 +755,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Command::Update => commands::update::update(json),
             Command::Open { database } => {
                 let ui_base_url = commands::open::resolve_ui_base_url(&url);
-                let effective_org = resolve_effective_org(&client, cli_org);
+                let organization = selection.effective_organization(&client);
                 let database = resolve_optional_database(database);
                 commands::open::open(
                     &ui_base_url,
-                    effective_org.as_deref(),
-                    effective_cluster.as_deref(),
+                    organization.as_ref().map(Choice::name),
+                    selection.cluster.as_ref().map(Choice::name),
                     database.as_deref(),
                     json,
                 )
@@ -839,7 +777,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }?;
         Ok(ExitCode::SUCCESS)
     })();
-    result.map_err(|error| explain_rejected_saved_ids(&client, error))
+    result.map_err(|error| selection.explain_rejected_saved_ids(error))
 }
 
 #[cfg(test)]
@@ -848,10 +786,10 @@ mod tests {
 
     use super::constants::DEFAULT_API_URL;
     use super::{
-        effective_json_mode, resolve_cluster_from_sources, resolve_database_from_sources,
-        resolve_effective_org_with, resolve_login_cluster_from_sources, resolve_org_from_sources,
-        resolve_url_from_sources, saved_ids_from_sources, Cli,
+        effective_json_mode, resolve_database_from_sources, resolve_login_cluster_from_sources,
+        resolve_url_from_sources, Choice, Cli, Selection,
     };
+    use crate::client::{Scope, Selector};
 
     fn config_with_ids() -> super::config::Config {
         super::config::Config {
@@ -863,36 +801,96 @@ mod tests {
         }
     }
 
-    #[test]
-    fn saved_ids_apply_only_to_config_selections() {
-        let cfg = config_with_ids();
-        let saved = saved_ids_from_sources(None, None, None, None, &cfg);
-        assert_eq!(saved.organization, Some(("team".into(), "org-id".into())));
-        assert_eq!(saved.cluster, Some(("prod".into(), "cluster-id".into())));
+    fn choice(name: &str, saved_id: Option<&str>) -> Option<Choice> {
+        Some(Choice {
+            name: name.into(),
+            saved_id: saved_id.map(str::to_owned),
+        })
+    }
 
-        let saved = saved_ids_from_sources(Some("team"), None, None, Some("prod"), &cfg);
-        assert!(
-            saved.organization.is_none(),
-            "an --org flag is resolved by name"
-        );
-        assert!(
-            saved.cluster.is_none(),
-            "RAWTREE_CLUSTER is resolved by name"
-        );
-
-        let saved = saved_ids_from_sources(None, Some("team"), Some("prod"), None, &cfg);
-        assert!(saved.organization.is_none() && saved.cluster.is_none());
+    fn select(
+        cli_org: Option<&str>,
+        env_org: Option<&str>,
+        cli_cluster: Option<&str>,
+        env_cluster: Option<&str>,
+        cfg: super::config::Config,
+    ) -> Selection {
+        Selection::from_sources(
+            cli_org.map(str::to_owned),
+            env_org.map(str::to_owned),
+            cli_cluster.map(str::to_owned),
+            env_cluster.map(str::to_owned),
+            cfg,
+        )
     }
 
     #[test]
-    fn configs_without_ids_have_nothing_saved() {
+    fn flags_win_over_environment_which_wins_over_config() {
+        let selection = select(
+            Some("cli"),
+            Some("env"),
+            Some("cli"),
+            Some("env"),
+            config_with_ids(),
+        );
+        assert_eq!(selection.organization, choice("cli", None));
+        assert_eq!(selection.cluster, choice("cli", None));
+
+        let selection = select(None, Some("env"), None, Some("env"), config_with_ids());
+        assert_eq!(selection.organization, choice("env", None));
+        assert_eq!(selection.cluster, choice("env", None));
+
+        let selection = select(None, None, None, None, Default::default());
+        assert_eq!(selection.organization, None);
+        assert_eq!(selection.cluster, None);
+    }
+
+    #[test]
+    fn saved_ids_apply_only_to_config_selections() {
+        let selection = select(None, None, None, None, config_with_ids());
+        assert_eq!(selection.organization, choice("team", Some("org-id")));
+        assert_eq!(selection.cluster, choice("prod", Some("cluster-id")));
+        assert!(!selection.used_saved_ids.get());
+        assert_eq!(
+            selection.scope(selection.organization.as_ref(), selection.cluster.as_ref()),
+            Scope {
+                organization: Some(Selector::Id("org-id".into())),
+                cluster: Some(Selector::Id("cluster-id".into())),
+            }
+        );
+        assert!(selection.used_saved_ids.get());
+
+        let selection = select(None, None, None, Some("prod"), config_with_ids());
+        assert_eq!(selection.organization, choice("team", Some("org-id")));
+        assert_eq!(
+            selection.cluster,
+            choice("prod", None),
+            "RAWTREE_CLUSTER is resolved by name"
+        );
+    }
+
+    #[test]
+    fn overriding_the_organization_drops_the_saved_cluster_id() {
+        for (cli_org, env_org) in [(Some("other"), None), (None, Some("other"))] {
+            let selection = select(cli_org, env_org, None, None, config_with_ids());
+            assert_eq!(selection.organization, choice("other", None));
+            assert_eq!(selection.cluster, choice("prod", None));
+        }
+    }
+
+    #[test]
+    fn configs_without_ids_select_by_name() {
         let cfg = super::config::Config {
             default_organization: Some("team".into()),
             default_cluster: Some("prod".into()),
             ..Default::default()
         };
-        let saved = saved_ids_from_sources(None, None, None, None, &cfg);
-        assert!(saved.organization.is_none() && saved.cluster.is_none());
+        let selection = select(None, None, None, None, cfg);
+        assert_eq!(
+            selection.scope(selection.organization.as_ref(), selection.cluster.as_ref()),
+            Scope::new(Some("team"), Some("prod"))
+        );
+        assert!(!selection.used_saved_ids.get());
     }
 
     #[test]
@@ -910,32 +908,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_cluster_uses_cli_first() {
-        let resolved = resolve_cluster_from_sources(
-            Some("cli-cluster".to_string()),
-            Some("env-cluster".to_string()),
-            Some("cfg-cluster".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("cli-cluster"));
-    }
-
-    #[test]
-    fn resolve_cluster_uses_env_when_cli_missing() {
-        let resolved = resolve_cluster_from_sources(
-            None,
-            Some("env-cluster".to_string()),
-            Some("cfg-cluster".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("env-cluster"));
-    }
-
-    #[test]
-    fn resolve_cluster_uses_config_when_cli_and_env_missing() {
-        let resolved = resolve_cluster_from_sources(None, None, Some("cfg-cluster".to_string()));
-        assert_eq!(resolved.as_deref(), Some("cfg-cluster"));
-    }
-
-    #[test]
     fn login_cluster_uses_cli_then_env_without_saved_config() {
         let cli = resolve_login_cluster_from_sources(
             Some("cli-cluster".to_string()),
@@ -947,58 +919,6 @@ mod tests {
         assert_eq!(env.as_deref(), Some("env-cluster"));
 
         assert_eq!(resolve_login_cluster_from_sources(None, None), None);
-    }
-
-    #[test]
-    fn resolve_org_uses_cli_first() {
-        let resolved = resolve_org_from_sources(
-            Some("cli-org".to_string()),
-            Some("env-org".to_string()),
-            Some("cfg-org".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("cli-org"));
-    }
-
-    #[test]
-    fn resolve_org_uses_env_when_cli_missing() {
-        let resolved = resolve_org_from_sources(
-            None,
-            Some("env-org".to_string()),
-            Some("cfg-org".to_string()),
-        );
-        assert_eq!(resolved.as_deref(), Some("env-org"));
-    }
-
-    #[test]
-    fn resolve_org_uses_config_when_cli_and_env_missing() {
-        let resolved = resolve_org_from_sources(None, None, Some("cfg-org".to_string()));
-        assert_eq!(resolved.as_deref(), Some("cfg-org"));
-    }
-
-    #[test]
-    fn resolve_org_returns_none_when_no_sources() {
-        let resolved = resolve_org_from_sources(None, None, None);
-        assert_eq!(resolved, None);
-    }
-
-    #[test]
-    fn explicit_org_wins_over_auto_default_fetch() {
-        let resolved = resolve_effective_org_with(Some("explicit-org".to_string()), || {
-            Some("fetched-org".to_string())
-        });
-        assert_eq!(resolved.as_deref(), Some("explicit-org"));
-    }
-
-    #[test]
-    fn auto_default_org_is_used_when_explicit_is_missing() {
-        let resolved = resolve_effective_org_with(None, || Some("fetched-org".to_string()));
-        assert_eq!(resolved.as_deref(), Some("fetched-org"));
-    }
-
-    #[test]
-    fn auto_default_org_can_fall_back_to_none() {
-        let resolved = resolve_effective_org_with(None, || None);
-        assert_eq!(resolved, None);
     }
 
     #[test]

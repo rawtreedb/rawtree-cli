@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::client::ApiClient;
+use crate::client::{ApiClient, Selector};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrganizationItem {
@@ -49,6 +49,31 @@ pub fn database_path(database: &str, suffix: &str) -> String {
     )
 }
 
+pub fn organization_path(client: &ApiClient, organization: Option<&Selector>) -> Result<String> {
+    let id = match organization {
+        Some(Selector::Id(id)) => id.clone(),
+        Some(Selector::Name(name)) => {
+            list_organizations(client)?
+                .into_iter()
+                .find(|item| item.name == *name)
+                .with_context(|| {
+                    format!("Organization '{name}' was not found. Run `rtree organization list`.")
+                })?
+                .organization_id
+        }
+        None => {
+            list_organizations(client)?
+                .into_iter()
+                .next()
+                .context(
+                    "No organization available. Run `rtree organization list` or select one with --org.",
+                )?
+                .organization_id
+        }
+    };
+    Ok(format!("/v1/organizations/{}", urlencoding::encode(&id)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::database_path;
@@ -76,38 +101,4 @@ mod tests {
             "/v1/tables/events?url=x&database=analytics%20db"
         );
     }
-}
-
-#[derive(Deserialize)]
-struct Organization {
-    organization_id: String,
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct OrganizationsResponse {
-    organizations: Vec<Organization>,
-}
-
-pub fn organization_path(client: &ApiClient, organization: Option<&str>) -> Result<String> {
-    if let Some(id) = organization.and_then(|name| client.saved_organization_id(name)) {
-        return Ok(format!("/v1/organizations/{}", urlencoding::encode(&id)));
-    }
-    let response: OrganizationsResponse = client.get("/v1/organizations")?;
-    let selected = match organization {
-        Some(name) => response
-            .organizations
-            .into_iter()
-            .find(|item| item.name == name || item.organization_id == name)
-            .with_context(|| {
-                format!("Organization '{name}' was not found. Run `rtree organization list`.")
-            })?,
-        None => response.organizations.into_iter().next().context(
-            "No organization available. Run `rtree organization list` or select one with --org.",
-        )?,
-    };
-    Ok(format!(
-        "/v1/organizations/{}",
-        urlencoding::encode(&selected.organization_id)
-    ))
 }

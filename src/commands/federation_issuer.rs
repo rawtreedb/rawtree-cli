@@ -4,7 +4,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::service_account::{parse_description, parse_name};
-use crate::{client::ApiClient, org, output};
+use crate::{
+    client::{ApiClient, Selector},
+    org, output,
+};
 
 #[derive(Clone, Debug, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -64,7 +67,7 @@ impl Configuration {
 
 pub fn run(
     client: &ApiClient,
-    organization: Option<&str>,
+    organization: Option<&Selector>,
     action: Command,
     json: bool,
 ) -> Result<()> {

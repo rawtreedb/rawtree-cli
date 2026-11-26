@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::table_output::new_cli_table;
 use crate::cli::ClusterSizeArg;
-use crate::client::{ApiClient, SavedIds, Scope, UnavailableRegion};
+use crate::client::{ApiClient, Scope, UnavailableRegion};
 use crate::cluster_identity::ClusterIdentityArgs;
 use crate::config::{self, Config};
 use crate::output;
@@ -123,7 +123,7 @@ pub fn create(
     json_mode: bool,
 ) -> Result<()> {
     let s3_storage = options.s3_storage.to_json()?;
-    let placement_client = client.for_region(options.organization, options.region_id)?;
+    let placement_client = client.for_region(options.region_id)?;
     let (_, sizes) = load_cluster_sizes(&placement_client)?;
     let (min_index, min_size) = resolve_cluster_size(&sizes.sizes, options.min_size)?;
     let (max_index, max_size) = options
@@ -146,9 +146,7 @@ pub fn create(
     );
 
     body["region_id"] = json!(options.region_id);
-    let value: Value = client
-        .with_scope(Scope::organization(options.organization))
-        .post("/v1/clusters", &body)?;
+    let value: Value = client.post("/v1/clusters", &body)?;
     let created: ClusterItem =
         serde_json::from_value(value.clone()).context("invalid cluster response from server")?;
 
@@ -184,7 +182,6 @@ pub fn create(
 
 pub struct ClusterCreateOptions<'a> {
     pub region_id: &'a str,
-    pub organization: Option<&'a str>,
     pub name: &'a str,
     pub replicas: u32,
     pub min_size: ClusterSizeArg,
@@ -197,7 +194,6 @@ pub struct ClusterCreateOptions<'a> {
 pub fn update(
     client: &ApiClient,
     name_or_id: &str,
-    organization: Option<&str>,
     name: Option<&str>,
     idle_timeout_minutes: Option<u64>,
     json_mode: bool,
@@ -208,8 +204,7 @@ pub fn update(
         );
     }
 
-    let client = client.with_scope(Scope::organization(organization));
-    let (_, response) = load_dedicated_clusters(&client)?;
+    let (_, response) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&response, name_or_id)?;
     let mut body = serde_json::Map::new();
     if let Some(name) = name {
@@ -243,8 +238,7 @@ pub fn update(
 }
 
 pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
-    let client = client.with_scope(Scope::organization(organization));
-    let (value, resp) = load_dedicated_clusters(&client)?;
+    let (value, resp) = load_dedicated_clusters(client)?;
     output::print_result(&value, json_mode, |_| {
         if !resp.unavailable_regions.is_empty() {
             let names = resp
@@ -307,7 +301,8 @@ pub fn list(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> 
     Ok(())
 }
 
-pub fn regions(client: &ApiClient, organization: Option<&str>, json_mode: bool) -> Result<()> {
+pub fn regions(client: &ApiClient, json_mode: bool) -> Result<()> {
+    let organization = client.scope().organization.as_ref();
     let response =
         client.list_regions(organization.context("Choose an organization with --org.")?)?;
     output::print_result(&response, json_mode, |response| {
@@ -364,10 +359,8 @@ pub fn use_cluster(
     organization: Option<&str>,
     json_mode: bool,
 ) -> Result<()> {
-    // Re-resolve by name: this command is how a rejected saved ID gets refreshed.
     let cluster_id = client
         .with_scope(Scope::new(organization, Some(name)))
-        .with_saved_ids(SavedIds::default())
         .resolve_scope_ids()
         .ok()
         .and_then(|(_, cluster_id)| cluster_id);
@@ -382,14 +375,8 @@ pub fn use_cluster(
     Ok(())
 }
 
-pub fn status(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let client = client.with_scope(Scope::organization(organization));
-    let (_, resp) = load_dedicated_clusters(&client)?;
+pub fn status(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&resp, name_or_id)?;
 
     output::print_result(cluster, json_mode, |cluster| {
@@ -428,44 +415,16 @@ pub fn status(
     Ok(())
 }
 
-pub fn stop(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    request_lifecycle(
-        client,
-        name_or_id,
-        organization,
-        LifecycleAction::Stop,
-        json_mode,
-    )
+pub fn stop(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    request_lifecycle(client, name_or_id, LifecycleAction::Stop, json_mode)
 }
 
-pub fn resume(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    request_lifecycle(
-        client,
-        name_or_id,
-        organization,
-        LifecycleAction::Resume,
-        json_mode,
-    )
+pub fn resume(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    request_lifecycle(client, name_or_id, LifecycleAction::Resume, json_mode)
 }
 
-pub fn delete(
-    client: &ApiClient,
-    name_or_id: &str,
-    organization: Option<&str>,
-    json_mode: bool,
-) -> Result<()> {
-    let client = client.with_scope(Scope::organization(organization));
-    let (_, resp) = load_dedicated_clusters(&client)?;
+pub fn delete(client: &ApiClient, name_or_id: &str, json_mode: bool) -> Result<()> {
+    let (_, resp) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&resp, name_or_id)?.clone();
     let path = cluster_path(&cluster.id, None);
     let result: DeleteClusterResponse = client.delete(&path)?;
@@ -617,12 +576,10 @@ fn resolve_cluster<'a>(
 fn request_lifecycle(
     client: &ApiClient,
     name_or_id: &str,
-    organization: Option<&str>,
     action: LifecycleAction,
     json_mode: bool,
 ) -> Result<()> {
-    let client = client.with_scope(Scope::organization(organization));
-    let (_, resp) = load_dedicated_clusters(&client)?;
+    let (_, resp) = load_dedicated_clusters(client)?;
     let cluster = resolve_cluster(&resp, name_or_id)?;
     let path = cluster_path(&cluster.id, Some(action.path_segment()));
     let value: Value = client.post_empty(&path)?;

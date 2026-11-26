@@ -1,4 +1,4 @@
-use super::{ApiClient, SavedIds, Scope};
+use super::{ApiClient, Scope, Selector};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -271,7 +271,10 @@ fn api_keys_resolve_organization_names_to_ids_for_paths() {
         json!({"organizations":[{"organization_id":ORG,"name":"acme","role":null}]}),
     )]);
     let client = ApiClient::new(base, Some("rt_fixture".to_string()));
-    assert_eq!(client.organization_id("acme").unwrap(), ORG);
+    assert_eq!(
+        client.organization_id(&Selector::parse("acme")).unwrap(),
+        ORG
+    );
     assert_eq!(server.join().unwrap().len(), 1);
 }
 
@@ -444,7 +447,10 @@ fn creation_and_sizes_use_selected_region_without_mutating_default_client() {
     ]);
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".into()));
-    let regional = client.for_region(Some("acme"), "region-id").unwrap();
+    let regional = client
+        .with_scope(Scope::organization(Some("acme")))
+        .for_region("region-id")
+        .unwrap();
     let _: Value = regional.get("/v1/clusters/sizes").unwrap();
     let _: Value = regional
         .with_scope(Scope::new(Some("acme"), None))
@@ -479,7 +485,10 @@ fn explicit_unusable_regions_never_reach_creation() {
     ] {
         let (base, server) = server(region_catalog(overrides));
         let client = ApiClient::new(base, Some("session.fixture".into()));
-        assert!(client.for_region(Some("acme"), "region-id").is_err());
+        assert!(client
+            .with_scope(Scope::organization(Some("acme")))
+            .for_region("region-id")
+            .is_err());
         assert_eq!(server.join().unwrap().len(), 2);
     }
 }
@@ -492,7 +501,10 @@ fn legacy_region_is_rejected_and_unscoped_size_discovery_keeps_default_routing()
     responses.push(("200 OK", json!({})));
     let (base, server) = server(responses);
     let client = ApiClient::new(base, Some("session.fixture".into()));
-    assert!(client.for_region(Some("acme"), id).is_err());
+    assert!(client
+        .with_scope(Scope::organization(Some("acme")))
+        .for_region(id)
+        .is_err());
     let _: Value = client.get("/v1/clusters/sizes").unwrap();
     for request in server.join().unwrap() {
         assert!(!request.headers.contains_key("x-rawtree-region"));
@@ -503,7 +515,8 @@ fn legacy_region_is_rejected_and_unscoped_size_discovery_keeps_default_routing()
 fn api_keys_cannot_override_their_embedded_deployment() {
     let client = ApiClient::new("http://127.0.0.1:1".into(), Some("rt_fixture".into()));
     assert!(client
-        .for_region(Some("acme"), "region-id")
+        .with_scope(Scope::organization(Some("acme")))
+        .for_region("region-id")
         .err()
         .unwrap()
         .to_string()
@@ -885,42 +898,21 @@ fn organization_names_and_ids_resolve_to_ids_from_one_listing() {
         json!({"organizations":[{"organization_id":ORG,"name":"acme"}]}),
     )]);
     let client = ApiClient::new(base, Some("session.fixture".into()));
-    assert_eq!(client.organization_id("acme").unwrap(), ORG);
-    assert_eq!(client.organization_id(ORG).unwrap(), ORG);
+    assert_eq!(
+        client.organization_id(&Selector::parse("acme")).unwrap(),
+        ORG
+    );
+    assert_eq!(client.organization_id(&Selector::parse(ORG)).unwrap(), ORG);
     assert!(client
-        .organization_id("missing")
+        .organization_id(&Selector::parse("missing"))
         .unwrap_err()
         .to_string()
         .contains("Organization not found"));
     assert_eq!(server.join().unwrap().len(), 1);
 }
 
-fn saved(organization: bool, cluster: bool) -> SavedIds {
-    SavedIds {
-        organization: organization.then(|| ("acme".to_string(), ORG.to_string())),
-        cluster: cluster.then(|| ("production".to_string(), CLUSTER.to_string())),
-    }
-}
-
 #[test]
-fn saved_ids_are_sent_without_lookups_for_api_keys() {
-    let (base, server) = server(vec![("200 OK", json!({}))]);
-    let client =
-        ApiClient::new(base, Some("rt_fixture".to_string())).with_saved_ids(saved(true, true));
-    assert!(!client.used_saved_ids());
-    client
-        .with_scope(Scope::new(Some("acme"), Some("production")))
-        .post_raw("/v1/query", &json!({"query":"SELECT 1"}))
-        .unwrap();
-    assert!(client.used_saved_ids());
-    let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].headers["x-rawtree-organization-id"], ORG);
-    assert_eq!(requests[0].headers["x-rawtree-cluster-id"], CLUSTER);
-}
-
-#[test]
-fn saved_ids_skip_the_organization_listing_but_keep_regional_routing() {
+fn id_selectors_skip_the_organization_listing_but_keep_regional_routing() {
     let (base, server) = server(vec![
         (
             "200 OK",
@@ -932,10 +924,9 @@ fn saved_ids_skip_the_organization_listing_but_keep_regional_routing() {
         ),
         ("200 OK", json!({})),
     ]);
-    let client =
-        ApiClient::new(base, Some("session.fixture".to_string())).with_saved_ids(saved(true, true));
+    let client = ApiClient::new(base, Some("session.fixture".to_string()));
     let _: Value = client
-        .with_scope(Scope::new(Some("acme"), Some("production")))
+        .with_scope(Scope::new(Some(ORG), Some(CLUSTER)))
         .get("/v1/databases")
         .unwrap();
     let requests = server.join().unwrap();
@@ -947,47 +938,4 @@ fn saved_ids_skip_the_organization_listing_but_keep_regional_routing() {
     assert_eq!(requests[2].headers["x-rawtree-organization-id"], ORG);
     assert_eq!(requests[2].headers["x-rawtree-cluster-id"], CLUSTER);
     assert_eq!(requests[2].headers["x-rawtree-deployment-id"], "12abcdef");
-}
-
-#[test]
-fn names_that_differ_from_the_saved_ones_are_resolved_by_name() {
-    const OTHER_ORG: &str = "00000000-0000-4000-8000-000000000002";
-    let (base, server) = server(vec![
-        (
-            "200 OK",
-            json!({"organizations":[{"organization_id":OTHER_ORG,"name":"other","role":null}]}),
-        ),
-        (
-            "200 OK",
-            json!({"clusters":[{"id":CLUSTER,"name":"staging"}]}),
-        ),
-        ("200 OK", json!({})),
-    ]);
-    let client =
-        ApiClient::new(base, Some("rt_fixture".to_string())).with_saved_ids(saved(true, true));
-    client
-        .with_scope(Scope::new(Some("other"), Some("staging")))
-        .post_raw("/v1/query", &json!({"query":"SELECT 1"}))
-        .unwrap();
-    assert!(!client.used_saved_ids());
-    let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests[2].headers["x-rawtree-organization-id"], OTHER_ORG);
-}
-
-#[test]
-fn a_renamed_cluster_keeps_working_through_its_saved_id() {
-    let (base, server) = server(vec![("200 OK", json!({}))]);
-    let client = ApiClient::new(base, Some("rt_fixture".to_string())).with_saved_ids(SavedIds {
-        organization: None,
-        cluster: Some(("old-name".to_string(), CLUSTER.to_string())),
-    });
-    client
-        .with_scope(Scope::new(None, Some("old-name")))
-        .post_raw("/v1/query", &json!({"query":"SELECT 1"}))
-        .unwrap();
-    assert_eq!(
-        server.join().unwrap()[0].headers["x-rawtree-cluster-id"],
-        CLUSTER
-    );
 }

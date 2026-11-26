@@ -1,8 +1,8 @@
 use super::{
     handle_response,
     regions::Region,
-    routing::{before_deadline, is_uuid, valid_routing, with_scope_headers, Organization},
-    ApiClient,
+    routing::{before_deadline, valid_routing, with_scope_headers},
+    ApiClient, Selector,
 };
 use anyhow::{Context, Result};
 use reqwest::{blocking::RequestBuilder, Method, StatusCode};
@@ -114,28 +114,13 @@ impl ApiClient {
     /// Discover enabled deployments concurrently, retaining explicit partial-catalog metadata.
     pub(super) fn discover_clusters(
         &self,
-        organization: Option<&str>,
+        organization: Option<&Selector>,
         deadline: Option<Instant>,
     ) -> Result<Value> {
         let selected: Vec<_> = match organization {
-            Some(id) if is_uuid(id) => vec![Organization {
-                organization_id: id.to_owned(),
-                name: id.to_owned(),
-            }],
-            _ => self
-                .organizations(deadline)?
-                .into_iter()
-                .filter(|item| {
-                    organization.is_none_or(|selected| {
-                        item.name == selected || item.organization_id == selected
-                    })
-                })
-                .collect(),
+            Some(selector) => vec![self.find_organization(selector, deadline)?],
+            None => self.organizations(deadline)?,
         };
-        anyhow::ensure!(
-            organization.is_none() || !selected.is_empty(),
-            "Organization not found."
-        );
         let mut catalogs = Vec::new();
         for owner in selected {
             let regions = self.regions_for_organization(&owner.organization_id, deadline)?;

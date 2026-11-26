@@ -6,10 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::service_account::{parse_description, parse_name};
-use crate::{
-    client::{ApiClient, Scope},
-    output,
-};
+use crate::{client::ApiClient, output};
 
 #[derive(Clone, Debug, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -104,18 +101,16 @@ pub enum Command {
     },
 }
 
-pub fn run(
-    client: &ApiClient,
-    organization: Option<&str>,
-    cluster: Option<&str>,
-    action: Command,
-    json: bool,
-) -> Result<()> {
-    let organization = organization
+pub fn run(client: &ApiClient, action: Command, json: bool) -> Result<()> {
+    let scope = client.scope();
+    scope
+        .organization
+        .as_ref()
         .context("Select an organization with --org, RAWTREE_ORG or `rtree organization use`")?;
-    let cluster = cluster
+    scope
+        .cluster
+        .as_ref()
         .context("Select a cluster with --cluster, RAWTREE_CLUSTER or `rtree cluster use`")?;
-    let client = client.with_scope(Scope::new(Some(organization), Some(cluster)));
     let path = |id: Option<&str>| match id {
         Some(id) => format!("/v1/federation-rules/{}", urlencoding::encode(id)),
         None => "/v1/federation-rules".into(),

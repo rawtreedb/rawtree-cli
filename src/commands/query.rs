@@ -6,7 +6,7 @@ use console::style;
 use serde_json::json;
 use serde_json::{Map, Value};
 
-use crate::client::{ApiClient, Scope};
+use crate::client::ApiClient;
 use crate::org;
 
 #[derive(Default)]
@@ -21,8 +21,6 @@ struct QuerySummary {
 pub fn query(
     client: &ApiClient,
     database: &str,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     sql: &str,
     limit: Option<u64>,
     json_mode: bool,
@@ -33,8 +31,6 @@ pub fn query(
     };
 
     let body = json!({ "sql": sql });
-
-    let client = client.with_scope(Scope::new(organization, cluster));
     let raw = client.post_raw(&org::database_path(database, "/query"), &body)?;
 
     if let Ok(value) = serde_json::from_str::<Value>(&raw) {

@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::client::{ApiClient, SavedIds, Scope};
+use crate::client::{ApiClient, Selector};
 use crate::config::{self, Config};
 use crate::org;
 use crate::output;
@@ -89,12 +89,7 @@ pub fn create(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
 }
 
 pub fn use_organization(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
-    // Re-resolve by name: this command is how a rejected saved ID gets refreshed.
-    let id = client
-        .with_scope(Scope::default())
-        .with_saved_ids(SavedIds::default())
-        .organization_id(name)
-        .ok();
+    let id = client.organization_id(&Selector::parse(name)).ok();
     let _config_lock = config::lock()?;
     let mut cfg = config::load()?;
     if cfg.default_organization_id != id {
@@ -110,7 +105,7 @@ pub fn use_organization(client: &ApiClient, name: &str, json_mode: bool) -> Resu
 }
 
 pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) -> Result<()> {
-    let id = client.organization_id(old)?;
+    let id = client.organization_id(&Selector::parse(old))?;
     let resp: RenameOrganizationResponse = client.patch(
         &format!("/v1/organizations/{}", urlencoding::encode(&id)),
         &json!({"organization_name": new_name}),
@@ -131,7 +126,7 @@ pub fn rename(client: &ApiClient, old: &str, new_name: &str, json_mode: bool) ->
 }
 
 pub fn delete(client: &ApiClient, name: &str, json_mode: bool) -> Result<()> {
-    let id = client.organization_id(name)?;
+    let id = client.organization_id(&Selector::parse(name))?;
     let resp: DeleteOrganizationResponse =
         client.delete(&format!("/v1/organizations/{}", urlencoding::encode(&id)))?;
     if resp.deleted && is_default_org(&config::load()?, name, &id) {

@@ -6,10 +6,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{
-    client::{ApiClient, Scope},
-    org,
-};
+use crate::{client::ApiClient, org};
 
 #[derive(Args)]
 pub struct FormatArgs {
@@ -32,12 +29,9 @@ struct QueryFormatResponse {
 pub fn format(
     client: &ApiClient,
     database: Option<&str>,
-    organization: Option<&str>,
-    cluster: Option<&str>,
     sql: &str,
     json_mode: bool,
 ) -> Result<()> {
-    let client = client.with_scope(Scope::new(organization, cluster));
     let path = match database {
         Some(database) => org::database_path(database, "/query-format"),
         None => "/v1/query-format".to_string(),
