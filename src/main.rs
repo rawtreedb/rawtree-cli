@@ -200,11 +200,9 @@ impl Selection {
         if !(self.used_saved_ids.get() && refused) {
             return error;
         }
+        let organization = self.effective_organization(client);
         let saved = Scope {
-            organization: self
-                .organization
-                .as_ref()
-                .map(|choice| self.selector(choice)),
+            organization: organization.as_ref().map(|choice| self.selector(choice)),
             cluster: self
                 .cluster
                 .as_ref()
