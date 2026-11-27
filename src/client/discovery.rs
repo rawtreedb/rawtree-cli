@@ -2,7 +2,7 @@ use super::{
     handle_response,
     regions::Region,
     routing::{before_deadline, valid_routing},
-    ApiClient,
+    ApiClient, ApiResponseError,
 };
 use anyhow::{Context, Result};
 use reqwest::{blocking::RequestBuilder, Method, StatusCode};
@@ -59,16 +59,16 @@ fn load_catalogs(requests: Vec<RequestBuilder>, deadline: Instant) -> Result<Vec
                             let result = match response {
                                 Ok(response) => {
                                     let status = response.status();
-                                    let result = handle_response(response);
-                                    if matches!(
-                                        status,
-                                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-                                    ) {
-                                        return Err(result.err().unwrap_or_else(|| {
-                                            anyhow::anyhow!("Access denied ({status})")
-                                        }));
+                                    match handle_response(response) {
+                                        Err(error)
+                                            if status == StatusCode::UNAUTHORIZED
+                                                || (status == StatusCode::FORBIDDEN
+                                                    && error.is::<ApiResponseError>()) =>
+                                        {
+                                            return Err(error);
+                                        }
+                                        result => result,
                                     }
-                                    result
                                 }
                                 Err(error) => Err(error),
                             };
