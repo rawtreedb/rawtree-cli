@@ -284,17 +284,34 @@ fn check_status(resp: Response) -> Result<()> {
     Err(format_server_error(&text, status.as_u16()))
 }
 
+// RawTree API errors carry both a machine-readable code and a message.
+// A private deployment's proxy may also respond with HTTP 403.
+#[derive(Debug)]
+struct ApiResponseError(String);
+
+impl std::fmt::Display for ApiResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 fn format_server_error(body: &str, status: u16) -> anyhow::Error {
-    if let Ok(json) = serde_json::from_str::<Value>(body) {
-        let message = json["message"].as_str().unwrap_or("Unknown error");
-        let hint = json["hint"].as_str().unwrap_or("");
-        if hint.is_empty() {
-            anyhow::anyhow!("Server error ({}): {}", status, message)
-        } else {
-            anyhow::anyhow!("Server error ({}): {}\nHint: {}", status, message, hint)
-        }
+    let Ok(json) = serde_json::from_str::<Value>(body) else {
+        return anyhow::anyhow!("Server error ({status}): {body}");
+    };
+    let code = json["error"].as_str().filter(|s| !s.is_empty());
+    let detail = json["message"].as_str().filter(|s| !s.is_empty());
+    let mut message = format!(
+        "Server error ({status}): {}",
+        detail.or(code).unwrap_or("Unknown error")
+    );
+    if let Some(hint) = json["hint"].as_str().filter(|hint| !hint.is_empty()) {
+        message.push_str(&format!("\nHint: {hint}"));
+    }
+    if code.is_some() && detail.is_some() {
+        anyhow::Error::msg(ApiResponseError(message))
     } else {
-        anyhow::anyhow!("Server error ({}): {}", status, body)
+        anyhow::Error::msg(message)
     }
 }
 

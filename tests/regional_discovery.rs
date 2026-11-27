@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy)]
 enum Failure {
     Http(u16),
+    Proxy(u16, &'static str),
     Disconnect,
     Stall,
     SlowBody,
@@ -73,7 +74,10 @@ fn run(args: &[&str], failure: Failure, all_fail: bool) -> (Output, Vec<String>,
                         }]}));
                     } else {
                         match failure {
-                            Failure::Http(status) => reply(&mut socket, status, json!({"message":"Regional failure"})),
+                            Failure::Http(status) => reply(&mut socket, status, json!({"error":"forbidden","message":"Regional failure","hint":"Check access."})),
+                            Failure::Proxy(status, body) => {
+                                write!(socket, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                            }
                             Failure::Disconnect => (),
                             Failure::Stall => thread::sleep(Duration::from_secs(6)),
                             Failure::SlowBody => {
@@ -121,7 +125,13 @@ fn run(args: &[&str], failure: Failure, all_fail: bool) -> (Output, Vec<String>,
 
 #[test]
 fn table_list_survives_http_and_connection_failures_in_other_regions() {
-    for failure in [Failure::Http(503), Failure::Disconnect] {
+    for failure in [
+        Failure::Http(503),
+        Failure::Proxy(403, "<html>Forbidden</html>"),
+        Failure::Proxy(403, r#"{"message":"Forbidden"}"#),
+        Failure::Proxy(403, r#"{"error":"Forbidden"}"#),
+        Failure::Disconnect,
+    ] {
         let (output, requests, _) = run(&["--json", "table", "list"], failure, false);
         assert!(
             output.status.success(),
@@ -169,7 +179,7 @@ fn cluster_list_exposes_partial_catalog_in_json_and_warns_in_text() {
         } else {
             vec!["cluster", "list"]
         };
-        let (output, _, _) = run(&args, Failure::Http(503), false);
+        let (output, _, _) = run(&args, Failure::Proxy(403, "{}"), false);
         assert!(
             output.status.success(),
             "{}",
@@ -209,6 +219,21 @@ fn authorization_and_total_outages_fail_without_executing_table_request() {
 }
 
 #[test]
+fn raw_http_denials_remain_errors_for_expired_credentials_or_a_total_outage() {
+    for (status, all_fail) in [(401, false), (403, true)] {
+        let (output, _, _) = run(
+            &["--json", "cluster", "list"],
+            Failure::Proxy(status, ""),
+            all_fail,
+        );
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!("Server error ({status})"))
+        );
+    }
+}
+
+#[test]
 fn missing_cluster_in_partial_catalog_never_falls_back_to_gateway() {
     let (output, requests, _) = run(
         &["--json", "--cluster", "missing", "table", "list"],
@@ -234,7 +259,7 @@ fn management_commands_report_outages_for_missing_targets_in_partial_catalogs() 
             if command == "update" {
                 args.extend(["--idle-timeout-minutes", "60"]);
             }
-            let (output, requests, _) = run(&args, Failure::Http(503), false);
+            let (output, requests, _) = run(&args, Failure::Proxy(403, "{}"), false);
             assert!(!output.status.success(), "{command} {target}");
             assert!(output.stdout.is_empty());
             let error: Value = serde_json::from_slice(&output.stderr).unwrap();
